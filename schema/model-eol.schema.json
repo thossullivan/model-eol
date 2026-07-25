@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.invalid/model-eol/0.1/schema.json",
+  "title": "model-eol feed",
+  "description": "A machine-readable deprecation feed for AI models. Draft 0.1 - the $id is a placeholder until the repo is public.",
+  "type": "object",
+  "required": ["spec", "publisher", "generated", "models"],
+  "properties": {
+    "spec": { "const": "model-eol/0.1" },
+    "publisher": { "type": "string", "minLength": 1 },
+    "generated": { "type": "string", "format": "date-time" },
+    "source": { "type": "string", "format": "uri" },
+    "note": { "type": "string" },
+    "models": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/model" }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "isoDate": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "model": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "announced": { "$ref": "#/definitions/isoDate" },
+        "shutdown": { "$ref": "#/definitions/isoDate" },
+        "replacement": { "type": "string" },
+        "notes": { "type": "string" },
+        "source": { "type": "string", "format": "uri" },
+        "distributions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["via"],
+            "properties": {
+              "via": { "type": "string", "minLength": 1 },
+              "announced": { "$ref": "#/definitions/isoDate" },
+              "shutdown": { "$ref": "#/definitions/isoDate" },
+              "status": { "type": "string" },
+              "source": { "type": "string", "format": "uri" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

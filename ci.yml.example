@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate feeds against the spec
+        run: node scripts/validate-feeds.mjs
+      - name: Checker smoke tests
+        run: npm test
+      - name: Dogfood - this repo's own fixture should flag
+        run: |
+          node check.mjs test/fixture --days 90 && exit 1 || echo "correctly failed on fixture"
