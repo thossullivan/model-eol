@@ -1,0 +1,17 @@
+{
+  "name": "model-eol",
+  "version": "0.1.0",
+  "description": "A machine-readable deprecation feed format for AI models, plus a zero-dependency checker that fails CI when a pinned model is retiring.",
+  "type": "module",
+  "bin": {
+    "model-eol": "./check.mjs"
+  },
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "license": "MIT",
+  "author": "Tom Sullivan",
+  "engines": {
+    "node": ">=20"
+  }
+}

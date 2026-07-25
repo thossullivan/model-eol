@@ -1,0 +1,94 @@
+{
+  "spec": "model-eol/0.1",
+  "publisher": "openai",
+  "generated": "2026-07-25T00:00:00Z",
+  "source": "https://developers.openai.com/api/docs/deprecations",
+  "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
+  "models": [
+    {
+      "id": "o3-deep-research-2025-06-26",
+      "aliases": ["o3-deep-research"],
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "replacement": "gpt-5.6-sol",
+      "notes": "Deep-research post-trained agent; replacement is a general model + tools, not a structural successor. Replacement recommendation changed during the notice window (was GPT-5.5-era guidance until gpt-5.6-sol GA'd 2026-07-09).",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2026-12-26",
+          "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/model-retirements"
+        }
+      ]
+    },
+    {
+      "id": "o4-mini-deep-research-2025-06-26",
+      "aliases": ["o4-mini-deep-research"],
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-4-0613",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "replacement": "gpt-5.6-luna"
+    },
+    {
+      "id": "gpt-4-turbo-2024-04-09",
+      "aliases": ["gpt-4-turbo"],
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "replacement": "gpt-5.6-luna"
+    },
+    {
+      "id": "gpt-3.5-turbo-0125",
+      "aliases": ["gpt-3.5-turbo"],
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "replacement": "gpt-5.6-luna"
+    },
+    {
+      "id": "o1-2024-12-17",
+      "aliases": ["o1"],
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "o3-mini-2025-01-31",
+      "aliases": ["o3-mini"],
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "gpt-5-2025-08-07",
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "o3-2025-04-16",
+      "aliases": ["o3"],
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "o3-pro-2025-06-10",
+      "aliases": ["o3-pro"],
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-5.6-terra"
+    },
+    {
+      "id": "gpt-5.6-luna"
+    }
+  ]
+}

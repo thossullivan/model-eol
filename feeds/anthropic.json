@@ -1,0 +1,66 @@
+{
+  "spec": "model-eol/0.1",
+  "publisher": "anthropic",
+  "generated": "2026-07-25T00:00:00Z",
+  "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+  "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format. Anthropic policy floor: >=60 days notice for publicly released models. Weights of public models are preserved per the Nov 2025 commitments - preservation is not availability.",
+  "models": [
+    {
+      "id": "claude-3-7-sonnet-20250219",
+      "aliases": ["claude-3-7-sonnet"],
+      "announced": "2025-10-28",
+      "shutdown": "2026-02-19",
+      "replacement": "claude-sonnet-4-5",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2026-04-28",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
+    },
+    {
+      "id": "claude-3-5-haiku-20241022",
+      "aliases": ["claude-3-5-haiku"],
+      "announced": "2025-12-19",
+      "shutdown": "2026-02-19",
+      "replacement": "claude-haiku-4-5"
+    },
+    {
+      "id": "claude-3-haiku-20240307",
+      "announced": "2026-02-19",
+      "shutdown": "2026-04-20",
+      "replacement": "claude-haiku-4-5"
+    },
+    {
+      "id": "claude-3-opus-20240229",
+      "aliases": ["claude-opus-3"],
+      "announced": "2025-06-30",
+      "shutdown": "2026-01-05",
+      "replacement": "claude-opus-4-1",
+      "notes": "Subject of Anthropic's deprecation-commitments follow-up post."
+    },
+    {
+      "id": "claude-sonnet-4-20250514",
+      "aliases": ["claude-sonnet-4"],
+      "announced": "2026-04-14",
+      "shutdown": "2026-06-15",
+      "replacement": "claude-sonnet-4-6"
+    },
+    {
+      "id": "claude-opus-4-20250514",
+      "aliases": ["claude-opus-4"],
+      "announced": "2026-04-14",
+      "shutdown": "2026-06-15",
+      "replacement": "claude-opus-4-6"
+    },
+    {
+      "id": "claude-opus-4-1-20250805",
+      "aliases": ["claude-opus-4-1"],
+      "announced": "2026-06-05",
+      "shutdown": "2026-08-05",
+      "replacement": "claude-opus-4-6",
+      "notes": "Upcoming at dataset compile time - eleven days out. This is the entry a CI check should be failing on today."
+    }
+  ]
+}
