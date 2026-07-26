@@ -1,0 +1,32 @@
+name: 'model-eol check'
+description: 'Fail CI when a pinned AI model ID is retired or retiring within a threshold, using model-eol feeds.'
+branding:
+  icon: 'alert-triangle'
+  color: 'red'
+inputs:
+  paths:
+    description: 'Space-separated paths to scan'
+    required: false
+    default: '.'
+  days:
+    description: 'Fail when a model retires within this many days'
+    required: false
+    default: '90'
+  via:
+    description: 'Judge lifecycles by a distributor clock (e.g. azure-ai-foundry, aws-bedrock) instead of the publisher''s'
+    required: false
+    default: ''
+  feeds:
+    description: 'Directory of model-eol feeds (defaults to the feeds bundled with the action)'
+    required: false
+    default: ''
+runs:
+  using: 'composite'
+  steps:
+    - name: model-eol check
+      shell: bash
+      run: |
+        ARGS=(${{ inputs.paths }} --days "${{ inputs.days }}")
+        if [ -n "${{ inputs.via }}" ]; then ARGS+=(--via "${{ inputs.via }}"); fi
+        if [ -n "${{ inputs.feeds }}" ]; then ARGS+=(--feeds "${{ inputs.feeds }}"); fi
+        node "${{ github.action_path }}/check.mjs" "${ARGS[@]}"
