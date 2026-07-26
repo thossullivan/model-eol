@@ -24,6 +24,10 @@ inputs:
     description: 'Check scope: all tracked model IDs, or direct to leave cloud/gateway refs as inventory hints'
     required: false
     default: 'all'
+  format:
+    description: 'Alert output format when command is alert: github or markdown'
+    required: false
+    default: 'github'
   feeds:
     description: 'Directory of model-eol feeds (defaults to the feeds bundled with the action)'
     required: false
@@ -33,9 +37,19 @@ runs:
   steps:
     - name: model-eol check
       shell: bash
+      env:
+        MODEL_EOL_COMMAND: ${{ inputs.command }}
+        MODEL_EOL_PATHS: ${{ inputs.paths }}
+        MODEL_EOL_DAYS: ${{ inputs.days }}
+        MODEL_EOL_VIA: ${{ inputs.via }}
+        MODEL_EOL_SCOPE: ${{ inputs.scope }}
+        MODEL_EOL_FORMAT: ${{ inputs.format }}
+        MODEL_EOL_FEEDS: ${{ inputs.feeds }}
       run: |
-        ARGS=("${{ inputs.command }}" ${{ inputs.paths }} --days "${{ inputs.days }}")
-        if [ -n "${{ inputs.via }}" ]; then ARGS+=(--via "${{ inputs.via }}"); fi
-        if [ -n "${{ inputs.scope }}" ]; then ARGS+=(--scope "${{ inputs.scope }}"); fi
-        if [ -n "${{ inputs.feeds }}" ]; then ARGS+=(--feeds "${{ inputs.feeds }}"); fi
+        read -r -a PATH_ARGS <<< "$MODEL_EOL_PATHS"
+        ARGS=("$MODEL_EOL_COMMAND" "${PATH_ARGS[@]}" --days "$MODEL_EOL_DAYS")
+        if [ -n "$MODEL_EOL_VIA" ]; then ARGS+=(--via "$MODEL_EOL_VIA"); fi
+        if [ -n "$MODEL_EOL_SCOPE" ]; then ARGS+=(--scope "$MODEL_EOL_SCOPE"); fi
+        if [ -n "$MODEL_EOL_FORMAT" ]; then ARGS+=(--format "$MODEL_EOL_FORMAT"); fi
+        if [ -n "$MODEL_EOL_FEEDS" ]; then ARGS+=(--feeds "$MODEL_EOL_FEEDS"); fi
         node "${{ github.action_path }}/check.mjs" "${ARGS[@]}"

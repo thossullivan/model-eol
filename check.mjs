@@ -7,16 +7,26 @@
 // New inventory modes:
 //   node check.mjs inventory [paths...] [--json]
 //   node check.mjs schedule [paths...] [--days N] [--json]
+//   node check.mjs alert [paths...] [--format github|markdown] [--json]
 //
 // exit codes: 0 = clear · 1 = retired or retiring within threshold · 2 = usage error
 
 import path from 'node:path'
 
 import { findingFromRef, isBad, loadFeeds } from './lib/feeds.mjs'
-import { buildInventory, buildSchedule, formatCheck, formatInventory, formatSchedule } from './lib/reports.mjs'
+import {
+  buildAlert,
+  buildInventory,
+  buildSchedule,
+  formatAlertGithub,
+  formatAlertMarkdown,
+  formatCheck,
+  formatInventory,
+  formatSchedule,
+} from './lib/reports.mjs'
 import { scanTargets } from './lib/scanner.mjs'
 
-const COMMANDS = new Set(['check', 'inventory', 'schedule', 'help'])
+const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'help'])
 const args = process.argv.slice(2)
 
 if (args[0] === '--help' || args[0] === '-h') args[0] = 'help'
@@ -40,6 +50,7 @@ const DAYS = Number(flag('days', '90'))
 const FEEDS_DIR = flag('feeds', path.join(import.meta.dirname, 'feeds'))
 const VIA = flag('via', null) // e.g. azure-ai-foundry, aws-bedrock
 const SCOPE = flag('scope', 'all')
+const FORMAT = flag('format', 'github')
 const AS_JSON = has('json')
 const INCLUDE_DOCS = has('include-docs')
 const targets = args.length ? args : ['.']
@@ -52,11 +63,13 @@ Usage:
   node check.mjs check [paths...] [--days N] [--scope all|direct] [--json]
   node check.mjs inventory [paths...] [--json]
   node check.mjs schedule [paths...] [--days N] [--json]
+  node check.mjs alert [paths...] [--days N] [--scope all|direct] [--format github|markdown] [--json]
 
 Commands:
   check       Fail when tracked model IDs are retired or retiring within --days.
   inventory   List tracked model references plus direct/cloud/gateway integration hints.
   schedule    Show the retirement schedule for tracked references in the target.
+  alert       Emit GitHub Actions annotations or Markdown from the schedule and fail on errors.
 
 Scopes:
   all        Check every tracked model ID found. This preserves the original behavior.
@@ -71,6 +84,10 @@ if (Number.isNaN(DAYS)) {
 }
 if (!['all', 'direct'].includes(SCOPE)) {
   console.error('--scope must be all or direct')
+  process.exit(2)
+}
+if (command === 'alert' && !['github', 'markdown'].includes(FORMAT)) {
+  console.error('--format must be github or markdown')
   process.exit(2)
 }
 
@@ -106,6 +123,7 @@ const checkFindings = SCOPE === 'direct'
 const bad = checkFindings.filter(isBad)
 const inventory = () => buildInventory({ scan, findings, days: DAYS, via: VIA, scope: SCOPE, targets })
 const schedule = () => buildSchedule(inventory())
+const alert = () => buildAlert(schedule())
 
 if (command === 'check') {
   if (AS_JSON) {
@@ -134,6 +152,18 @@ if (command === 'schedule') {
     console.log(formatSchedule(sched, DAYS))
   }
   process.exit(0)
+}
+
+if (command === 'alert') {
+  const payload = alert()
+  if (AS_JSON) {
+    console.log(JSON.stringify(payload, null, 2))
+  } else if (FORMAT === 'markdown') {
+    console.log(formatAlertMarkdown(payload, DAYS))
+  } else {
+    console.log(formatAlertGithub(payload, DAYS))
+  }
+  process.exit(payload.errors.length ? 1 : 0)
 }
 
 console.error(`unknown command: ${command}`)

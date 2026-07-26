@@ -39,6 +39,7 @@ node check.mjs . --days 90
 node check.mjs . --days 90 --scope direct
 node check.mjs inventory . --json
 node check.mjs schedule . --days 90
+node check.mjs alert . --days 90 --scope direct
 node check.mjs . --days 90 --via azure-ai-foundry
 ```
 
@@ -58,8 +59,14 @@ API checker to work.
 
 Alerting should consume `schedule --json`, not duplicate scanner logic.
 
+The first built-in alert target is `node check.mjs alert`, which can emit GitHub
+Actions annotations or Markdown. Anything stateful, such as opening GitHub issues or
+sending Slack messages, should consume `alert --json` or `schedule --json`.
+
 Useful first targets:
 
+- GitHub Actions annotations for PR/build feedback.
+- Markdown summary artifact for humans.
 - GitHub issue per repo/service owner.
 - Slack/Teams message for findings inside a configured window.
 - CI artifact containing `model-inventory.json`.

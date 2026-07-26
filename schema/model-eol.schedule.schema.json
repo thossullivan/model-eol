@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.invalid/model-eol/0.1/schedule.schema.json",
+  "title": "model-eol schedule output",
+  "description": "Machine-readable deprecation schedule emitted by `model-eol schedule --json`. Draft 0.1 - the $id is a placeholder until the repo is public.",
+  "type": "object",
+  "required": ["schema", "generated", "threshold_days", "scope", "targets", "scanned_files", "items", "candidate_model_references", "unresolved_integrations"],
+  "properties": {
+    "schema": { "const": "model-eol/schedule@0.1" },
+    "generated": { "type": "string", "format": "date-time" },
+    "threshold_days": { "type": "number" },
+    "distributor": { "type": ["string", "null"] },
+    "scope": { "enum": ["all", "direct"] },
+    "targets": { "type": "array", "items": { "type": "string" } },
+    "scanned_files": { "type": "integer", "minimum": 0 },
+    "items": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/modelReference" } },
+    "candidate_model_references": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/candidateReference" } },
+    "unresolved_integrations": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/integrationHint" } }
+  },
+  "additionalProperties": false
+}

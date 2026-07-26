@@ -41,7 +41,8 @@ The product direction is **direct-first inventory**, not "CI catches everything.
 Direct API usage can be scanned and checked from code. Cloud providers and gateways
 often hide the exact model behind deployment names or aliases, so the scanner records
 Azure/Bedrock/Vertex/OpenRouter/LiteLLM/etc. as resolver targets unless it can see a
-real model ID. See `docs/PRODUCT_PLAN.md`.
+real model ID. Model-like strings absent from the loaded feeds are emitted as
+non-failing candidates so feed gaps are visible. See `docs/PRODUCT_PLAN.md`.
 
 ## LANDSCAPE (as of 2026-07-25)
 
@@ -80,6 +81,10 @@ competition - see the outreach issue.
    identify that a repo uses Azure Foundry, Bedrock, Vertex, OpenRouter, LiteLLM, or
    Portkey, but it usually cannot prove the deployed model behind an alias. Resolver
    integrations should enrich inventory output later.
+8. **Alerting starts stateless.** `check.mjs alert` emits GitHub Actions annotations,
+   Markdown, or JSON and exits nonzero on retired/retiring findings. Stateful delivery
+   (Slack, Teams, GitHub issue creation) should consume that JSON later instead of
+   duplicating scanner logic.
 
 ## Publish gates (do not flip public before)
 
