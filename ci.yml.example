@@ -16,6 +16,12 @@ jobs:
         run: node scripts/validate-feeds.mjs
       - name: Checker smoke tests
         run: npm test
+      - name: Write model inventory artifact
+        run: node check.mjs inventory test/fixture --json > model-inventory.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-inventory
+          path: model-inventory.json
       - name: Dogfood - this repo's own fixture should flag
         run: |
-          node check.mjs test/fixture --days 90 && exit 1 || echo "correctly failed on fixture"
+          node check.mjs test/fixture --days 90 --scope direct && exit 1 || echo "correctly failed on fixture"

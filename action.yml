@@ -4,6 +4,10 @@ branding:
   icon: 'alert-triangle'
   color: 'red'
 inputs:
+  command:
+    description: 'Command to run: check, inventory, or schedule'
+    required: false
+    default: 'check'
   paths:
     description: 'Space-separated paths to scan'
     required: false
@@ -16,6 +20,10 @@ inputs:
     description: 'Judge lifecycles by a distributor clock (e.g. azure-ai-foundry, aws-bedrock) instead of the publisher''s'
     required: false
     default: ''
+  scope:
+    description: 'Check scope: all tracked model IDs, or direct to leave cloud/gateway refs as inventory hints'
+    required: false
+    default: 'all'
   feeds:
     description: 'Directory of model-eol feeds (defaults to the feeds bundled with the action)'
     required: false
@@ -26,7 +34,8 @@ runs:
     - name: model-eol check
       shell: bash
       run: |
-        ARGS=(${{ inputs.paths }} --days "${{ inputs.days }}")
+        ARGS=("${{ inputs.command }}" ${{ inputs.paths }} --days "${{ inputs.days }}")
         if [ -n "${{ inputs.via }}" ]; then ARGS+=(--via "${{ inputs.via }}"); fi
+        if [ -n "${{ inputs.scope }}" ]; then ARGS+=(--scope "${{ inputs.scope }}"); fi
         if [ -n "${{ inputs.feeds }}" ]; then ARGS+=(--feeds "${{ inputs.feeds }}"); fi
         node "${{ github.action_path }}/check.mjs" "${ARGS[@]}"

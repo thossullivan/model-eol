@@ -1,7 +1,7 @@
 # model-eol
 
-**A machine-readable deprecation feed format for AI models, plus the smallest useful
-checker that consumes it.** Draft sketch, 2026-07-25.
+**A machine-readable deprecation feed format for AI models, plus a small checker and
+inventory tool that consumes it.** Draft sketch, 2026-07-25.
 
 ## The problem
 
@@ -29,18 +29,24 @@ vulnerability feeds. This is the model version.
 - **`feeds/`** - seed datasets for OpenAI and Anthropic, compiled 2026-07-25 from the
   providers' deprecation pages, every entry with a source URL. Illustrative; verify
   before acting.
-- **`check.mjs`** - zero-dependency reference checker (~170 lines of Node). Scans
-  code/config for tracked model IDs and fails CI when one is retired or retiring
-  within the threshold.
+- **`schema/`** - JSON Schema for the draft feed format.
+- **`check.mjs`** - zero-dependency reference CLI. It can fail CI on tracked model
+  IDs, emit a repo-level model inventory, or produce a deprecation schedule.
 
 ## Try it
 
 ```sh
 node check.mjs path/to/your/repo --days 90
+# direct-first CI gate: cloud/gateway refs stay in inventory until resolved
+node check.mjs path/to/your/repo --days 90 --scope direct
 # distributor-aware: the same repo, judged by Azure's clock instead of OpenAI's
 node check.mjs path/to/your/repo --days 90 --via azure-ai-foundry
 # machine-readable output for CI annotations
 node check.mjs . --json
+# direct/cloud/gateway inventory without failing CI
+node check.mjs inventory path/to/your/repo --json
+# retirement schedule for tracked references, plus unresolved cloud/gateway hints
+node check.mjs schedule path/to/your/repo
 ```
 
 Sample output against a fixture:
@@ -52,6 +58,25 @@ Sample output against a fixture:
 ```
 
 Exit 1 on findings at or past the threshold - wire it into CI as-is.
+
+## Direct-first inventory
+
+The useful MVP is direct LLM API usage: OpenAI/Anthropic/Gemini/etc. SDK calls and
+config that contain real model IDs. Those can be scanned and checked immediately.
+
+Cloud providers and gateways are different. Azure Foundry, Bedrock, Vertex, LiteLLM,
+OpenRouter, Portkey, and similar layers often hide the real model behind deployment
+names or routing aliases. `inventory` still records those references, but marks them
+as resolver targets instead of pretending static code knows the deployed model:
+
+```
+? src/ai.ts:12  azure-ai-foundry  Azure Foundry/OpenAI deployment reference
+? src/ai.ts:30  openrouter        OpenRouter gateway reference
+```
+
+Future provider/gateway resolvers can enrich those hints with live deployment data.
+Until then, use `--scope direct` when you want CI to fail only on direct/generic
+model references and leave cloud/gateway references as inventory.
 
 ## The actual ask
 
@@ -69,6 +94,7 @@ here.
   refresh mechanism (the fix is the whole point of the spec).
 - The checker matches known IDs only - it will not discover models absent from the
   feeds. That's deliberate: precision over discovery for a CI gate.
-- Not yet: signing, a published JSON Schema, provider coverage beyond
-  OpenAI/Anthropic (Google/Bedrock/Vertex entries welcome), automation to
-  re-generate feeds.
+- Not yet: signing, provider coverage beyond OpenAI/Anthropic
+  (Google/Bedrock/Vertex entries welcome), automation to re-generate feeds, cloud
+  deployment resolvers, gateway route resolvers, or built-in Slack/GitHub issue
+  alerting.

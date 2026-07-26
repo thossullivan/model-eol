@@ -1,7 +1,7 @@
 {
   "name": "model-eol",
   "version": "0.1.0",
-  "description": "A machine-readable deprecation feed format for AI models, plus a zero-dependency checker that fails CI when a pinned model is retiring.",
+  "description": "A machine-readable deprecation feed format for AI models, plus a zero-dependency checker and inventory CLI.",
   "type": "module",
   "bin": {
     "model-eol": "./check.mjs"
