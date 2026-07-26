@@ -3,6 +3,7 @@
 // o3-deep-research's shutdown (2026-07-23) is in the past forever, and
 // claude-opus-4-1's (2026-08-05) is either retiring or retired - both flag.
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 
 const root = path.join(import.meta.dirname, '..')
@@ -57,6 +58,8 @@ const ref = (file, matched) => cj.model_references.find(f => f.file.endsWith(fil
 const hint = provider => cj.integration_hints.find(h => h.provider === provider)
 assert(c.code === 0, 'inventory exits 0')
 assert(cj.schema === 'model-eol/inventory@0.1', 'inventory schema emitted')
+assert(cj.candidate_model_references.some(f => f.matched === 'gpt-9-ultra-20990101'), 'unknown model-like candidate surfaced')
+assert(cj.candidate_model_references.some(f => f.matched === 'anthropic.claude-3-7-sonnet-20250219-v1:0'), 'provider-prefixed unknown candidate surfaced')
 assert(ref('direct.py', 'o3-deep-research')?.usage === 'direct-api', 'direct OpenAI usage classified')
 assert(ref('cloud_gateway.ts', 'o3-deep-research')?.usage === 'cloud-provider', 'Azure-adjacent model classified as cloud provider')
 assert(ref('cloud_gateway.ts', 'gpt-4-0613')?.usage === 'gateway', 'OpenRouter-adjacent model classified as gateway')
@@ -77,6 +80,30 @@ const e = run(['schedule', path.join(root, 'test/fixture'), '--days', '30', '--s
 const ej = JSON.parse(e.out)
 assert(ej.items.every(f => f.usage === 'direct-api' || f.usage === 'model-reference'), 'direct schedule excludes cloud/gateway refs')
 assert(ej.unresolved_integrations.some(h => h.provider === 'openrouter'), 'direct schedule still carries gateway hint')
+
+// Alert mode: emits a real alert payload/annotation stream and fails on actionable
+// retired/retiring direct-scope findings.
+const f = run(['alert', path.join(root, 'test/fixture'), '--days', '30', '--scope', 'direct', '--json'])
+const fj = JSON.parse(f.out)
+assert(f.code === 1, 'alert exits 1 when errors exist')
+assert(fj.schema === 'model-eol/alert@0.1', 'alert schema emitted')
+assert(fj.errors.some(item => item.status === 'retired'), 'alert carries retired errors')
+assert(fj.warnings.some(item => item.status === 'unknown'), 'alert carries unknown candidate warnings')
+assert(fj.warnings.some(item => item.status === 'unresolved'), 'alert carries unresolved integration warnings')
+const g = run(['alert', path.join(root, 'test/fixture'), '--days', '30', '--scope', 'direct'])
+assert(g.code === 1, 'github alert exits 1 when errors exist')
+assert(g.out.includes('::error file='), 'github alert emits error annotations')
+assert(g.out.includes('::warning file='), 'github alert emits warning annotations')
+
+for (const schemaFile of [
+  'schema/model-eol.schema.json',
+  'schema/model-eol.inventory.schema.json',
+  'schema/model-eol.schedule.schema.json',
+  'schema/model-eol.alert.schema.json',
+]) {
+  JSON.parse(fs.readFileSync(path.join(root, schemaFile), 'utf8'))
+  assert(true, `${schemaFile} parses as JSON`)
+}
 
 console.log(failures ? `\n${failures} failure(s)` : '\nall assertions passed')
 process.exit(failures ? 1 : 0)

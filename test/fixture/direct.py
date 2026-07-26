@@ -8,3 +8,6 @@ def run_research(prompt: str):
         model="o3-deep-research",
         input=prompt,
     )
+
+
+NEXT_MODEL = "gpt-9-ultra-20990101"

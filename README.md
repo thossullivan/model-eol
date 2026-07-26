@@ -47,6 +47,9 @@ node check.mjs . --json
 node check.mjs inventory path/to/your/repo --json
 # retirement schedule for tracked references, plus unresolved cloud/gateway hints
 node check.mjs schedule path/to/your/repo
+# GitHub Actions annotations or Markdown alerts
+node check.mjs alert path/to/your/repo --scope direct
+node check.mjs alert path/to/your/repo --format markdown
 ```
 
 Sample output against a fixture:
@@ -78,6 +81,11 @@ Future provider/gateway resolvers can enrich those hints with live deployment da
 Until then, use `--scope direct` when you want CI to fail only on direct/generic
 model references and leave cloud/gateway references as inventory.
 
+The scanner also emits **candidate model references**: model-like strings near LLM
+usage that are not present in the loaded feeds. Candidates never fail CI by
+themselves, but they show feed gaps and provider/gateway identifiers that may need
+normalization.
+
 ## The actual ask
 
 This repo is a sketch, not a product. The endgame is not "another checker"; it's the
@@ -97,4 +105,5 @@ here.
 - Not yet: signing, provider coverage beyond OpenAI/Anthropic
   (Google/Bedrock/Vertex entries welcome), automation to re-generate feeds, cloud
   deployment resolvers, gateway route resolvers, or built-in Slack/GitHub issue
-  alerting.
+  creation. GitHub Actions annotations and Markdown alert output are available via
+  `node check.mjs alert`.
