@@ -1,19 +1,37 @@
 #!/usr/bin/env node
-// model-eol reference checker - zero dependencies.
+// model-eol reference CLI - zero dependencies.
 //
-// Scans source/config files for model IDs that appear in the loaded feeds and
-// fails when one is retired or retiring within the threshold. The point is the
-// feed format (see SPEC.md); this checker is the smallest useful consumer of it.
+// Default mode preserves the original CI gate:
+//   node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs]
 //
-// usage:
-//   node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--json] [--include-docs]
+// New inventory modes:
+//   node check.mjs inventory [paths...] [--json]
+//   node check.mjs schedule [paths...] [--days N] [--json]
+//   node check.mjs alert [paths...] [--format github|markdown] [--json]
 //
 // exit codes: 0 = clear · 1 = retired or retiring within threshold · 2 = usage error
 
-import fs from 'node:fs'
 import path from 'node:path'
 
+import { findingFromRef, isBad, loadFeeds } from './lib/feeds.mjs'
+import {
+  buildAlert,
+  buildInventory,
+  buildSchedule,
+  formatAlertGithub,
+  formatAlertMarkdown,
+  formatCheck,
+  formatInventory,
+  formatSchedule,
+} from './lib/reports.mjs'
+import { scanTargets } from './lib/scanner.mjs'
+
+const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'help'])
 const args = process.argv.slice(2)
+
+if (args[0] === '--help' || args[0] === '-h') args[0] = 'help'
+const command = COMMANDS.has(args[0]) ? args.shift() : 'check'
+
 const flag = (name, fallback) => {
   const i = args.indexOf(`--${name}`)
   if (i === -1) return fallback
@@ -31,115 +49,122 @@ const has = name => {
 const DAYS = Number(flag('days', '90'))
 const FEEDS_DIR = flag('feeds', path.join(import.meta.dirname, 'feeds'))
 const VIA = flag('via', null) // e.g. azure-ai-foundry, aws-bedrock
+const SCOPE = flag('scope', 'all')
+const FORMAT = flag('format', 'github')
 const AS_JSON = has('json')
 const INCLUDE_DOCS = has('include-docs')
 const targets = args.length ? args : ['.']
+
+if (command === 'help') {
+  console.log(`model-eol
+
+Usage:
+  node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs]
+  node check.mjs check [paths...] [--days N] [--scope all|direct] [--json]
+  node check.mjs inventory [paths...] [--json]
+  node check.mjs schedule [paths...] [--days N] [--json]
+  node check.mjs alert [paths...] [--days N] [--scope all|direct] [--format github|markdown] [--json]
+
+Commands:
+  check       Fail when tracked model IDs are retired or retiring within --days.
+  inventory   List tracked model references plus direct/cloud/gateway integration hints.
+  schedule    Show the retirement schedule for tracked references in the target.
+  alert       Emit GitHub Actions annotations or Markdown from the schedule and fail on errors.
+
+Scopes:
+  all        Check every tracked model ID found. This preserves the original behavior.
+  direct     Check direct API and generic model references; leave cloud/gateway refs in inventory.
+`)
+  process.exit(0)
+}
 
 if (Number.isNaN(DAYS)) {
   console.error('--days must be a number')
   process.exit(2)
 }
-
-// --- load feeds ---------------------------------------------------------------
-const entries = new Map() // matched string (id or alias) -> { entry, publisher }
-for (const f of fs.readdirSync(FEEDS_DIR).filter(f => f.endsWith('.json'))) {
-  const feed = JSON.parse(fs.readFileSync(path.join(FEEDS_DIR, f), 'utf8'))
-  if (feed.spec !== 'model-eol/0.1') {
-    console.error(`skipping ${f}: unknown spec ${feed.spec}`)
-    continue
-  }
-  for (const m of feed.models ?? []) {
-    for (const key of [m.id, ...(m.aliases ?? [])]) entries.set(key, { entry: m, publisher: feed.publisher })
-  }
+if (!['all', 'direct'].includes(SCOPE)) {
+  console.error('--scope must be all or direct')
+  process.exit(2)
 }
-if (entries.size === 0) {
+if (command === 'alert' && !['github', 'markdown'].includes(FORMAT)) {
+  console.error('--format must be github or markdown')
+  process.exit(2)
+}
+
+let feedData
+try {
+  feedData = loadFeeds(FEEDS_DIR)
+} catch (e) {
+  console.error(`failed to load feeds from ${FEEDS_DIR}: ${e.message}`)
+  process.exit(2)
+}
+if (feedData.entries.size === 0) {
   console.error(`no feed entries loaded from ${FEEDS_DIR}`)
   process.exit(2)
 }
 
-// Longest keys first so "o3-deep-research-2025-06-26" wins over alias "o3-deep-research".
-const keys = [...entries.keys()].sort((a, b) => b.length - a.length)
-const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const pattern = new RegExp(`(?<![A-Za-z0-9._-])(${keys.map(esc).join('|')})(?![A-Za-z0-9_-])`, 'g')
-
-// --- scan ---------------------------------------------------------------------
-const CODE_EXT = new Set(['.py', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.yaml', '.yml', '.toml', '.env', '.ini', '.cfg', '.sh', '.rb', '.go', '.java', '.cs'])
-const DOC_EXT = new Set(['.md', '.mdx', '.txt', '.rst'])
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.venv', 'venv', '__pycache__', '.next', '.astro'])
-
-const files = []
-const walk = p => {
-  const st = fs.statSync(p)
-  if (st.isDirectory()) {
-    if (SKIP_DIRS.has(path.basename(p))) return
-    for (const f of fs.readdirSync(p)) walk(path.join(p, f))
-    return
-  }
-  const ext = path.extname(p)
-  if (CODE_EXT.has(ext) || (INCLUDE_DOCS && DOC_EXT.has(ext))) files.push(p)
-}
-for (const t of targets) walk(t)
-
-const today = new Date()
-const daysUntil = iso => Math.ceil((new Date(`${iso}T00:00:00Z`) - today) / 86400000)
-
-const effectiveShutdown = entry => {
-  if (VIA) {
-    const d = (entry.distributions ?? []).find(d => d.via === VIA)
-    if (d?.shutdown) return { date: d.shutdown, via: VIA }
-    // No distributor-specific date: fall through to the publisher's own,
-    // which is the conservative read (Azure/Bedrock never retire EARLIER
-    // than announced without their own entry).
-  }
-  return entry.shutdown ? { date: entry.shutdown, via: 'publisher' } : null
+let scan
+try {
+  scan = scanTargets({
+    targets,
+    entries: feedData.entries,
+    keys: feedData.keys,
+    includeDocs: INCLUDE_DOCS,
+  })
+} catch (e) {
+  console.error(`scan failed: ${e.message}`)
+  process.exit(2)
 }
 
-const findings = []
-for (const file of files) {
-  const text = fs.readFileSync(file, 'utf8')
-  const lines = text.split('\n')
-  for (const [i, line] of lines.entries()) {
-    pattern.lastIndex = 0
-    let m
-    while ((m = pattern.exec(line)) !== null) {
-      const { entry, publisher } = entries.get(m[1])
-      const sd = effectiveShutdown(entry)
-      let status = 'ok'
-      let days = null
-      if (sd) {
-        days = daysUntil(sd.date)
-        status = days < 0 ? 'retired' : days <= DAYS ? 'retiring' : 'scheduled'
-      } else if (entry.announced) {
-        status = 'watch'
-      }
-      findings.push({
-        file, line: i + 1, matched: m[1], id: entry.id, publisher,
-        status, shutdown: sd?.date ?? null, via: sd?.via ?? null, days,
-        replacement: entry.replacement ?? null,
-      })
-    }
+const findings = scan.modelRefs.map(ref => findingFromRef(ref, { days: DAYS, via: VIA }))
+const checkFindings = SCOPE === 'direct'
+  ? findings.filter(f => f.usage === 'direct-api' || f.usage === 'model-reference')
+  : findings
+const bad = checkFindings.filter(isBad)
+const inventory = () => buildInventory({ scan, findings, days: DAYS, via: VIA, scope: SCOPE, targets })
+const schedule = () => buildSchedule(inventory())
+const alert = () => buildAlert(schedule())
+
+if (command === 'check') {
+  if (AS_JSON) {
+    console.log(JSON.stringify({ threshold_days: DAYS, distributor: VIA, scope: SCOPE, findings: checkFindings }, null, 2))
+  } else {
+    console.log(formatCheck({ findings: checkFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
   }
+  process.exit(bad.length ? 1 : 0)
 }
 
-// --- report --------------------------------------------------------------------
-const bad = findings.filter(f => f.status === 'retired' || f.status === 'retiring')
-if (AS_JSON) {
-  console.log(JSON.stringify({ threshold_days: DAYS, distributor: VIA, findings }, null, 2))
-} else {
-  if (findings.length === 0) {
-    console.log(`model-eol: no tracked model IDs found in ${files.length} files`)
+if (command === 'inventory') {
+  const inv = inventory()
+  if (AS_JSON) {
+    console.log(JSON.stringify(inv, null, 2))
+  } else {
+    console.log(formatInventory(inv, DAYS))
   }
-  for (const f of findings) {
-    const where = `${f.file}:${f.line}`
-    const tail =
-      f.status === 'retired' ? `RETIRED ${f.shutdown} (${-f.days} days ago)${f.replacement ? ` -> ${f.replacement}` : ''}` :
-      f.status === 'retiring' ? `RETIRES ${f.shutdown} (${f.days} days)${f.replacement ? ` -> ${f.replacement}` : ''}` :
-      f.status === 'scheduled' ? `scheduled ${f.shutdown} (${f.days} days, outside --days ${DAYS})` :
-      f.status === 'watch' ? 'deprecation announced, no shutdown date yet' :
-      'no retirement scheduled'
-    const mark = f.status === 'retired' ? '✗' : f.status === 'retiring' ? '!' : '·'
-    console.log(`${mark} ${where}  ${f.matched}  ${tail}${f.via && f.via !== 'publisher' ? `  [via ${f.via}]` : ''}`)
-  }
-  if (bad.length) console.log(`\nmodel-eol: ${bad.length} finding(s) at or past the ${DAYS}-day threshold`)
+  process.exit(0)
 }
-process.exit(bad.length ? 1 : 0)
+
+if (command === 'schedule') {
+  const sched = schedule()
+  if (AS_JSON) {
+    console.log(JSON.stringify(sched, null, 2))
+  } else {
+    console.log(formatSchedule(sched, DAYS))
+  }
+  process.exit(0)
+}
+
+if (command === 'alert') {
+  const payload = alert()
+  if (AS_JSON) {
+    console.log(JSON.stringify(payload, null, 2))
+  } else if (FORMAT === 'markdown') {
+    console.log(formatAlertMarkdown(payload, DAYS))
+  } else {
+    console.log(formatAlertGithub(payload, DAYS))
+  }
+  process.exit(payload.errors.length ? 1 : 0)
+}
+
+console.error(`unknown command: ${command}`)
+process.exit(2)

@@ -17,8 +17,9 @@ signal is the production 404.
 
 This repo is the constructive half: a draft **feed format** (SPEC.md) that makes
 model retirement dates machine-readable, seed **feeds** for OpenAI and Anthropic,
-and a zero-dependency **reference checker** (check.mjs) that fails CI when a pinned
-model is retired or retiring.
+and a zero-dependency **reference CLI** (check.mjs) that can fail CI when a pinned
+model is retired or retiring, emit a repo inventory, or build a deprecation
+schedule.
 
 ## Positioning - why format-first
 
@@ -35,6 +36,13 @@ The one capability here that no existing tool has: **per-distributor lifecycles*
 2026-12-26; Claude 3.7 Sonnet retired at Anthropic 2026-02-19 but on Bedrock
 2026-04-28. A checker ignorant of channels gives wrong answers in both directions.
 `check.mjs --via azure-ai-foundry` demonstrates it working.
+
+The product direction is **direct-first inventory**, not "CI catches everything."
+Direct API usage can be scanned and checked from code. Cloud providers and gateways
+often hide the exact model behind deployment names or aliases, so the scanner records
+Azure/Bedrock/Vertex/OpenRouter/LiteLLM/etc. as resolver targets unless it can see a
+real model ID. Model-like strings absent from the loaded feeds are emitted as
+non-failing candidates so feed gaps are visible. See `docs/PRODUCT_PLAN.md`.
 
 ## LANDSCAPE (as of 2026-07-25)
 
@@ -69,6 +77,14 @@ competition - see the outreach issue.
    dependency rot should not itself be a dependency tree. Same reason the validator
    (PR #1) hand-rolls structural checks instead of pulling ajv.
 6. **Dates are UTC ISO, day precision.** Providers announce days, not instants.
+7. **Cloud/gateway references are inventory hints until resolved.** Static code can
+   identify that a repo uses Azure Foundry, Bedrock, Vertex, OpenRouter, LiteLLM, or
+   Portkey, but it usually cannot prove the deployed model behind an alias. Resolver
+   integrations should enrich inventory output later.
+8. **Alerting starts stateless.** `check.mjs alert` emits GitHub Actions annotations,
+   Markdown, or JSON and exits nonzero on retired/retiring findings. Stateful delivery
+   (Slack, Teams, GitHub issue creation) should consume that JSON later instead of
+   duplicating scanner logic.
 
 ## Publish gates (do not flip public before)
 
