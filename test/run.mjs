@@ -8,11 +8,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { lifecycleFor } from '../lib/feeds.mjs'
+import { findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
 
 const root = path.join(import.meta.dirname, '..')
-const run = args => {
-  const result = spawnSync('node', [path.join(root, 'check.mjs'), ...args], { encoding: 'utf8' })
+const run = (args, options = {}) => {
+  const result = spawnSync('node', [path.join(root, 'check.mjs'), ...args], { encoding: 'utf8', ...options })
   return { out: result.stdout ?? '', err: result.stderr ?? '', code: result.status }
 }
 
@@ -34,6 +34,7 @@ assert(a.code === 1, 'exit 1 when findings exist')
 assert(byId('o3-deep-research-2025-06-26')?.status === 'retired', 'o3-deep-research is retired')
 assert(['retiring', 'retired'].includes(byId('claude-opus-4-1-20250805')?.status), 'opus 4.1 flags (retiring or retired)')
 assert(byId('gpt-5.6-sol')?.status === 'ok', 'gpt-5.6-sol is clean')
+assert(byId('gpt-5.6-sol')?.safe_until === null, 'OpenAI clean models make no forward claim without a policy floor')
 assert(byId('o3-deep-research-2025-06-26')?.replacement === 'gpt-5.6-sol', 'replacement surfaced')
 
 // Direct scope: the recommended direct-first CI mode leaves cloud/gateway-adjacent
@@ -55,6 +56,8 @@ assert(azure?.shutdown === '2026-12-26', 'azure shutdown date used')
 // usage separately from cloud/gateway references that need a resolver.
 const c = run(['inventory', path.join(root, 'test/fixture'), '--days', '30', '--json'])
 const cj = JSON.parse(c.out)
+const defaultInventory = JSON.parse(run(['inventory', path.join(root, 'test/fixture'), '--days', '30']).out)
+assert(defaultInventory.schema === 'model-eol/inventory@0.1', 'inventory defaults to the JSON format')
 const ref = (file, matched) => cj.model_references.find(f => f.file.endsWith(file) && f.matched === matched)
 const hint = provider => cj.integration_hints.find(h => h.provider === provider)
 assert(c.code === 0, 'inventory exits 0')
@@ -63,6 +66,7 @@ assert(cj.candidate_model_references.some(f => f.matched === 'gpt-9-ultra-209901
 assert(cj.candidate_model_references.some(f => f.matched === 'anthropic.claude-3-7-sonnet-20250219-v1:0'), 'provider-prefixed unknown candidate surfaced')
 assert(cj.model_references.some(f => f.file.endsWith('.env') && f.matched === 'o3-deep-research'), '.env dotfile is scanned')
 assert(ref('direct.py', 'o3-deep-research')?.usage === 'direct-api', 'direct OpenAI usage classified')
+assert(ref('direct.py', 'o3-deep-research')?.safe_until === '2026-07-23', 'scheduled/retired references carry safe_until')
 assert(ref('cloud_gateway.ts', 'o3-deep-research')?.usage === 'cloud-provider', 'Azure-adjacent model classified as cloud provider')
 assert(ref('cloud_gateway.ts', 'gpt-4-0613')?.usage === 'gateway', 'OpenRouter-adjacent model classified as gateway')
 assert(hint('azure-ai-foundry')?.usage === 'cloud-provider', 'Azure integration hint emitted')
@@ -78,6 +82,10 @@ assert(d.code === 0, 'schedule exits 0')
 assert(dj.schema === 'model-eol/schedule@0.1', 'schedule schema emitted')
 assert(dj.items.some(f => f.id === 'gpt-4-0613'), 'scheduled model appears in schedule')
 assert(dj.unresolved_integrations.some(h => h.provider === 'vertex-ai'), 'schedule carries unresolved Vertex hint')
+assert(dj.earliest_risk?.safe_until === '2026-07-23', 'schedule carries the earliest safe_until')
+assert(dj.earliest_risk?.id === 'o3-deep-research-2025-06-26', 'earliest risk names the model id')
+const scheduleText = run(['schedule', path.join(root, 'test/fixture'), '--days', '90'])
+assert(scheduleText.out.includes('earliest risk: 2026-07-23 (o3-deep-research-2025-06-26)'), 'human schedule prints the earliest-risk line')
 const e = run(['schedule', path.join(root, 'test/fixture'), '--days', '30', '--scope', 'direct', '--json'])
 const ej = JSON.parse(e.out)
 assert(ej.items.every(f => f.usage === 'direct-api' || f.usage === 'model-reference'), 'direct schedule excludes cloud/gateway refs')
@@ -97,7 +105,91 @@ assert(g.code === 1, 'github alert exits 1 when errors exist')
 assert(g.out.includes('::error file='), 'github alert emits error annotations')
 assert(g.out.includes('::warning file='), 'github alert emits warning annotations')
 
+const cyclonedxRun = run(['inventory', path.join(root, 'test/fixture'), '--format', 'cyclonedx'])
+const cyclonedx = JSON.parse(cyclonedxRun.out)
+const cyclonedxComponent = cyclonedx.components.find(item => item.name === 'o3-deep-research-2025-06-26')
+const property = (component, name) => component?.properties.find(item => item.name === name)?.value
+assert(cyclonedxRun.code === 0, 'CycloneDX inventory exits 0')
+assert(cyclonedx.bomFormat === 'CycloneDX' && cyclonedx.specVersion === '1.6' && cyclonedx.version === 1, 'CycloneDX required BOM keys emitted')
+assert(cyclonedx.components.length === new Set(cj.model_references.map(item => item.id)).size, 'CycloneDX has one component per unique tracked model id')
+assert(property(cyclonedxComponent, 'model-eol:status') === 'retired', 'CycloneDX carries model-eol status property')
+assert(cyclonedxComponent?.evidence?.occurrences.some(item => item.location.endsWith('direct.py#8')), 'CycloneDX carries model reference occurrences')
+assert(!cyclonedx.components.some(item => item.name === 'gpt-9-ultra-20990101'), 'CycloneDX omits candidate model references')
+
+const badgeRun = run(['alert', path.join(root, 'test/fixture'), '--days', '30', '--format', 'badge'])
+const badge = JSON.parse(badgeRun.out)
+assert(badgeRun.code === 1, 'badge alert keeps existing alert exit semantics')
+assert(badge.schemaVersion === 1 && badge.label === 'model-eol', 'badge emits Shields endpoint keys')
+assert(badge.color === 'red' && badge.message.includes('retired') && badge.message.includes('retiring'), 'badge counts retired and retiring errors')
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
+
+const orangeBadgeDir = path.join(tempRoot, 'orange-badge')
+fs.mkdirSync(orangeBadgeDir)
+fs.writeFileSync(path.join(orangeBadgeDir, 'app.py'), 'MODEL = "claude-opus-4-1-20250805"\n')
+const orangeBadge = JSON.parse(run(['alert', orangeBadgeDir, '--format', 'badge']).out)
+assert(orangeBadge.color === 'orange' && orangeBadge.message === '1 retiring', 'badge is orange for only retiring errors')
+const greenBadgeDir = path.join(tempRoot, 'green-badge')
+fs.mkdirSync(greenBadgeDir)
+fs.writeFileSync(path.join(greenBadgeDir, 'app.py'), 'MODEL = "gpt-5.6-sol"\n')
+const greenBadge = JSON.parse(run(['alert', greenBadgeDir, '--format', 'badge']).out)
+assert(greenBadge.color === 'brightgreen' && greenBadge.message === 'clear', 'badge is brightgreen when clear')
+
+const loadedFeeds = loadFeeds(path.join(root, 'feeds'))
+const anthropicFeed = loadedFeeds.feeds.find(feed => feed.publisher === 'anthropic')
+const openaiFeed = loadedFeeds.feeds.find(feed => feed.publisher === 'openai')
+assert(anthropicFeed?.policy?.min_notice_days === 60, 'Anthropic feed carries its 60-day policy floor')
+assert(anthropicFeed?.policy?.source === anthropicFeed.source, 'Anthropic policy cites the feed source URL')
+assert(!openaiFeed?.policy, 'OpenAI feed intentionally carries no policy floor')
+const cleanAnthropic = findingFromRef({
+  entry: { id: 'clean-anthropic-model' },
+  matched: 'clean-anthropic-model',
+  publisher: 'anthropic',
+  usage: 'model-reference',
+  resolved_provider: 'anthropic',
+  confidence: 'medium',
+  policy: anthropicFeed.policy,
+  generated: anthropicFeed.generated,
+}, { days: 90, today: new Date('2026-08-01T00:00:00Z') })
+assert(cleanAnthropic.status === 'ok' && cleanAnthropic.safe_until === '2026-09-30', 'clean Anthropic model gets policy-floor safe_until')
+
+const policyDir = path.join(tempRoot, 'policy-fixture')
+const policyFeeds = path.join(policyDir, 'feeds')
+fs.mkdirSync(policyFeeds, { recursive: true })
+fs.writeFileSync(path.join(policyDir, 'app.py'), 'MODEL = "clean-anthropic-model"\n')
+fs.writeFileSync(path.join(policyFeeds, 'anthropic.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'anthropic',
+  generated: '2026-08-01T00:00:00Z',
+  source: 'https://example.invalid/anthropic',
+  policy: { min_notice_days: 60, source: 'https://example.invalid/anthropic' },
+  models: [{ id: 'clean-anthropic-model' }],
+}))
+const policySchedule = run(['schedule', policyDir, '--feeds', policyFeeds])
+assert(policySchedule.code === 0, 'policy-floor schedule exits 0')
+assert(policySchedule.out.includes('guaranteed until 2026-09-30 per anthropic stated policy (>=60d notice, feed generated 2026-08-01)'), 'schedule explains a policy-floor guarantee')
+
+const changedRepo = path.join(tempRoot, 'changed-repo')
+fs.mkdirSync(changedRepo)
+const changedFile = path.join(changedRepo, 'app.py')
+const git = args => spawnSync('git', args, { cwd: changedRepo, encoding: 'utf8' })
+assert(git(['init', '-q']).status === 0, 'diff test initializes a git repository')
+assert(git(['config', 'user.email', 'model-eol-test@example.invalid']).status === 0, 'diff test configures git email')
+assert(git(['config', 'user.name', 'model-eol test']).status === 0, 'diff test configures git name')
+fs.writeFileSync(changedFile, 'MODEL = "o3-deep-research"\n')
+assert(git(['add', 'app.py']).status === 0 && git(['commit', '-qm', 'base']).status === 0, 'diff test creates the base commit')
+fs.writeFileSync(changedFile, 'MODEL = "o3-deep-research"\nNEW_MODEL = "claude-opus-4-1-20250805"\n')
+const changedRun = run(['check', changedRepo, '--days', '30', '--changed', 'HEAD', '--json'])
+assert(changedRun.out.trim().startsWith('{'), `--changed emits JSON (stderr: ${changedRun.err.trim()})`)
+const changedJson = JSON.parse(changedRun.out)
+assert(changedRun.code === 1, '--changed fails for an added bad model')
+assert(changedJson.findings.length === 1 && changedJson.findings[0].id === 'claude-opus-4-1-20250805', '--changed filters out unchanged bad model lines')
+const nonGit = path.join(tempRoot, 'not-a-git-repo')
+fs.mkdirSync(nonGit)
+fs.writeFileSync(path.join(nonGit, 'app.py'), 'MODEL = "o3-deep-research"\n')
+const nonGitChanged = run(['check', nonGit, '--changed', 'HEAD', '--json'])
+assert(nonGitChanged.code === 2, '--changed rejects a non-git target')
+assert(nonGitChanged.err.includes('git repository'), '--changed reports the non-git target clearly')
 
 const missing = run(['inventory', path.join(tempRoot, 'does-not-exist'), path.join(root, 'test/fixture'), '--json'])
 assert(missing.code === 0, 'missing target does not abort valid targets')

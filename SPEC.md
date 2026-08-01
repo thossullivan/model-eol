@@ -49,6 +49,26 @@ Dates are ISO 8601, UTC. A model with no `announced` and no `shutdown` is an
 affirmative statement of "no retirement scheduled as of `generated`" - the absence
 is data, which is exactly what scraping HTML can never give you.
 
+### Policy floors
+
+A feed MAY include a publisher's stated minimum deprecation notice period:
+
+```json
+"policy": {
+  "min_notice_days": 60,
+  "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+}
+```
+
+For an entry with neither `announced` nor `shutdown`, a policy floor means the
+entry cannot become unavailable before `generated` + `min_notice_days` days,
+provided the provider honors its stated policy. This is a stated policy, not a
+contract or a guarantee that the provider will remain available.
+
+The `policy` field is optional. Its absence means no forward claim can be made,
+intentionally. OpenAI publishes no formal notice floor, so the OpenAI feed carries
+no `policy` field.
+
 ### Why `distributions` is in the core and not an extension
 
 The July 2026 evidence: OpenAI shut off `o3-deep-research` on July 23; Azure lists it

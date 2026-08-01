@@ -3,6 +3,10 @@
   "publisher": "anthropic",
   "generated": "2026-08-01T19:36:58.430Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+  "policy": {
+    "min_notice_days": 60,
+    "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format. Anthropic policy floor: >=60 days notice for publicly released models. Weights of public models are preserved per the Nov 2025 commitments - preservation is not availability.",
   "models": [
     {

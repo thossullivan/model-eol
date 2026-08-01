@@ -5,9 +5,9 @@
 //   node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs]
 //
 // New inventory modes:
-//   node check.mjs inventory [paths...] [--json]
+//   node check.mjs inventory [paths...] [--json|--format json|cyclonedx|text]
 //   node check.mjs schedule [paths...] [--days N] [--json]
-//   node check.mjs alert [paths...] [--format github|markdown] [--json]
+//   node check.mjs alert [paths...] [--format github|markdown|badge] [--json]
 //   node check.mjs plan [paths...] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR]
 //   node check.mjs apply --plan plan.json [--dry-run]
 //
@@ -24,12 +24,14 @@ import {
   buildInventory,
   buildSchedule,
   formatAlertGithub,
+  formatAlertBadge,
   formatAlertMarkdown,
   formatCheck,
   formatInventory,
+  formatInventoryCycloneDX,
   formatSchedule,
 } from './lib/reports.mjs'
-import { scanTargets } from './lib/scanner.mjs'
+import { addedLinesForTargets, filterFindingsToChanged, scanTargets } from './lib/scanner.mjs'
 
 const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'apply', 'help'])
 const args = process.argv.slice(2)
@@ -55,11 +57,12 @@ const DAYS = Number(flag('days', '90'))
 const FEEDS_DIR = flag('feeds', path.join(import.meta.dirname, 'feeds'))
 const VIA = flag('via', null) // e.g. azure-ai-foundry, aws-bedrock
 const SCOPE = flag('scope', 'all')
-const FORMAT = flag('format', 'github')
+const FORMAT = flag('format', null)
 const PLAN_FILE = flag('plan', null)
 const AS_JSON = has('json')
 const INCLUDE_DOCS = has('include-docs')
 const DRY_RUN = has('dry-run')
+const CHANGED_BASE = flag('changed', null)
 const targets = args.length ? args : ['.']
 
 if (command === 'help') {
@@ -67,18 +70,21 @@ if (command === 'help') {
 
 Usage:
   node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs]
-  node check.mjs check [paths...] [--days N] [--scope all|direct] [--json]
-  node check.mjs inventory [paths...] [--json]
+  node check.mjs check [paths...] [--days N] [--scope all|direct] [--json] [--changed BASE_REF]
+  node check.mjs inventory [paths...] [--json] [--format json|cyclonedx|text]
   node check.mjs schedule [paths...] [--days N] [--json]
-  node check.mjs alert [paths...] [--days N] [--scope all|direct] [--format github|markdown] [--json]
+  node check.mjs alert [paths...] [--days N] [--scope all|direct] [--format github|markdown|badge] [--json]
   node check.mjs plan [paths...] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR]
   node check.mjs apply --plan plan.json [--dry-run]
 
 Commands:
   check       Fail when tracked model IDs are retired or retiring within --days.
+              With --changed BASE_REF, answer the PR CI question: "this PR ADDS a
+              dependency on a model that already has a death date".
   inventory   List tracked model references plus direct/cloud/gateway integration hints.
+              --format json is the machine-readable default; --format cyclonedx emits a CycloneDX 1.6 ML-BOM.
   schedule    Show the retirement schedule for tracked references in the target.
-  alert       Emit GitHub Actions annotations or Markdown from the schedule and fail on errors.
+  alert       Emit GitHub Actions annotations, Markdown, or a Shields badge JSON and fail on errors.
   plan        Emit a JSON migration plan with only safely patchable direct API references.
   apply       Apply a plan with line-hash and occurrence checks; use --dry-run to preview.
 
@@ -111,8 +117,16 @@ if (!['all', 'direct'].includes(SCOPE)) {
   console.error('--scope must be all or direct')
   process.exit(2)
 }
-if (command === 'alert' && !['github', 'markdown'].includes(FORMAT)) {
-  console.error('--format must be github or markdown')
+if (CHANGED_BASE !== null && command !== 'check') {
+  console.error('--changed is only supported by the check command')
+  process.exit(2)
+}
+if (command === 'alert' && FORMAT !== null && !['github', 'markdown', 'badge', 'json'].includes(FORMAT)) {
+  console.error('--format must be github, markdown, badge, or json for alert')
+  process.exit(2)
+}
+if (command === 'inventory' && FORMAT !== null && !['json', 'cyclonedx', 'text'].includes(FORMAT)) {
+  console.error('--format must be json, cyclonedx, or text for inventory')
   process.exit(2)
 }
 
@@ -145,7 +159,17 @@ const findings = scan.modelRefs.map(ref => findingFromRef(ref, { days: DAYS, via
 const checkFindings = SCOPE === 'direct'
   ? findings.filter(f => f.usage === 'direct-api' || f.usage === 'model-reference')
   : findings
-const bad = checkFindings.filter(isBad)
+const changedFindings = CHANGED_BASE === null
+  ? checkFindings
+  : (() => {
+      try {
+        return filterFindingsToChanged(checkFindings, addedLinesForTargets(targets, CHANGED_BASE))
+      } catch (e) {
+        console.error(`--changed failed: ${e.message}`)
+        process.exit(2)
+      }
+    })()
+const bad = changedFindings.filter(isBad)
 const inventory = () => buildInventory({ scan, findings, days: DAYS, via: VIA, scope: SCOPE, targets })
 const schedule = () => buildSchedule(inventory())
 const alert = () => buildAlert(schedule())
@@ -164,16 +188,19 @@ if (command === 'plan') {
 
 if (command === 'check') {
   if (AS_JSON) {
-    console.log(JSON.stringify({ threshold_days: DAYS, distributor: VIA, scope: SCOPE, findings: checkFindings }, null, 2))
+    console.log(JSON.stringify({ threshold_days: DAYS, distributor: VIA, scope: SCOPE, findings: changedFindings }, null, 2))
   } else {
-    console.log(formatCheck({ findings: checkFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
+    console.log(formatCheck({ findings: changedFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
   }
   process.exit(bad.length ? 1 : 0)
 }
 
 if (command === 'inventory') {
   const inv = inventory()
-  if (AS_JSON) {
+  const inventoryFormat = FORMAT ?? 'json'
+  if (inventoryFormat === 'cyclonedx') {
+    console.log(JSON.stringify(formatInventoryCycloneDX(inv), null, 2))
+  } else if (AS_JSON || inventoryFormat === 'json') {
     console.log(JSON.stringify(inv, null, 2))
   } else {
     console.log(formatInventory(inv, DAYS))
@@ -193,8 +220,10 @@ if (command === 'schedule') {
 
 if (command === 'alert') {
   const payload = alert()
-  if (AS_JSON) {
+  if (AS_JSON || FORMAT === 'json') {
     console.log(JSON.stringify(payload, null, 2))
+  } else if (FORMAT === 'badge') {
+    console.log(JSON.stringify(formatAlertBadge(payload), null, 2))
   } else if (FORMAT === 'markdown') {
     console.log(formatAlertMarkdown(payload, DAYS))
   } else {
