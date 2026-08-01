@@ -86,6 +86,13 @@ Exit 1 on findings at or past the threshold - wire it into CI as-is. The badge J
 plugs into the [shields endpoint](https://shields.io/endpoint) from any
 CI-accessible URL.
 
+**No API keys, no accounts.** Scanning is static analysis and the feeds are data
+files, so the checker, PR gate, schedule, SBOM export, and badge all run with zero
+credentials. The bot needs only a GitHub token (a fine-grained PAT if you want its
+PRs to trigger checks), and provider API keys enter the picture in exactly two
+optional places: your own eval hook command, and the feed-refresh models-endpoint
+coverage.
+
 ## Same weights, different clocks
 
 The same model retires on different dates per channel, and a checker that ignores
