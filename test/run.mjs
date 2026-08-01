@@ -80,6 +80,19 @@ const azure = bj.findings.find(f => f.id === 'o3-deep-research-2025-06-26')
 assert(azure?.via === 'azure-ai-foundry', 'azure distribution clock applied')
 assert(azure?.shutdown === '2026-12-26', 'azure shutdown date used')
 
+// A model-eol feed document is lifecycle data, not usage - scanning one would
+// flag every retired id it exists to describe (the repo's own feeds/ made the
+// self-scan permanently red before this).
+{
+  const feedScanDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-feedscan-'))
+  fs.copyFileSync(path.join(root, 'feeds/openai.json'), path.join(feedScanDir, 'openai.json'))
+  fs.writeFileSync(path.join(feedScanDir, 'app.py'), 'from openai import OpenAI\nmodel = "o3-deep-research"\n')
+  const feedScan = run([feedScanDir, '--days', '90', '--json'])
+  const feedScanFindings = JSON.parse(feedScan.out).findings
+  assert(feedScanFindings.length === 1 && feedScanFindings[0].file.endsWith('app.py'), 'feed documents are skipped by the scanner; real usage beside them still flags')
+  fs.rmSync(feedScanDir, { recursive: true, force: true })
+}
+
 // Inventory mode: keep the CI gate's findings, but also classify direct API
 // usage separately from cloud/gateway references that need a resolver.
 const c = run(['inventory', path.join(root, 'test/fixture'), '--days', '30', '--json'])
