@@ -1,8 +1,11 @@
 # Design - the model-eol bot ("Dependabot for models")
 
 *Status: agreed 2026-08-01 after two adversarial design reviews (Claude + Codex)
-and a first field test of the core against real repos. This document is the
-reference for the Track A and Track B implementation work.*
+and a first field test of the core against real repos. SHIPPED same day in
+v0.1.0: all tracks below are implemented (see docs/CONTEXT.md "State as of
+2026-08-01"). One deviation earned by field testing: retired generic
+model-references file issues too (reason not-direct-api) - the original issue
+allowlist accidentally made them invisible.*
 
 ## Decisions locked
 

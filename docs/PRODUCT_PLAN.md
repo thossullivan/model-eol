@@ -1,5 +1,11 @@
 # Product plan - direct-first model retirement inventory
 
+*Status 2026-08-01: the MVP scope below shipped in v0.1.0, plus the bot adapter,
+refresh automation, and the aws-bedrock distributor fetcher (feed-side clocks
+from AWS's lifecycle page - account-level deployment resolvers remain future
+work as described under "Next resolvers"). Current state lives in
+docs/CONTEXT.md.*
+
 ## Thesis
 
 The first useful product is not "one more CI check." It is a direct LLM dependency

@@ -54,7 +54,7 @@ non-failing candidates so feed gaps are visible. See `docs/PRODUCT_PLAN.md`.
 | Khavel/ai-model-watch-data | open daily dataset (prices, context, deprecation dates) | own format |
 | alexanderkatsovych/modelradar-data | open dataset, ~108 models with retirement dates/successors | own format |
 | models.dev | open model-metadata registry several tools build on | capabilities-focused; not an EOL feed |
-| endoflife.date | machine-readable EOL for hundreds of software products | doesn't cover hosted AI models (worth exploring a contribution - see issues) |
+| endoflife.date | machine-readable EOL for hundreds of software products | started tracking Anthropic Claude (July 2026, `/api/anthropic-claude.json` with eol + recommendedReplacement) - one provider, no distributor clocks, no announced/shutdown split. Strongest convergence target; contribute OpenAI/Google there |
 
 All small, all recent, all evidence of demand. The play is convergence, not
 competition - see the outreach issue.
@@ -82,28 +82,77 @@ competition - see the outreach issue.
    Portkey, but it usually cannot prove the deployed model behind an alias. Resolver
    integrations should enrich inventory output later.
 8. **Alerting starts stateless.** `check.mjs alert` emits GitHub Actions annotations,
-   Markdown, or JSON and exits nonzero on retired/retiring findings. Stateful delivery
-   (Slack, Teams, GitHub issue creation) should consume that JSON later instead of
-   duplicating scanner logic.
+   Markdown, badge JSON, or JSON and exits nonzero on retired/retiring findings. The
+   bot adapter (bot/) is the stateful consumer: it reads `plan --json` over a
+   subprocess boundary and keeps all its state in GitHub PR/issue metadata blocks.
+9. **Patch gating is strict.** Only high-confidence direct-api findings with a
+   feed-resolvable, non-retiring replacement are auto-patchable; generic
+   model-references, cloud/gateway hints, and publisher-fallback clocks are
+   issue-only; candidates never generate work items at all.
+10. **`--via` semantics.** A distribution entry without `shutdown` means "no
+   retirement scheduled on that channel" - it never inherits the publisher clock.
+   Only a missing distribution entry falls back, labelled `publisher-fallback`,
+   which is never patchable. (The original conservative-fallback read told Azure
+   shops their models were dead five months early.)
+11. **Informational is not changed.** refresh `--check` exits 3 only when generated
+   files materially differ; unconfirmed entries and no-publisher-feed rows render
+   in the diff but do not trip it (a keyless weekly run would otherwise open a
+   no-op PR forever - the first live workflow dispatch proved it).
+12. **Policy floors are stated policy, not contracts** - the wording in SPEC.md and
+   the schedule output says exactly that, and feeds without a stated floor make no
+   forward claim.
+13. **The eval hook is a security boundary.** Config-supplied command, so: separate
+   least-privilege job, scrubbed env namespace, bounded runtime and report size,
+   report treated as untrusted content in PR bodies.
+14. **No model-attribution trailers on commits.** Implementation is a mix of Claude
+   and Codex delegation; per-commit honesty lives in commit bodies ("Implemented by
+   Codex (gpt-5.6-luna); reviewed by Claude"), never in Co-Authored-By trailers.
+   History was rewritten 2026-08-01 to enforce this.
 
 ## Publish gates (do not flip public before)
 
 1. The companion essay is live (this repo is its artifact; sequence matters).
-2. Feeds re-verified against provider pages on publish day - they were hand-compiled
-   2026-07-25 and rot without refresh (issue #3 is the fix).
-3. Name decision: "model-eol" is a working title. Check npm availability and GitHub
-   collisions before publishing the package. Avoid "MBOM" - it already means
-   Manufacturing BOM in CycloneDX.
+2. ~~Feeds re-verified against provider pages on publish day~~ DONE and automated:
+   feeds regenerated from live sources 2026-08-01; the weekly feed-refresh
+   workflow keeps them verified.
+3. ~~Name decision~~ RESOLVED 2026-08-01: keep "model-eol". npm name verified free,
+   no GitHub collisions, and endoflife.date entering LLM tracking strengthens the
+   lineage argument. package.json is publish-ready; npm publish is Tom's call.
 4. Sweep this repo for anything non-public-safe (should be nothing; keep it that way
    - write every commit as if the repo were already public).
+
+## State as of 2026-08-01 (v0.1.0 tagged, v0.1.1 in progress)
+
+Shipped and field-tested: hardened scanner (git ls-files traversal), plan/apply
+with strict gating, bot adapter (PR/issue lifecycle, sandboxed eval hook),
+refresh tooling (OpenAI + Anthropic pages, models endpoints, aws-bedrock
+distributor clocks), policy floors + safe_until/earliest-risk, --changed PR
+gate, CycloneDX export, badge + Atom changelog outputs, strict parseArgs CLIs
+with TTY colors, VHS demo, weekly feed-refresh workflow LIVE in this repo
+(verified green on GitHub runners).
+
+Field-test receipts: found claude-sonnet-4-20250514 dead 47 days in
+hybrid-coach's promptfoo config; fleet sweep found ~230 retired refs across
+Tom's repos (most are kew pricing-key noise - ignore-config material);
+feed drift caught within one week of hand compilation; a hand-compiled Bedrock
+date corrected by three months.
+
+Remaining, Tom-side: npm publish (then the auto patch-release workflow -
+caniuse-lite pattern), activating ci/bot workflows from their .example files,
+provider API key secrets for models-endpoint coverage (this is what populates
+current-model entries and policy-floor horizons), the essay, the public flip.
+Remaining, backlog: Google/Vertex/Azure fetchers, gateway resolvers, monorepo
+ownership groups, feed signing, feeds-dir self-scan exclusion.
 
 ## Conventions
 
 - Prose in this repo uses " - " (space-hyphen-space), never em-dash glyphs.
 - Every feed entry claiming a date must carry a `source` URL (feed-level or
   entry-level) so claims are auditable.
-- Keep the checker under ~200 lines; complexity goes in the spec discussion, not
-  the reference implementation.
+- check.mjs stays a thin dispatcher; logic lives in lib/. (The original "checker
+  under ~200 lines" rule outgrew reality at v0.1.0 - the spirit survives as: the
+  reference implementation stays small, readable, and zero-dependency; complexity
+  goes in the spec discussion.)
 
 ## Related work by the author
 

@@ -150,8 +150,11 @@ node refresh/refresh.mjs --distributor aws-bedrock    # distributor clocks from 
 node scripts/feed-changelog.mjs                       # feeds' git history as an Atom feed
 ```
 
-Parse failures fail loudly and never emit a guessed feed. The first live runs
-earned their keep: they caught the hand-compiled feeds drifting from Anthropic's
+Parse failures fail loudly and never emit a guessed feed. This runs automatically:
+a weekly workflow (`.github/workflows/feed-refresh.yml`, Mondays 05:23 UTC) checks
+the live sources and opens a PR with the semantic diff - and an auto-updated
+README freshness line - when anything material changed. The first live runs earned
+their keep: they caught the hand-compiled feeds drifting from Anthropic's
 recommendations within one week, and corrected a hand-compiled Bedrock date that
 was three months wrong.
 
@@ -167,9 +170,9 @@ move any of us can make here.
 
 ## Status / honesty
 
-- Feeds are generated from provider pages and verified 2026-08-01; they refresh via
-  `refresh/` with a human-reviewed diff, but the cron workflows still ship as
-  `.example` files - activate them in your fork or wait for this repo to.
+- Feeds refresh automatically: the weekly feed-refresh workflow is live in this
+  repo (parse failures fail the run; material changes become a reviewed PR). The
+  CI and bot workflows still ship as `.example` files.
 - Current-model entries (and therefore policy-floor horizons) populate only when
   refresh runs with provider API keys for the models endpoints.
 - The checker matches known IDs only - it will not discover models absent from the
