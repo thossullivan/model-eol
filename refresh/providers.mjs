@@ -43,16 +43,26 @@ function pad(number) {
   return String(number).padStart(2, '0')
 }
 
+export function assertIsoDate(value, label = 'date') {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`${label} must be YYYY-MM-DD`)
+  }
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  if (year >= 0 && year <= 99) date.setUTCFullYear(year)
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) {
+    throw new Error(`${label} must be a real calendar date`)
+  }
+  return value
+}
+
 function validDate(year, month, day) {
   const candidate = `${year}-${pad(month)}-${pad(day)}`
-  const parsed = new Date(`${candidate}T00:00:00Z`)
-  if (
-    Number.isNaN(parsed.getTime()) ||
-    parsed.getUTCFullYear() !== Number(year) ||
-    parsed.getUTCMonth() + 1 !== Number(month) ||
-    parsed.getUTCDate() !== Number(day)
-  ) return undefined
-  return candidate
+  try {
+    return assertIsoDate(candidate)
+  } catch {
+    return undefined
+  }
 }
 
 function decodeEntities(text) {

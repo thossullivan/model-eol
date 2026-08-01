@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { color, colorEnabled } from '../lib/color.mjs'
-import { findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
+import { assertIsoDate, buildModelPattern, findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
 import { formatCheck, formatSchedule } from '../lib/reports.mjs'
 
 const root = path.join(import.meta.dirname, '..')
@@ -30,6 +30,11 @@ const assert = (cond, msg) => {
 
 const unknownFlag = run([path.join(root, 'test/fixture'), '--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown check flags exit 2 with the bad flag and help hint')
+
+const invalidDays = run([path.join(root, 'test/fixture'), '--days', 'banana'])
+assert(invalidDays.code === 2 && invalidDays.err.includes('finite non-negative integer'), 'non-numeric --days exits 2')
+const fractionalDays = run([path.join(root, 'test/fixture'), '--days', '1.5'])
+assert(fractionalDays.code === 2, 'fractional --days exits 2')
 
 assert(!colorEnabled({}, { isTTY: false }), 'color is off by default for non-TTY output')
 assert(colorEnabled({ FORCE_COLOR: '1' }, { isTTY: false }), 'FORCE_COLOR enables color for non-TTY output')
@@ -60,6 +65,7 @@ const a = run([path.join(root, 'test/fixture'), '--days', '30', '--json'])
 const aj = JSON.parse(a.out)
 const byId = id => aj.findings.find(f => f.id === id)
 assert(a.code === 1, 'exit 1 when findings exist')
+assert(Array.isArray(aj.scan_notes) && aj.scan_notes.length === 0, 'check JSON emits scan_notes')
 assert(byId('o3-deep-research-2025-06-26')?.status === 'retired', 'o3-deep-research is retired')
 assert(['retiring', 'retired'].includes(byId('claude-opus-4-1-20250805')?.status), 'opus 4.1 flags (retiring or retired)')
 assert(byId('gpt-5.6-sol')?.status === 'ok', 'gpt-5.6-sol is clean')
@@ -92,6 +98,14 @@ assert(azure?.shutdown === '2026-12-26', 'azure shutdown date used')
   const feedScanFindings = JSON.parse(feedScan.out).findings
   assert(feedScanFindings.length === 1 && feedScanFindings[0].file.endsWith('app.py'), 'feed documents are skipped by the scanner; real usage beside them still flags')
   fs.rmSync(feedScanDir, { recursive: true, force: true })
+
+  const boundaryPattern = buildModelPattern(['gpt-image-1', 'gpt-image-1-20260101'])
+  boundaryPattern.lastIndex = 0
+  assert(!'gpt-image-1.7'.match(boundaryPattern), 'model keys do not match inside dotted version extensions')
+  boundaryPattern.lastIndex = 0
+  assert('gpt-image-1-20260101'.match(boundaryPattern)?.[0] === 'gpt-image-1-20260101', 'dated model ids still match at a separator boundary')
+  boundaryPattern.lastIndex = 0
+  assert('gpt-image-1'.match(boundaryPattern)?.[0] === 'gpt-image-1', 'model ids still match at the string boundary')
 }
 
 // Inventory mode: keep the CI gate's findings, but also classify direct API
@@ -104,6 +118,7 @@ const ref = (file, matched) => cj.model_references.find(f => f.file.endsWith(fil
 const hint = provider => cj.integration_hints.find(h => h.provider === provider)
 assert(c.code === 0, 'inventory exits 0')
 assert(cj.schema === 'model-eol/inventory@0.1', 'inventory schema emitted')
+assert(Array.isArray(cj.scan_notes), 'inventory JSON emits scan_notes')
 assert(cj.candidate_model_references.some(f => f.matched === 'gpt-9-ultra-20990101'), 'unknown model-like candidate surfaced')
 assert(cj.candidate_model_references.some(f => f.matched === 'anthropic.claude-3-7-sonnet-20250219-v1:0'), 'provider-prefixed unknown candidate surfaced')
 assert(cj.model_references.some(f => f.file.endsWith('.env') && f.matched === 'o3-deep-research'), '.env dotfile is scanned')
@@ -122,6 +137,7 @@ const d = run(['schedule', path.join(root, 'test/fixture'), '--days', '30', '--j
 const dj = JSON.parse(d.out)
 assert(d.code === 0, 'schedule exits 0')
 assert(dj.schema === 'model-eol/schedule@0.1', 'schedule schema emitted')
+assert(Array.isArray(dj.scan_notes), 'schedule JSON emits scan_notes')
 assert(dj.items.some(f => f.id === 'gpt-4-0613'), 'scheduled model appears in schedule')
 assert(dj.unresolved_integrations.some(h => h.provider === 'vertex-ai'), 'schedule carries unresolved Vertex hint')
 assert(dj.earliest_risk?.safe_until === '2026-07-23', 'schedule carries the earliest safe_until')
@@ -139,6 +155,7 @@ const f = run(['alert', path.join(root, 'test/fixture'), '--days', '30', '--scop
 const fj = JSON.parse(f.out)
 assert(f.code === 1, 'alert exits 1 when errors exist')
 assert(fj.schema === 'model-eol/alert@0.1', 'alert schema emitted')
+assert(Array.isArray(fj.scan_notes), 'alert JSON emits scan_notes')
 assert(fj.errors.some(item => item.status === 'retired'), 'alert carries retired errors')
 assert(fj.warnings.some(item => item.status === 'unknown'), 'alert carries unknown candidate warnings')
 assert(fj.warnings.some(item => item.status === 'unresolved'), 'alert carries unresolved integration warnings')
@@ -166,6 +183,22 @@ assert(badge.color === 'red' && badge.message.includes('retired') && badge.messa
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
 
+const incompleteDir = path.join(tempRoot, 'incomplete-scan')
+fs.mkdirSync(incompleteDir)
+fs.writeFileSync(path.join(incompleteDir, 'oversized.py'), Buffer.alloc(2 * 1024 * 1024 + 1))
+fs.writeFileSync(path.join(incompleteDir, 'app.py'), 'MODEL = "o3-deep-research"\n')
+const incompleteCheck = run([incompleteDir, '--json'])
+assert(incompleteCheck.code === 2 && incompleteCheck.err.includes('INCOMPLETE SCAN'), 'incomplete check fails closed with a prominent stderr summary')
+const allowedIncomplete = run([incompleteDir, '--allow-incomplete', '--json'])
+const allowedIncompleteJson = JSON.parse(allowedIncomplete.out)
+assert(allowedIncomplete.code === 1 && allowedIncompleteJson.scan_notes.some(note => note.reason === 'file-too-large'), 'allow-incomplete downgrades coverage loss and keeps finding exit semantics')
+const incompletePlan = run(['plan', incompleteDir])
+assert(incompletePlan.code === 2 && incompletePlan.err.includes('INCOMPLETE SCAN'), 'incomplete plan fails closed')
+const allowedPlan = run(['plan', incompleteDir, '--allow-incomplete'])
+assert(allowedPlan.code === 0 && JSON.parse(allowedPlan.out).scan_notes.length > 0, 'allow-incomplete plan emits its scan notes')
+const incompleteInventoryText = run(['inventory', incompleteDir, '--format', 'text'])
+assert(incompleteInventoryText.code === 0 && incompleteInventoryText.out.includes('WARNING: scan incomplete'), 'inventory human output warns about scan notes without failing')
+
 const orangeBadgeDir = path.join(tempRoot, 'orange-badge')
 fs.mkdirSync(orangeBadgeDir)
 fs.writeFileSync(path.join(orangeBadgeDir, 'app.py'), 'MODEL = "claude-opus-4-1-20250805"\n')
@@ -178,11 +211,51 @@ const greenBadge = JSON.parse(run(['alert', greenBadgeDir, '--format', 'badge'])
 assert(greenBadge.color === 'brightgreen' && greenBadge.message === 'clear', 'badge is brightgreen when clear')
 
 const loadedFeeds = loadFeeds(path.join(root, 'feeds'))
+assert(assertIsoDate('2026-02-28') === '2026-02-28', 'assertIsoDate accepts a real calendar date')
+let invalidIsoDate = false
+try {
+  assertIsoDate('2026-02-30')
+} catch {
+  invalidIsoDate = true
+}
+assert(invalidIsoDate, 'assertIsoDate rejects impossible calendar dates')
 const anthropicFeed = loadedFeeds.feeds.find(feed => feed.publisher === 'anthropic')
 const openaiFeed = loadedFeeds.feeds.find(feed => feed.publisher === 'openai')
 assert(anthropicFeed?.policy?.min_notice_days === 60, 'Anthropic feed carries its 60-day policy floor')
 assert(anthropicFeed?.policy?.source === anthropicFeed.source, 'Anthropic policy cites the feed source URL')
 assert(!openaiFeed?.policy, 'OpenAI feed intentionally carries no policy floor')
+
+const invalidDateFeeds = path.join(tempRoot, 'invalid-date-feeds')
+fs.mkdirSync(invalidDateFeeds)
+fs.writeFileSync(path.join(invalidDateFeeds, 'invalid.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'test',
+  generated: '2026-08-01T00:00:00Z',
+  models: [{ id: 'bad-date-model', shutdown: '2026-02-30' }],
+}))
+let invalidFeedMessage = ''
+try {
+  loadFeeds(invalidDateFeeds)
+} catch (error) {
+  invalidFeedMessage = error.message
+}
+assert(invalidFeedMessage.includes('invalid.json') && invalidFeedMessage.includes('bad-date-model'), 'loadFeeds rejects impossible dates with feed file and model id')
+const invalidPolicyFeeds = path.join(tempRoot, 'invalid-policy-feeds')
+fs.mkdirSync(invalidPolicyFeeds)
+fs.writeFileSync(path.join(invalidPolicyFeeds, 'invalid-policy.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'test',
+  generated: '2026-08-01T00:00:00Z',
+  policy: { min_notice_days: -1 },
+  models: [{ id: 'policy-model' }],
+}))
+let invalidPolicyMessage = ''
+try {
+  loadFeeds(invalidPolicyFeeds)
+} catch (error) {
+  invalidPolicyMessage = error.message
+}
+assert(invalidPolicyMessage.includes('invalid-policy.json') && invalidPolicyMessage.includes('policy-model') && invalidPolicyMessage.includes('min_notice_days'), 'loadFeeds rejects invalid policy thresholds')
 const cleanAnthropic = findingFromRef({
   entry: { id: 'clean-anthropic-model' },
   matched: 'clean-anthropic-model',
@@ -289,6 +362,7 @@ const planRun = run(['plan', path.join(root, 'test/fixture'), '--days', '90'])
 const plan = JSON.parse(planRun.out)
 assert(planRun.code === 0, 'plan exits 0 and always emits JSON')
 assert(plan.plan_schema === 'model-eol.plan/0.1', 'plan schema identifier emitted')
+assert(Array.isArray(plan.scan_notes), 'plan emits scan_notes')
 const patchItem = plan.items.find(item => item.file.endsWith('direct.py') && item.matched === 'o3-deep-research')
 assert(patchItem?.replacement === 'gpt-5.6-sol' && patchItem?.status === 'retired', 'direct retired reference with valid replacement is patchable')
 assert(/^[0-9a-f]{64}$/.test(patchItem?.expected_line_sha256 ?? ''), 'plan item carries a line SHA-256')
@@ -341,29 +415,40 @@ const writeApplyPlan = item => fs.writeFileSync(applyPlanFile, JSON.stringify({
   generated: '2026-08-01T00:00:00Z',
   threshold_days: 90,
   via: null,
-  items: [item],
+  items: Array.isArray(item) ? item : [item],
   issues: [],
 }))
 fs.writeFileSync(applyFile, `${oldLine}\n`)
 writeApplyPlan(applyItem)
-const applied = run(['apply', '--plan', applyPlanFile])
+const applied = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
 assert(applied.code === 0 && fs.readFileSync(applyFile, 'utf8') === `${newLine}\n`, 'apply rewrites the fixture')
-const rerun = run(['apply', '--plan', applyPlanFile])
+const rerun = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
 assert(rerun.code === 0 && rerun.out.includes('already-applied'), 'apply is idempotent')
 
 const mismatchItem = { ...applyItem, expected_line_sha256: hash('MODEL = "different-model"') }
 fs.writeFileSync(applyFile, `${oldLine}\n`)
 writeApplyPlan(mismatchItem)
-const mismatch = run(['apply', '--plan', applyPlanFile])
+const mismatch = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
 assert(mismatch.code === 1, 'apply exits 1 on hash mismatch')
 assert(mismatch.err.includes('hash does not match'), 'apply reports hash mismatch on stderr')
 assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'hash mismatch does not write the file')
 
 fs.writeFileSync(applyFile, `${oldLine}\n`)
 writeApplyPlan(applyItem)
-const dryRun = run(['apply', '--plan', applyPlanFile, '--dry-run'])
+const dryRun = run(['apply', '--plan', applyPlanFile, '--dry-run'], { cwd: applyDir })
 assert(dryRun.code === 0 && dryRun.out.includes('would change'), 'apply dry-run reports the proposed change')
 assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'apply dry-run writes nothing')
+
+fs.writeFileSync(applyFile, `${oldLine}\n`)
+writeApplyPlan([applyItem, { ...applyItem, line: 0 }])
+const malformedPlan = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(malformedPlan.code === 2 && malformedPlan.err.includes('plan item 1 line'), 'malformed plan items refuse the whole plan before file use')
+assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'malformed plan does not partially apply valid items')
+
+writeApplyPlan({ ...applyItem, file: '../escape.py' })
+const escapedPlan = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(escapedPlan.code === 1 && escapedPlan.err.includes('file path contains .. traversal'), 'apply refuses plan paths that escape rootDir')
+assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'escaped plan does not write the in-root file')
 
 for (const schemaFile of [
   'schema/model-eol.schema.json',

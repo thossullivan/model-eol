@@ -42,8 +42,12 @@ jobs:
           bedrock=$?
           set -e
           cat provider-err.txt bedrock-err.txt >&2 || true
-          if [ "$providers" -eq 1 ] || [ "$bedrock" -eq 1 ]; then
-            echo "a refresh source failed to parse - failing loudly, no feed written" >&2
+          if [ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]; then
+            echo "provider refresh failed with exit code $providers - no feed written" >&2
+            exit 1
+          fi
+          if [ "$bedrock" -ne 0 ] && [ "$bedrock" -ne 3 ]; then
+            echo "Bedrock refresh failed with exit code $bedrock - no feed written" >&2
             exit 1
           fi
           if [ "$providers" -eq 3 ] || [ "$bedrock" -eq 3 ]; then

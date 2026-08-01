@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
+export const BOT_IDENTITY_EMAIL = 'model-eol[bot]@users.noreply.github.com'
+
 const run = (cwd, args, allowFailure = false) => {
   const result = spawnSync('git', args, {
     cwd,
@@ -44,7 +46,7 @@ export const prepareBranch = (cwd, branch, base) => {
 
 export const configureIdentity = cwd => {
   run(cwd, ['config', 'user.name', 'model-eol[bot]'])
-  run(cwd, ['config', 'user.email', 'model-eol[bot]@users.noreply.github.com'])
+  run(cwd, ['config', 'user.email', BOT_IDENTITY_EMAIL])
 }
 
 export const commitAll = (cwd, files, message) => {
@@ -54,9 +56,33 @@ export const commitAll = (cwd, files, message) => {
   return run(cwd, ['rev-parse', 'HEAD'])
 }
 
+export const verifyBotBranch = (cwd, branch, expectedHead) => {
+  try {
+    run(cwd, ['fetch', 'origin', '--prune'])
+  } catch (error) {
+    return { head: null, committerEmail: null, safe: false, error: error.message }
+  }
+  const head = run(cwd, ['rev-parse', '--verify', `refs/remotes/origin/${branch}`], true)
+  const committerEmail = head ? run(cwd, ['show', '-s', '--format=%cE', head], true) : null
+  return {
+    head,
+    committerEmail,
+    safe: head === expectedHead && committerEmail === BOT_IDENTITY_EMAIL,
+    error: null,
+  }
+}
+
 export const pushBranch = (cwd, branch, expectedHead = null) => {
   const destination = `HEAD:refs/heads/${branch}`
-  if (expectedHead) {
+  if (expectedHead !== null) {
+    const state = verifyBotBranch(cwd, branch, expectedHead)
+    if (!state.safe) {
+      const error = new Error(state.error || `refusing force-push: branch head ${state.head || 'missing'} or committer email ${state.committerEmail || 'missing'} failed bot lease checks`)
+      error.code = 'MODEL_EOL_BRANCH_STAND_DOWN'
+      error.currentHead = state.head
+      error.committerEmail = state.committerEmail
+      throw error
+    }
     run(cwd, [
       'push',
       `--force-with-lease=refs/heads/${branch}:${expectedHead}`,

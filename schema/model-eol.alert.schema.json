@@ -4,13 +4,14 @@
   "title": "model-eol alert output",
   "description": "Machine-readable alert payload emitted by `model-eol alert --json`. Draft 0.1 - the $id is a placeholder until the repo is public.",
   "type": "object",
-  "required": ["schema", "generated", "threshold_days", "scope", "errors", "warnings"],
+  "required": ["schema", "generated", "threshold_days", "scope", "scan_notes", "errors", "warnings"],
   "properties": {
     "schema": { "const": "model-eol/alert@0.1" },
     "generated": { "type": "string", "format": "date-time" },
     "threshold_days": { "type": "number" },
     "distributor": { "type": ["string", "null"] },
     "scope": { "enum": ["all", "direct"] },
+    "scan_notes": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/scanNote" } },
     "errors": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/modelReference" } },
     "warnings": {
       "type": "array",

@@ -6,7 +6,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   via: null,
   ignore: Object.freeze({ models: Object.freeze([]), paths: Object.freeze([]) }),
   issues: Object.freeze({ enabled: true }),
-  eval: Object.freeze({ command: null, timeout_ms: 600000, max_report_bytes: 65536 }),
+  eval: Object.freeze({ command: null, timeout_ms: 600000, max_report_bytes: 65536, pass_env: Object.freeze([]) }),
 })
 
 const copyDefaults = () => ({
@@ -19,6 +19,7 @@ const copyDefaults = () => ({
     command: DEFAULT_CONFIG.eval.command,
     timeout_ms: DEFAULT_CONFIG.eval.timeout_ms,
     max_report_bytes: DEFAULT_CONFIG.eval.max_report_bytes,
+    pass_env: [],
   },
 })
 
@@ -72,6 +73,7 @@ export const normalizeConfig = raw => {
       assert(Number.isInteger(raw.eval.max_report_bytes) && raw.eval.max_report_bytes >= 0, 'eval.max_report_bytes must be a non-negative integer')
       config.eval.max_report_bytes = raw.eval.max_report_bytes
     }
+    if (raw.eval.pass_env !== undefined) config.eval.pass_env = stringArray(raw.eval.pass_env, 'eval.pass_env')
   }
 
   return config

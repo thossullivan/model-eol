@@ -9,11 +9,14 @@ const truncateReport = (value, limit) => {
   return Buffer.concat([bytes.subarray(0, limit - marker.length), marker]).toString('utf8')
 }
 
-export const runEvalHook = ({ command, timeoutMs, maxReportBytes, cwd, oldId, newId, planPath, reportPath }) => {
+export const runEvalHook = ({ command, timeoutMs, maxReportBytes, passEnv = [], cwd, oldId, newId, planPath, reportPath }) => {
   if (fs.existsSync(reportPath)) fs.rmSync(reportPath, { force: true })
-  const env = { ...process.env }
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('MODEL_EOL_')) delete env[key]
+  const env = {}
+  for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'USER', 'SHELL']) {
+    if (process.env[key] !== undefined) env[key] = process.env[key]
+  }
+  for (const key of passEnv) {
+    if (process.env[key] !== undefined) env[key] = process.env[key]
   }
   env.MODEL_EOL_OLD_ID = oldId
   env.MODEL_EOL_NEW_ID = newId

@@ -19,6 +19,7 @@ import {
 } from '../distributors.mjs'
 import {
   PROVIDERS,
+  assertIsoDate,
   mergeFeed,
   parseAnthropicDeprecations,
   parseAnthropicModels,
@@ -29,6 +30,7 @@ import {
   parseOpenAIModels,
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
+import { validateGeneratedFeeds } from '../refresh.mjs'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const refresh = path.join(root, 'refresh', 'refresh.mjs')
@@ -58,6 +60,36 @@ const assert = (condition, message) => {
     console.log(`ok: ${message}`)
   }
 }
+
+let invalidRefreshDate = false
+try {
+  assertIsoDate('2026-02-30')
+} catch {
+  invalidRefreshDate = true
+}
+assert(invalidRefreshDate, 'refresh date validation rejects impossible calendar dates')
+let invalidParsedDate = false
+try {
+  dateFromText('2026-02-30')
+} catch {
+  invalidParsedDate = true
+}
+assert(invalidParsedDate, 'dateFromText rejects impossible calendar dates before use')
+let validatorRejectedDate = false
+try {
+  validateGeneratedFeeds([{
+    provider: { feedFile: 'invalid.json' },
+    feed: {
+      spec: 'model-eol/0.1',
+      publisher: 'test',
+      generated: '2026-08-01T00:00:00Z',
+      models: [{ id: 'invalid-refresh-model', shutdown: '2026-02-30' }],
+    },
+  }])
+} catch {
+  validatorRejectedDate = true
+}
+assert(validatorRejectedDate, 'validate-feeds rejects impossible generated dates')
 
 const unknownFlag = run(['--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown refresh flags exit 2 with the bad flag and help hint')
@@ -292,6 +324,10 @@ assert(vertexCheck.out.includes('no publisher feed'), 'Vertex --check reports un
 
 const bothDistributorsCheck = run(['--distributor', 'aws-bedrock,vertex-ai', '--check', '--fixtures', fixtures])
 assert(bothDistributorsCheck.code === 3 && bothDistributorsCheck.out.includes('vertex-ai'), 'refresh accepts comma-separated distributors')
+
+const refreshWorkflow = fs.readFileSync(path.join(root, '.github/workflows/feed-refresh.yml'), 'utf8')
+assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && refreshWorkflow.includes('exit code $providers'), 'workflow fails explicitly on unexpected provider refresh exit codes')
+assert(refreshWorkflow.includes('[ "$bedrock" -ne 0 ] && [ "$bedrock" -ne 3 ]') && refreshWorkflow.includes('exit code $bedrock'), 'workflow fails explicitly on unexpected distributor refresh exit codes')
 
 const composedBedrockCheck = run(['--provider', 'anthropic', '--distributor', 'aws-bedrock', '--check', '--fixtures', fixtures])
 assert(composedBedrockCheck.code === 3 && composedBedrockCheck.out.includes('Distribution changes'), 'Bedrock distributor composes with a selected publisher refresh')

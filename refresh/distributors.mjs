@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { dateFromText } from './providers.mjs'
+import { assertIsoDate, dateFromText } from './providers.mjs'
 
 export const BEDROCK_LIFECYCLE_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html'
 export const VERTEX_MODEL_VERSIONS_URL = 'https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions'
@@ -19,8 +19,6 @@ export const DISTRIBUTORS = {
     fixture: 'vertex-model-versions.html',
   },
 }
-
-const DATE = /^\d{4}-\d{2}-\d{2}$/
 
 function decodeEntities(text) {
   const named = new Map([
@@ -320,7 +318,9 @@ function feedParts(feeds) {
 
 function dateField(value, field, modelId, via) {
   if (value === undefined) return undefined
-  if (typeof value !== 'string' || !DATE.test(value)) {
+  try {
+    assertIsoDate(value, `${via} record ${modelId} ${field}`)
+  } catch {
     throw new Error(`${via} record ${modelId} has an invalid ${field} date`)
   }
   return value

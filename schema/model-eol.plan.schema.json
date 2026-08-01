@@ -4,12 +4,13 @@
   "title": "model-eol migration plan",
   "description": "Deterministic, hash-guarded migration plan emitted by `model-eol plan`. Draft 0.1 - the $id is a placeholder until the repo is public.",
   "type": "object",
-  "required": ["plan_schema", "generated", "threshold_days", "via", "items", "issues"],
+  "required": ["plan_schema", "generated", "threshold_days", "via", "scan_notes", "items", "issues"],
   "properties": {
     "plan_schema": { "const": "model-eol.plan/0.1" },
     "generated": { "type": "string", "format": "date-time" },
     "threshold_days": { "type": "number" },
     "via": { "type": ["string", "null"] },
+    "scan_notes": { "type": "array", "items": { "$ref": "#/definitions/scanNote" } },
     "items": { "type": "array", "items": { "$ref": "#/definitions/item" } },
     "issues": { "type": "array", "items": { "$ref": "#/definitions/issue" } }
   },
@@ -19,7 +20,7 @@
       "type": "object",
       "required": ["file", "line", "occurrence", "matched", "expected_line_sha256", "id", "publisher", "replacement", "shutdown", "days", "status", "sources", "notes"],
       "properties": {
-        "file": { "type": "string" },
+        "file": { "type": "string", "minLength": 1 },
         "line": { "type": "integer", "minimum": 1 },
         "occurrence": { "type": "integer", "minimum": 0 },
         "matched": { "type": "string", "minLength": 1 },
@@ -55,6 +56,19 @@
         "reason": { "type": "string", "minLength": 1 },
         "sources": { "type": "array", "items": { "type": "string" } },
         "notes": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "scanNote": {
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "file": { "type": "string" },
+        "message": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "limit_bytes": { "type": "integer", "minimum": 0 },
+        "limit_files": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     }

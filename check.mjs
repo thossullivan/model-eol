@@ -2,7 +2,7 @@
 // model-eol reference CLI - zero dependencies.
 //
 // Default mode preserves the original CI gate:
-//   node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs]
+//   node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs] [--allow-incomplete]
 //
 // New inventory modes:
 //   node check.mjs inventory [paths...] [--json|--format json|cyclonedx|text]
@@ -32,7 +32,7 @@ import {
   formatInventoryCycloneDX,
   formatSchedule,
 } from './lib/reports.mjs'
-import { addedLinesForTargets, filterFindingsToChanged, scanTargets } from './lib/scanner.mjs'
+import { addedLinesForTargets, filterFindingsToChanged, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
 
 const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'apply', 'help'])
 const args = process.argv.slice(2)
@@ -52,6 +52,7 @@ try {
       plan: { type: 'string' },
       json: { type: 'boolean' },
       'include-docs': { type: 'boolean' },
+      'allow-incomplete': { type: 'boolean' },
       'dry-run': { type: 'boolean' },
       changed: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -75,6 +76,7 @@ const FORMAT = values.format ?? null
 const PLAN_FILE = values.plan ?? null
 const AS_JSON = values.json ?? false
 const INCLUDE_DOCS = values['include-docs'] ?? false
+const ALLOW_INCOMPLETE = values['allow-incomplete'] ?? false
 const DRY_RUN = values['dry-run'] ?? false
 const CHANGED_BASE = values.changed ?? null
 const targets = positionals.length ? positionals : ['.']
@@ -83,12 +85,12 @@ if (command === 'help') {
   console.log(`model-eol
 
 Usage:
-  node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs]
-  node check.mjs check [paths...] [--days N] [--scope all|direct] [--json] [--changed BASE_REF]
+  node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs] [--allow-incomplete]
+  node check.mjs check [paths...] [--days N] [--scope all|direct] [--json] [--changed BASE_REF] [--allow-incomplete]
   node check.mjs inventory [paths...] [--json] [--format json|cyclonedx|text]
   node check.mjs schedule [paths...] [--days N] [--json]
   node check.mjs alert [paths...] [--days N] [--scope all|direct] [--format github|markdown|badge] [--json]
-  node check.mjs plan [paths...] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR]
+  node check.mjs plan [paths...] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR] [--allow-incomplete]
   node check.mjs apply --plan plan.json [--dry-run]
 
 Commands:
@@ -115,7 +117,7 @@ if (command === 'apply') {
     process.exit(2)
   }
   try {
-    const result = applyPlan({ planPath: PLAN_FILE, dryRun: DRY_RUN })
+    const result = applyPlan({ planPath: PLAN_FILE, dryRun: DRY_RUN, rootDir: process.cwd() })
     process.exit(result.failed ? 1 : 0)
   } catch (e) {
     console.error(`failed to apply plan ${PLAN_FILE}: ${e.message}`)
@@ -123,8 +125,8 @@ if (command === 'apply') {
   }
 }
 
-if (Number.isNaN(DAYS)) {
-  console.error('--days must be a number')
+if (!Number.isFinite(DAYS) || !Number.isInteger(DAYS) || DAYS < 0) {
+  console.error('--days must be a finite non-negative integer')
   process.exit(2)
 }
 if (!['all', 'direct'].includes(SCOPE)) {
@@ -169,6 +171,17 @@ try {
   process.exit(2)
 }
 
+const incompleteNotes = incompleteScanNotes(scan.notes)
+if (incompleteNotes.length && (command === 'check' || command === 'plan')) {
+  const label = ALLOW_INCOMPLETE ? 'warning: incomplete scan allowed' : 'INCOMPLETE SCAN'
+  console.error(`model-eol: ${label}; ${incompleteNotes.length} coverage-loss note(s) recorded`)
+  for (const note of incompleteNotes) {
+    const location = note.file ? ` (${note.file})` : ''
+    console.error(`  ${note.reason}${location}${note.message ? `: ${note.message}` : ''}`)
+  }
+  if (!ALLOW_INCOMPLETE) process.exit(2)
+}
+
 const findings = scan.modelRefs.map(ref => findingFromRef(ref, { days: DAYS, via: VIA }))
 const checkFindings = SCOPE === 'direct'
   ? findings.filter(f => f.usage === 'direct-api' || f.usage === 'model-reference')
@@ -202,7 +215,7 @@ if (command === 'plan') {
 
 if (command === 'check') {
   if (AS_JSON) {
-    console.log(JSON.stringify({ threshold_days: DAYS, distributor: VIA, scope: SCOPE, findings: changedFindings }, null, 2))
+    console.log(JSON.stringify({ threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings }, null, 2))
   } else {
     console.log(formatCheck({ findings: changedFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
   }

@@ -15,6 +15,7 @@ import {
   parseMetadata,
   repoPath,
 } from './lib/common.mjs'
+import { validatePlanItems } from '../lib/apply.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
 import { loadConfig } from './lib/config.mjs'
 import { downloadFeeds } from './lib/feeds.mjs'
@@ -122,6 +123,11 @@ const validatePlan = plan => {
   }
   if (!Array.isArray(plan.items) || !Array.isArray(plan.issues)) {
     throw new Error('refusing malformed plan document: items and issues arrays are required')
+  }
+  try {
+    validatePlanItems(plan.items)
+  } catch (error) {
+    throw new Error(`refusing malformed plan document: ${error.message}`)
   }
   return plan
 }
@@ -414,7 +420,7 @@ const currentHeadFor = async (api, pull, group) => {
 }
 
 const standingDownComment = (group, metadata, currentHead) =>
-  `model-eol is standing down for this branch. The branch head (${currentHead || 'unknown'}) no longer matches the bot metadata head (${metadata?.head_sha || 'unknown'}), so a human change will not be overwritten. Please update or close this PR manually.`
+  `model-eol is standing down for this branch. The branch head (${currentHead || 'unknown'}) no longer satisfies the bot lease checks for metadata head (${metadata?.head_sha || 'unknown'}), so a human change will not be overwritten. Please update or close this PR manually. An actor with push access can forge the configured identity.`
 
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2))
 
@@ -446,6 +452,7 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
           command: config.eval.command,
           timeoutMs: config.eval.timeout_ms,
           maxReportBytes: config.eval.max_report_bytes,
+          passEnv: config.eval.pass_env,
           cwd: clone,
           oldId: group.id,
           newId: group.items[0].replacement,
@@ -483,19 +490,26 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
       await api.comment(open.item.number, standingDownComment(group, open.metadata, currentHead))
       return decision(group, 'stand-down', { number: open.item.number })
     }
-    const patch = makePatch({
-      source,
-      base,
-      branch: open.item.head?.ref || group.branch,
-      expectedHead: open.metadata.head_sha,
-      group,
-      plan,
-      config,
-      checkerPath,
-      evalEnabled,
-      root,
-      warn,
-    })
+    let patch
+    try {
+      patch = makePatch({
+        source,
+        base,
+        branch: open.item.head?.ref || group.branch,
+        expectedHead: open.metadata.head_sha,
+        group,
+        plan,
+        config,
+        checkerPath,
+        evalEnabled,
+        root,
+        warn,
+      })
+    } catch (error) {
+      if (error.code !== 'MODEL_EOL_BRANCH_STAND_DOWN') throw error
+      await api.comment(open.item.number, standingDownComment(group, open.metadata, error.currentHead))
+      return decision(group, 'stand-down', { number: open.item.number })
+    }
     if (!patch.evalResult && externalEval) patch.evalResult = externalEval
     const body = buildPullBody({ group, headSha: patch.headSha, now, tokenKind, evalResult: patch.evalResult })
     await api.updatePull(open.item.number, { title: pullTitle(group), body })
@@ -508,19 +522,27 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
   if (dismissed) return decision(group, 'skip-dismissed', { number: dismissed.item.number })
 
   const previousBotHead = matches.find(record => record.metadata?.head_sha)?.metadata.head_sha ?? null
-  const patch = makePatch({
-    source,
-    base,
-    branch: group.branch,
-    expectedHead: previousBotHead,
-    group,
-    plan,
-    config,
-    checkerPath,
-    evalEnabled,
-    root,
-    warn,
-  })
+  let patch
+  try {
+    patch = makePatch({
+      source,
+      base,
+      branch: group.branch,
+      expectedHead: previousBotHead,
+      group,
+      plan,
+      config,
+      checkerPath,
+      evalEnabled,
+      root,
+      warn,
+    })
+  } catch (error) {
+    if (error.code !== 'MODEL_EOL_BRANCH_STAND_DOWN') throw error
+    const prior = matches.find(record => record.metadata?.head_sha === previousBotHead)
+    if (prior) await api.comment(prior.item.number, standingDownComment(group, prior.metadata, error.currentHead))
+    return decision(group, 'stand-down', { number: prior?.item.number })
+  }
   if (!patch.evalResult && externalEval) patch.evalResult = externalEval
   const body = buildPullBody({ group, headSha: patch.headSha, now, tokenKind, evalResult: patch.evalResult })
   const created = await api.createPull({

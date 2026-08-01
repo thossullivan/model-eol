@@ -11,6 +11,7 @@ import {
   runBot,
 } from '../bot.mjs'
 import { branchFor, parseMetadata, slugFor } from '../lib/common.mjs'
+import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
 
@@ -145,6 +146,7 @@ const config = {
     command: 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "eval report with ```fence```")\'',
     timeout_ms: 1000,
     max_report_bytes: 65536,
+    pass_env: [],
   },
 }
 const repo = makeRepo({ name: 'lifecycle', files: baseFiles, config })
@@ -179,6 +181,7 @@ assert(bareBranchFile(repo, branch, 'direct.py').includes('gpt-5.6-sol'), 'creat
 assert(!fs.readFileSync(path.join(repo.work, 'direct.py'), 'utf8').includes('gpt-5.6-sol'), 'caller checkout is not modified')
 assert(firstDecision.body.includes('eval report with fence') && !firstDecision.body.includes('```fence```'), 'eval report is embedded fenced with backticks stripped')
 assert(firstDecision.body.includes('Result: pass') && firstDecision.body.includes('exit code 0'), 'passing eval result is recorded')
+assert(Array.isArray(first.config.eval.pass_env) && first.config.eval.pass_env.length === 0, 'eval config defaults to an empty pass_env allowlist')
 
 const callsAfterCreate = github.calls.length
 const unchanged = await run({ evalEnabled: true })
@@ -317,6 +320,7 @@ const runEval = (command, overrides = {}) => runEvalHook({
   command,
   timeoutMs: overrides.timeoutMs ?? 1000,
   maxReportBytes: overrides.maxReportBytes ?? 65536,
+  passEnv: overrides.passEnv ?? [],
   cwd: evalDir,
   oldId: 'old-model',
   newId: 'new-model',
@@ -331,6 +335,22 @@ const timeoutEval = runEval('node -e "setTimeout(() => {}, 5000)"')
 assert(timeoutEval.status === 'timeout', 'timed out eval is killed and reported')
 const largeEval = runEval('node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "x".repeat(200))\'', { maxReportBytes: 100 })
 assert(largeEval.report.length <= 1000 && largeEval.report.includes('truncated'), 'oversized eval report is capped with a marker')
+
+const probeEnv = 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, JSON.stringify({ path: process.env.PATH, implicitToken: process.env.GITHUB_TOKEN, providerKey: process.env.OPENAI_API_KEY, modelSecret: process.env.MODEL_EOL_SECRET, explicit: process.env.MODEL_EOL_EXPLICIT }))\''
+const envNames = ['GITHUB_TOKEN', 'OPENAI_API_KEY', 'MODEL_EOL_SECRET', 'MODEL_EOL_EXPLICIT']
+const savedEnv = Object.fromEntries(envNames.map(name => [name, process.env[name]]))
+process.env.GITHUB_TOKEN = 'implicit-github-token'
+process.env.OPENAI_API_KEY = 'implicit-provider-key'
+process.env.MODEL_EOL_SECRET = 'implicit-model-secret'
+process.env.MODEL_EOL_EXPLICIT = 'explicit-value'
+const scrubbedEnv = JSON.parse(runEval(probeEnv).report)
+const passedEnv = JSON.parse(runEval(probeEnv, { passEnv: ['MODEL_EOL_EXPLICIT'] }).report)
+assert(scrubbedEnv.path && scrubbedEnv.implicitToken === undefined && scrubbedEnv.providerKey === undefined && scrubbedEnv.modelSecret === undefined, 'eval hook inherits only the base environment allowlist and contract variables')
+assert(passedEnv.explicit === 'explicit-value', 'eval hook passes explicitly declared environment names')
+for (const name of envNames) {
+  if (savedEnv[name] === undefined) delete process.env[name]
+  else process.env[name] = savedEnv[name]
+}
 assert(reportForBody('```untrusted```') === 'untrusted', 'report embedding strips backticks')
 
 const transportCallsBeforeDry = github.calls.length
@@ -354,6 +374,56 @@ try {
   mismatchRefused = error.message.includes('refusing plan schema')
 }
 assert(mismatchRefused, 'plan schema mismatch is refused before decisions')
+
+const passEnvConfigFile = path.join(tempRoot, 'pass-env-config.json')
+write(passEnvConfigFile, JSON.stringify({ eval: { pass_env: ['CUSTOM_EVAL_KEY'] } }))
+assert(loadConfig(passEnvConfigFile).eval.pass_env[0] === 'CUSTOM_EVAL_KEY', 'config accepts explicit eval pass_env names')
+
+const leaseRepo = makeRepo({
+  name: 'identity-lease',
+  files: { 'direct.py': fs.readFileSync(path.join(import.meta.dirname, 'fixture/direct.py'), 'utf8') },
+})
+const leaseGithub = new FakeGitHub()
+const leaseRun = options => runBot({
+  repo: 'example/identity-lease',
+  targetDir: leaseRepo.work,
+  token: 'test-token',
+  transport: leaseGithub.transport.bind(leaseGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const leaseFirst = await leaseRun()
+const leaseDecision = leaseFirst.decisions.find(item => item.group.kind === 'model')
+const leaseBranch = branchFor('openai', 'o3-deep-research-2025-06-26')
+const leasePull = leaseGithub.pulls.find(item => item.number === leaseDecision?.number)
+const leaseMetadata = parseMetadata(leaseDecision?.body)
+if (leasePull) leasePull.head.sha = leaseMetadata?.head_sha
+const leaseWork = path.join(tempRoot, 'identity-lease-human-work')
+fs.mkdirSync(leaseWork)
+git(leaseWork, ['clone', `file://${leaseRepo.bare}`, '.'])
+git(leaseWork, ['fetch', 'origin', leaseBranch])
+git(leaseWork, ['checkout', '-B', leaseBranch, `origin/${leaseBranch}`])
+git(leaseWork, ['config', 'user.email', 'fixture@example.invalid'])
+write(path.join(leaseWork, 'human-change.txt'), 'human change\n')
+git(leaseWork, ['add', 'human-change.txt'])
+git(leaseWork, ['commit', '-m', 'human change'])
+git(leaseWork, ['push', 'origin', `HEAD:refs/heads/${leaseBranch}`])
+const leaseHeadBefore = headOf(leaseRepo, leaseBranch)
+const identityStandDown = await leaseRun({ vendoredFeeds: changedFeeds })
+assert(identityStandDown.decisions.find(item => item.group.kind === 'model')?.action === 'stand-down', 'committer identity mismatch causes stand-down before force-push')
+assert(headOf(leaseRepo, leaseBranch) === leaseHeadBefore, 'committer identity mismatch does not push')
+assert(leaseGithub.callsFor('POST', '/comments').some(call => call.body.body?.includes('forge the configured identity')), 'lease stand-down comment records the residual identity-forgery risk')
+
+const malformedChecker = path.join(tempRoot, 'malformed-plan-checker.mjs')
+write(malformedChecker, 'console.log(JSON.stringify({ plan_schema: "model-eol.plan/0.1", items: [{ file: "direct.py", line: 0, occurrence: 0, matched: "old", replacement: "new", expected_line_sha256: "' + '0'.repeat(64) + '" }], issues: [], scan_notes: [] }))\n')
+let malformedPlanRefused = false
+try {
+  await runBot({ repo: 'example/app', targetDir: repo.work, dryRun: true, checkerPath: malformedChecker, vendoredFeeds: path.join(root, 'feeds') })
+} catch (error) {
+  malformedPlanRefused = error.message.includes('refusing malformed plan document') && error.message.includes('line must be an integer')
+}
+assert(malformedPlanRefused, 'bot refuses malformed plan items before grouping or applying')
 
 JSON.parse(fs.readFileSync(path.join(root, 'schema/model-eol.bot-config.schema.json'), 'utf8'))
 assert(true, 'bot config schema parses as JSON')
