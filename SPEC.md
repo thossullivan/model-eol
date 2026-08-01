@@ -43,11 +43,19 @@ A feed is a JSON document: metadata + a list of model entries.
 | `shutdown` | no | Date calls stop working on the publisher's own API (absent = none scheduled) |
 | `replacement` | no | The currently recommended migration target. **Treat as a snapshot in time, not a constant** - this field has changed mid-window in the wild |
 | `notes` | no | Human context: structural differences, migration gotchas |
-| `distributions` | no | Per-distributor lifecycles - the same weights on different clocks (Azure, Bedrock, Vertex). Each entry: `via`, optional `announced`/`shutdown`/`status`, `source` |
+| `distributions` | no | Per-distributor lifecycles - the same weights on different clocks (Azure, Bedrock, Vertex). Each entry: `via`, optional `announced`/`shutdown`/`status`/`date_precision`, `source` |
+| `date_precision` | no | Qualifies `shutdown`: absent or `"exact"` means the stated day; `"earliest"` means the provider commits only that the event happens no sooner (Google's "earliest possible" dates). Consumers treat an earliest date as the scheduled date - it is the soonest legal death - and display it as a lower bound |
 
 Dates are ISO 8601, UTC. A model with no `announced` and no `shutdown` is an
 affirmative statement of "no retirement scheduled as of `generated`" - the absence
 is data, which is exactly what scraping HTML can never give you.
+
+`distributions[].status`, when present, is one of `active`, `legacy`,
+`extended-access`, or `retired`. `legacy` means no new consumers but existing
+usage works; `extended-access` means availability continues past the stated
+`shutdown` under a paid or opt-in program (Bedrock offers this for some models) -
+the `shutdown` date stays the base retirement, and the status flags that a
+negotiated tail exists.
 
 ### Policy floors
 

@@ -36,6 +36,7 @@
         "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "announced": { "$ref": "#/definitions/isoDate" },
         "shutdown": { "$ref": "#/definitions/isoDate" },
+        "date_precision": { "enum": ["exact", "earliest"] },
         "replacement": { "type": "string" },
         "notes": { "type": "string" },
         "source": { "type": "string", "format": "uri" },
@@ -48,7 +49,8 @@
               "via": { "type": "string", "minLength": 1 },
               "announced": { "$ref": "#/definitions/isoDate" },
               "shutdown": { "$ref": "#/definitions/isoDate" },
-              "status": { "type": "string" },
+              "date_precision": { "enum": ["exact", "earliest"] },
+              "status": { "enum": ["active", "legacy", "extended-access", "retired"] },
               "source": { "type": "string", "format": "uri" }
             },
             "additionalProperties": false
