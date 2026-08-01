@@ -1,0 +1,44 @@
+# model-eol - copy this file to .github/workflows/model-eol.yml in YOUR repo.
+#
+# Two gates:
+#   - every PR: fail only if THIS change adds a model that is retired or
+#     retiring within the threshold (existing references stay out of the way)
+#   - weekly: full-repository check, so legacy references surface on a schedule
+#     instead of in an outage
+#
+# Judged by a distributor's clock instead? Add `via: aws-bedrock` (or
+# azure-ai-foundry) to the step's `with:` block.
+
+name: model-eol
+
+on:
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1' # weekly, Monday 06:17 UTC
+
+jobs:
+  pr-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # --changed needs history to diff against the base ref
+      - uses: thossullivan/model-eol@v0.1.0
+        with:
+          command: check
+          changed: origin/${{ github.base_ref }}
+          days: 90
+          scope: direct
+
+  weekly-full-check:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: thossullivan/model-eol@v0.1.0
+        with:
+          command: alert
+          days: 90
+          scope: direct
+          format: github

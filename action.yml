@@ -24,8 +24,12 @@ inputs:
     description: 'Check scope: all tracked model IDs, or direct to leave cloud/gateway refs as inventory hints'
     required: false
     default: 'all'
+  changed:
+    description: 'Base ref for the PR gate: check only lines added relative to this ref (requires fetch-depth: 0)'
+    required: false
+    default: ''
   format:
-    description: 'Alert output format when command is alert: github or markdown'
+    description: 'Alert output format when command is alert: github, markdown, or badge'
     required: false
     default: 'github'
   feeds:
@@ -42,6 +46,7 @@ runs:
         MODEL_EOL_PATHS: ${{ inputs.paths }}
         MODEL_EOL_DAYS: ${{ inputs.days }}
         MODEL_EOL_VIA: ${{ inputs.via }}
+        MODEL_EOL_CHANGED: ${{ inputs.changed }}
         MODEL_EOL_SCOPE: ${{ inputs.scope }}
         MODEL_EOL_FORMAT: ${{ inputs.format }}
         MODEL_EOL_FEEDS: ${{ inputs.feeds }}
@@ -49,6 +54,7 @@ runs:
         read -r -a PATH_ARGS <<< "$MODEL_EOL_PATHS"
         ARGS=("$MODEL_EOL_COMMAND" "${PATH_ARGS[@]}" --days "$MODEL_EOL_DAYS")
         if [ -n "$MODEL_EOL_VIA" ]; then ARGS+=(--via "$MODEL_EOL_VIA"); fi
+        if [ -n "$MODEL_EOL_CHANGED" ]; then ARGS+=(--changed "$MODEL_EOL_CHANGED"); fi
         if [ -n "$MODEL_EOL_SCOPE" ]; then ARGS+=(--scope "$MODEL_EOL_SCOPE"); fi
         if [ -n "$MODEL_EOL_FORMAT" ]; then ARGS+=(--format "$MODEL_EOL_FORMAT"); fi
         if [ -n "$MODEL_EOL_FEEDS" ]; then ARGS+=(--feeds "$MODEL_EOL_FEEDS"); fi
