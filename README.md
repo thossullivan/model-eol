@@ -28,9 +28,8 @@ second, so the existing trackers can converge instead of each scraping alone.
   replacement, `distributions` for per-channel lifecycles, and publisher `policy`
   floors. Small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - OpenAI (124 entries) and Anthropic (19 entries), generated from the
-  providers' live deprecation pages plus the AWS Bedrock lifecycle page, last
-  verified 2026-08-01. Every dated entry carries a source URL.
+- **`feeds/`** - <!-- feeds-status -->Anthropic (19 entries) and OpenAI (124 entries), generated from the providers' live deprecation pages plus the AWS Bedrock lifecycle page, last verified 2026-08-01<!-- /feeds-status -->. Every
+  dated entry carries a source URL.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
   ML-BOM export, retirement schedule, alerts and badges, migration plan/apply.
 - **`refresh/`** - regenerates the feeds from provider pages, models endpoints, and

@@ -1,0 +1,86 @@
+# Weekly feed refresh - regenerates feeds/ from the live provider pages and the
+# AWS Bedrock lifecycle page, updates the README freshness line, and opens a PR
+# with the semantic diff for human review. Never pushes to main directly.
+#
+# Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY enable the models
+# endpoints so current-model entries (and policy-floor horizons) populate.
+# Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
+# fine-grained PAT as MODEL_EOL_BOT_TOKEN if feed PRs should run checks.
+
+name: feed-refresh
+
+on:
+  schedule:
+    - cron: '23 5 * * 1' # Monday 05:23 UTC
+  workflow_dispatch:
+
+concurrency: feed-refresh
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check live sources for changes
+        id: check
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set +e
+          node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
+          providers=$?
+          node refresh/refresh.mjs --distributor aws-bedrock --check > bedrock-diff.md 2> bedrock-err.txt
+          bedrock=$?
+          set -e
+          cat provider-err.txt bedrock-err.txt >&2 || true
+          if [ "$providers" -eq 1 ] || [ "$bedrock" -eq 1 ]; then
+            echo "a refresh source failed to parse - failing loudly, no feed written" >&2
+            exit 1
+          fi
+          if [ "$providers" -eq 3 ] || [ "$bedrock" -eq 3 ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Regenerate feeds and README freshness
+        if: steps.check.outputs.changed == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          node refresh/refresh.mjs
+          node refresh/refresh.mjs --distributor aws-bedrock
+          node scripts/update-readme-freshness.mjs
+          npm test
+
+      - name: Open feed refresh PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.MODEL_EOL_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          branch="feed-refresh/${{ github.run_id }}"
+          git config user.name "model-eol feed refresh"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add feeds/ README.md
+          git commit -m "Refresh feeds from live sources ($(date -u +%Y-%m-%d))"
+          git push origin "$branch"
+          {
+            echo "Automated weekly refresh. Review the semantic diff - a broken parse reads as a nonsense diff, not silently wrong data."
+            echo
+            cat provider-diff.md
+            echo
+            cat bedrock-diff.md
+          } > pr-body.md
+          gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md --label model-eol || \
+            gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md
