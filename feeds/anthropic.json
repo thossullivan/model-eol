@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-08-01T18:58:36.244Z",
+  "generated": "2026-08-01T19:36:58.430Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format. Anthropic policy floor: >=60 days notice for publicly released models. Weights of public models are preserved per the Nov 2025 commitments - preservation is not availability.",
   "models": [
@@ -13,7 +13,8 @@
       "distributions": [
         {
           "via": "aws-bedrock",
-          "shutdown": "2026-04-28",
+          "announced": "2026-01-30",
+          "shutdown": "2026-07-30",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
         }
       ],
@@ -37,7 +38,15 @@
       "announced": "2026-02-19",
       "shutdown": "2026-04-20",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
-      "replacement": "claude-haiku-4-5-20251001"
+      "replacement": "claude-haiku-4-5-20251001",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-03-10",
+          "shutdown": "2026-09-10",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
     },
     {
       "id": "claude-3-opus-20240229",
@@ -58,7 +67,15 @@
       "announced": "2026-04-14",
       "shutdown": "2026-06-15",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-4-6",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-04-14",
+          "shutdown": "2026-10-14",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
     },
     {
       "id": "claude-opus-4-20250514",
@@ -79,21 +96,45 @@
       "announced": "2026-06-05",
       "shutdown": "2026-08-05",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
-      "replacement": "claude-opus-4-8"
+      "replacement": "claude-opus-4-8",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-07-08",
+          "shutdown": "2027-01-08",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
     },
     {
       "id": "claude-3-5-sonnet-20240620",
       "announced": "2025-08-13",
       "shutdown": "2025-10-28",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-4-6",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-01-30",
+          "shutdown": "2026-07-30",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
     },
     {
       "id": "claude-3-5-sonnet-20241022",
       "announced": "2025-08-13",
       "shutdown": "2025-10-28",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-4-6",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-01-30",
+          "shutdown": "2026-07-30",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
     },
     {
       "id": "claude-2.0",
@@ -114,7 +155,15 @@
       "announced": "2025-01-21",
       "shutdown": "2025-07-21",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-4-6",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-01-30",
+          "shutdown": "2026-07-30",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
     },
     {
       "id": "claude-1.0",

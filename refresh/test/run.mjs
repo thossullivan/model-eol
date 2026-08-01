@@ -232,10 +232,10 @@ assert(anthropicCheck.out.includes('claude-sonnet-4-6'), '--check includes the a
 const bedrockCheck = run(['--distributor', 'aws-bedrock', '--check', '--fixtures', fixtures])
 assert(bedrockCheck.code === 3, '--check exits 3 for deterministic Bedrock distribution changes')
 assert(bedrockCheck.out.includes('## Distribution changes'), 'Bedrock --check renders the Distribution changes section')
-assert(bedrockCheck.out.includes('EOL date moved') && bedrockCheck.out.includes('no publisher feed'), 'Bedrock --check reports moved EOL dates and unmatched models')
+assert(bedrockCheck.out.includes('no publisher feed'), 'Bedrock --check reports unmatched models (moved-EOL rendering is covered by the merge unit tests)')
 
 const composedBedrockCheck = run(['--provider', 'anthropic', '--distributor', 'aws-bedrock', '--check', '--fixtures', fixtures])
-assert(composedBedrockCheck.code === 3 && composedBedrockCheck.out.includes('aws-bedrock'), 'Bedrock distributor composes with a selected publisher refresh')
+assert(composedBedrockCheck.code === 3 && composedBedrockCheck.out.includes('Distribution changes'), 'Bedrock distributor composes with a selected publisher refresh')
 
 const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-test-'))
 const beforeOpenAI = fs.readFileSync(path.join(root, 'feeds', 'openai.json'), 'utf8')
