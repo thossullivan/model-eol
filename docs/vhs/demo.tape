@@ -4,11 +4,11 @@
 Output docs/img/demo.gif
 
 Set Shell "bash"
-Set FontSize 14
-Set Width 950
-Set Height 520
+Set FontSize 20
+Set Width 1400
+Set Height 660
 Set Theme "Catppuccin Mocha"
-Set Padding 20
+Set Padding 24
 Set TypingSpeed 40ms
 Set WindowBar Colorful
 Set WindowBarSize 40

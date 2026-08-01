@@ -54,6 +54,8 @@ try {
     encoding: 'utf8',
   })
   assert(unknownFlag.status === 2 && unknownFlag.stderr.includes('--dyas') && unknownFlag.stderr.includes('--help'), 'unknown changelog flags exit 2 with the bad flag and help hint')
+  const helpFlag = spawnSync(process.execPath, [generator, '--help'], { encoding: 'utf8' })
+  assert(helpFlag.status === 0 && helpFlag.stdout.includes('Usage:'), '--help exits 0 with usage text')
 
   fs.mkdirSync(path.dirname(feedFile), { recursive: true })
   git(['init', '-q'])

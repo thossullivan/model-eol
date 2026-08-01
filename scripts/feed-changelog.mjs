@@ -23,9 +23,14 @@ function parseChangelogArgs(argv) {
       out: { type: 'string' },
       'repo-dir': { type: 'string' },
       limit: { type: 'string' },
+      help: { type: 'boolean', short: 'h' },
     },
     help: 'node scripts/feed-changelog.mjs --help',
   })
+  if (values.help) {
+    console.log('Usage: node scripts/feed-changelog.mjs [--format atom|markdown] [--out FILE] [--repo-dir DIR] [--limit N]')
+    process.exit(0)
+  }
   const options = {
     format: values.format ?? 'atom',
     out: null,
