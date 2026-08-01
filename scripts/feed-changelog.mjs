@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { parseCliArgs } from '../lib/cli.mjs'
 import { compareFeeds, renderSemanticDiff } from '../refresh/diff.mjs'
 
 const DEFAULT_LIMIT = 50
@@ -14,36 +15,34 @@ function usageError(message) {
   throw new Error(`${message}\nUsage: node scripts/feed-changelog.mjs [--format atom|markdown] [--out FILE] [--repo-dir DIR] [--limit N]`)
 }
 
-function parseArgs(argv) {
+function parseChangelogArgs(argv) {
+  const { values } = parseCliArgs({
+    args: argv,
+    options: {
+      format: { type: 'string' },
+      out: { type: 'string' },
+      'repo-dir': { type: 'string' },
+      limit: { type: 'string' },
+    },
+    help: 'node scripts/feed-changelog.mjs --help',
+  })
   const options = {
-    format: 'atom',
+    format: values.format ?? 'atom',
     out: null,
-    repoDir: repoRoot,
+    repoDir: values['repo-dir'] === undefined ? repoRoot : path.resolve(values['repo-dir']),
     limit: DEFAULT_LIMIT,
   }
 
-  for (let index = 0; index < argv.length; index++) {
-    const argument = argv[index]
-    const [inlineName, inlineValue] = argument.split('=', 2)
-    const name = inlineValue === undefined ? argument : inlineName
-    const value = inlineValue === undefined ? argv[++index] : inlineValue
-
-    if (name === '--format') {
-      if (!['atom', 'markdown'].includes(value)) usageError('--format must be atom or markdown')
-      options.format = value
-    } else if (name === '--out') {
-      if (!value) usageError('--out requires a file path')
-      options.out = path.resolve(value)
-    } else if (name === '--repo-dir') {
-      if (!value) usageError('--repo-dir requires a directory path')
-      options.repoDir = path.resolve(value)
-    } else if (name === '--limit') {
-      const limit = Number(value)
-      if (!Number.isInteger(limit) || limit < 0) usageError('--limit must be a non-negative integer')
-      options.limit = limit
-    } else {
-      usageError(`unknown option: ${argument}`)
-    }
+  if (!['atom', 'markdown'].includes(options.format)) usageError('--format must be atom or markdown')
+  if (values.out !== undefined) {
+    if (!values.out) usageError('--out requires a file path')
+    options.out = path.resolve(values.out)
+  }
+  if (values['repo-dir'] === '') usageError('--repo-dir requires a directory path')
+  if (values.limit !== undefined) {
+    const limit = Number(values.limit)
+    if (!Number.isInteger(limit) || limit < 0) usageError('--limit must be a non-negative integer')
+    options.limit = limit
   }
 
   return options
@@ -256,7 +255,7 @@ function renderMarkdown(entries) {
 }
 
 function main() {
-  const options = parseArgs(process.argv.slice(2))
+  const options = parseChangelogArgs(process.argv.slice(2))
   const { commits, entries } = collectEntries(options.repoDir, options.limit)
   const output = options.format === 'atom'
     ? renderAtom(commits, entries)
@@ -273,5 +272,5 @@ try {
   main()
 } catch (error) {
   console.error(`feed changelog failed: ${error.message}`)
-  process.exitCode = 1
+  process.exitCode = error.exitCode ?? 1
 }

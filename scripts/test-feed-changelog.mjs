@@ -49,6 +49,12 @@ function commit(message, date) {
 }
 
 try {
+  const unknownFlag = spawnSync(process.execPath, [generator, '--dyas', '90'], {
+    cwd: tempRoot,
+    encoding: 'utf8',
+  })
+  assert(unknownFlag.status === 2 && unknownFlag.stderr.includes('--dyas') && unknownFlag.stderr.includes('--help'), 'unknown changelog flags exit 2 with the bad flag and help hint')
+
   fs.mkdirSync(path.dirname(feedFile), { recursive: true })
   git(['init', '-q'])
   git(['config', 'user.email', 'test@example.invalid'])

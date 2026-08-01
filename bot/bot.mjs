@@ -15,6 +15,7 @@ import {
   parseMetadata,
   repoPath,
 } from './lib/common.mjs'
+import { parseCliArgs } from '../lib/cli.mjs'
 import { loadConfig } from './lib/config.mjs'
 import { downloadFeeds } from './lib/feeds.mjs'
 import { runEvalHook, reportForBody } from './lib/eval.mjs'
@@ -47,41 +48,30 @@ const ACTIONABLE_STATUSES = new Set(['retired', 'retiring'])
 const asAbsolute = value => path.resolve(process.cwd(), value)
 
 export const parseArgs = argv => {
+  const { values } = parseCliArgs({
+    args: argv,
+    options: {
+      repo: { type: 'string' },
+      'target-dir': { type: 'string' },
+      config: { type: 'string' },
+      'dry-run': { type: 'boolean' },
+      eval: { type: 'boolean' },
+      'feeds-url': { type: 'string', multiple: true },
+      help: { type: 'boolean', short: 'h' },
+    },
+    help: 'node bot/bot.mjs --help',
+  })
   const options = {
-    repo: null,
-    targetDir: process.cwd(),
-    configPath: null,
-    dryRun: false,
-    evalEnabled: false,
+    repo: values.repo ?? null,
+    targetDir: values['target-dir'] ?? process.cwd(),
+    configPath: values.config ?? null,
+    dryRun: values['dry-run'] ?? false,
+    evalEnabled: values.eval ?? false,
     feedsUrls: [],
-    help: false,
+    help: values.help ?? false,
   }
-  const value = (arg, index) => {
-    if (arg.includes('=')) return [arg.slice(arg.indexOf('=') + 1), index]
-    if (argv[index + 1] === undefined) throw new Error(`${arg} requires a value`)
-    return [argv[index + 1], index + 1]
-  }
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
-    if (arg === '--help' || arg === '-h') {
-      options.help = true
-    } else if (arg === '--dry-run') {
-      options.dryRun = true
-    } else if (arg === '--eval') {
-      options.evalEnabled = true
-    } else if (arg === '--repo' || arg.startsWith('--repo=')) {
-      const [v, next] = value(arg, i); options.repo = v; i = next
-    } else if (arg === '--target-dir' || arg.startsWith('--target-dir=')) {
-      const [v, next] = value(arg, i); options.targetDir = v; i = next
-    } else if (arg === '--config' || arg.startsWith('--config=')) {
-      const [v, next] = value(arg, i); options.configPath = v; i = next
-    } else if (arg === '--feeds-url' || arg.startsWith('--feeds-url=')) {
-      const [v, next] = value(arg, i); i = next
-      options.feedsUrls.push(...v.split(',').map(item => item.trim()).filter(Boolean))
-    } else {
-      throw new Error(`unknown argument ${arg}`)
-    }
+  for (const value of values['feeds-url'] ?? []) {
+    options.feedsUrls.push(...value.split(',').map(item => item.trim()).filter(Boolean))
   }
   return options
 }

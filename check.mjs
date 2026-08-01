@@ -17,6 +17,7 @@
 import path from 'node:path'
 
 import { applyPlan } from './lib/apply.mjs'
+import { parseCliArgs } from './lib/cli.mjs'
 import { findingFromRef, isBad, loadFeeds } from './lib/feeds.mjs'
 import { buildPlan } from './lib/plan.mjs'
 import {
@@ -37,33 +38,46 @@ const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'ap
 const args = process.argv.slice(2)
 
 if (args[0] === '--help' || args[0] === '-h') args[0] = 'help'
-const command = COMMANDS.has(args[0]) ? args.shift() : 'check'
-
-const flag = (name, fallback) => {
-  const i = args.indexOf(`--${name}`)
-  if (i === -1) return fallback
-  const v = args[i + 1]
-  args.splice(i, 2)
-  return v
+let command = COMMANDS.has(args[0]) ? args.shift() : 'check'
+let parsed
+try {
+  parsed = parseCliArgs({
+    args,
+    options: {
+      days: { type: 'string' },
+      feeds: { type: 'string' },
+      via: { type: 'string' },
+      scope: { type: 'string' },
+      format: { type: 'string' },
+      plan: { type: 'string' },
+      json: { type: 'boolean' },
+      'include-docs': { type: 'boolean' },
+      'dry-run': { type: 'boolean' },
+      changed: { type: 'string' },
+      help: { type: 'boolean', short: 'h' },
+    },
+    allowPositionals: true,
+    help: 'node check.mjs --help',
+  })
+} catch (error) {
+  console.error(error.message)
+  process.exit(2)
 }
-const has = name => {
-  const i = args.indexOf(`--${name}`)
-  if (i === -1) return false
-  args.splice(i, 1)
-  return true
-}
 
-const DAYS = Number(flag('days', '90'))
-const FEEDS_DIR = flag('feeds', path.join(import.meta.dirname, 'feeds'))
-const VIA = flag('via', null) // e.g. azure-ai-foundry, aws-bedrock
-const SCOPE = flag('scope', 'all')
-const FORMAT = flag('format', null)
-const PLAN_FILE = flag('plan', null)
-const AS_JSON = has('json')
-const INCLUDE_DOCS = has('include-docs')
-const DRY_RUN = has('dry-run')
-const CHANGED_BASE = flag('changed', null)
-const targets = args.length ? args : ['.']
+const { values, positionals } = parsed
+if (values.help) command = 'help'
+
+const DAYS = Number(values.days ?? '90')
+const FEEDS_DIR = values.feeds ?? path.join(import.meta.dirname, 'feeds')
+const VIA = values.via ?? null // e.g. azure-ai-foundry, aws-bedrock
+const SCOPE = values.scope ?? 'all'
+const FORMAT = values.format ?? null
+const PLAN_FILE = values.plan ?? null
+const AS_JSON = values.json ?? false
+const INCLUDE_DOCS = values['include-docs'] ?? false
+const DRY_RUN = values['dry-run'] ?? false
+const CHANGED_BASE = values.changed ?? null
+const targets = positionals.length ? positionals : ['.']
 
 if (command === 'help') {
   console.log(`model-eol
@@ -96,7 +110,7 @@ Scopes:
 }
 
 if (command === 'apply') {
-  if (!PLAN_FILE || args.length) {
+  if (!PLAN_FILE || positionals.length) {
     console.error('apply requires --plan plan.json and accepts no target paths')
     process.exit(2)
   }

@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseCliArgs } from '../lib/cli.mjs'
 import { compareFeeds, renderSemanticDiff } from './diff.mjs'
 import {
   DISTRIBUTORS,
@@ -22,47 +23,27 @@ const ROOT = path.join(path.dirname(THIS_FILE), '..')
 const COMMITTED_FEEDS = path.join(ROOT, 'feeds')
 const VALIDATOR = path.join(ROOT, 'scripts', 'validate-feeds.mjs')
 
-export function parseArgs(argv = process.argv.slice(2)) {
+export function parseRefreshArgs(argv = process.argv.slice(2)) {
+  const { values } = parseCliArgs({
+    args: argv,
+    options: {
+      provider: { type: 'string' },
+      distributor: { type: 'string' },
+      check: { type: 'boolean' },
+      out: { type: 'string' },
+      fixtures: { type: 'string' },
+      help: { type: 'boolean', short: 'h' },
+    },
+    help: 'node refresh/refresh.mjs --help',
+  })
   const options = {
-    provider: 'all',
-    providerSpecified: false,
-    distributor: undefined,
-    check: false,
-    out: path.join(ROOT, 'feeds'),
-    fixtures: undefined,
-  }
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
-    if (arg === '--check') {
-      options.check = true
-    } else if (arg === '--provider' || arg === '--out' || arg === '--fixtures') {
-      const value = argv[++i]
-      if (!value) throw new Error(`${arg} requires a value`)
-      if (arg === '--provider') {
-        options.provider = value
-        options.providerSpecified = true
-      }
-      if (arg === '--out') options.out = value
-      if (arg === '--fixtures') options.fixtures = value
-    } else if (arg === '--distributor') {
-      const value = argv[++i]
-      if (!value) throw new Error('--distributor requires a value')
-      options.distributor = value
-    } else if (arg.startsWith('--provider=')) {
-      options.provider = arg.slice('--provider='.length)
-      options.providerSpecified = true
-    } else if (arg.startsWith('--distributor=')) {
-      options.distributor = arg.slice('--distributor='.length)
-    } else if (arg.startsWith('--out=')) {
-      options.out = arg.slice('--out='.length)
-    } else if (arg.startsWith('--fixtures=')) {
-      options.fixtures = arg.slice('--fixtures='.length)
-    } else if (arg === '--help' || arg === '-h') {
-      options.help = true
-    } else {
-      throw new Error(`unknown option: ${arg}`)
-    }
+    provider: values.provider ?? 'all',
+    providerSpecified: values.provider !== undefined,
+    distributor: values.distributor,
+    check: values.check ?? false,
+    out: values.out ?? path.join(ROOT, 'feeds'),
+    fixtures: values.fixtures,
+    help: values.help ?? false,
   }
 
   if (!['openai', 'anthropic', 'all'].includes(options.provider)) {
@@ -248,7 +229,7 @@ export async function run(options) {
 }
 
 async function main(argv = process.argv.slice(2)) {
-  const options = parseArgs(argv)
+  const options = parseRefreshArgs(argv)
   if (options.help) {
     console.log(usage())
     return 0
@@ -263,6 +244,6 @@ if (invoked) {
     process.exitCode = await main()
   } catch (error) {
     console.error(`refresh failed: ${error.message}`)
-    process.exitCode = 1
+    process.exitCode = error.exitCode ?? 1
   }
 }

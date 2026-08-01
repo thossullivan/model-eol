@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { color, colorEnabled } from '../lib/color.mjs'
 import { findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
 
 const root = path.join(import.meta.dirname, '..')
@@ -24,6 +25,33 @@ const assert = (cond, msg) => {
   } else {
     console.log(`ok: ${msg}`)
   }
+}
+
+const unknownFlag = run([path.join(root, 'test/fixture'), '--dyas', '90'])
+assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown check flags exit 2 with the bad flag and help hint')
+
+assert(!colorEnabled({}, { isTTY: false }), 'color is off by default for non-TTY output')
+assert(colorEnabled({ FORCE_COLOR: '1' }, { isTTY: false }), 'FORCE_COLOR enables color for non-TTY output')
+assert(!colorEnabled({ NO_COLOR: '', FORCE_COLOR: '1' }, { isTTY: true }), 'NO_COLOR disables color even when forced')
+assert(color('red', 'probe', { env: { FORCE_COLOR: '1' }, stdout: { isTTY: false } }).includes('\x1b[31m'), 'color helper emits the requested ANSI style')
+
+const colorEnv = { ...process.env }
+delete colorEnv.NO_COLOR
+delete colorEnv.FORCE_COLOR
+const forcedColor = run([path.join(root, 'test/fixture'), '--days', '90'], { env: { ...colorEnv, FORCE_COLOR: '1' } })
+const plainColor = run([path.join(root, 'test/fixture'), '--days', '90'], { env: colorEnv })
+assert(forcedColor.out.includes('\x1b['), 'FORCE_COLOR check output contains ANSI escapes')
+assert(!plainColor.out.includes('\x1b['), 'plain piped check output contains no ANSI escapes')
+const forcedJson = run([path.join(root, 'test/fixture'), '--days', '90', '--json'], { env: { ...colorEnv, FORCE_COLOR: '1' } })
+assert(!forcedJson.out.includes('\x1b['), 'FORCE_COLOR does not color JSON output')
+for (const [label, args] of [
+  ['CycloneDX', ['inventory', path.join(root, 'test/fixture'), '--format', 'cyclonedx']],
+  ['GitHub annotations', ['alert', path.join(root, 'test/fixture'), '--format', 'github']],
+  ['Markdown', ['alert', path.join(root, 'test/fixture'), '--format', 'markdown']],
+  ['badge', ['alert', path.join(root, 'test/fixture'), '--format', 'badge']],
+]) {
+  const output = run(args, { env: { ...colorEnv, FORCE_COLOR: '1' } })
+  assert(!output.out.includes('\x1b['), `FORCE_COLOR does not color ${label} output`)
 }
 
 // Default clocks: both bad models flag, exit 1.

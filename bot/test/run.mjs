@@ -27,6 +27,9 @@ const assert = (condition, message) => {
   }
 }
 
+const unknownFlag = spawnSync(process.execPath, [path.join(root, 'bot', 'bot.mjs'), '--dyas', '90'], { encoding: 'utf8' })
+assert(unknownFlag.status === 2 && unknownFlag.stderr.includes('--dyas') && unknownFlag.stderr.includes('--help'), 'unknown bot flags exit 2 with the bad flag and help hint')
+
 const git = (cwd, args) => {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
   if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`)
