@@ -152,15 +152,16 @@ export function compareFeeds(committed, generated, options = {}) {
     unconfirmedDistributions,
     noPublisherFeed,
     noPublisherFeeds: noPublisherFeed,
+    // Informational sections (unconfirmed entries, unconfirmed distributions,
+    // no-publisher-feed models) never alter the generated files, so they must
+    // not trip the exit-3 "PR-worthy change" signal - a keyless weekly run
+    // would otherwise open a no-op PR forever. They still render in the diff.
     changed: Boolean(
       added.length ||
       shutdownChanges.length ||
       replacementChanges.length ||
       newlyAnnounced.length ||
-      unconfirmed.length ||
-      distributorChanges.length ||
-      unconfirmedDistributions.length ||
-      noPublisherFeed.length,
+      distributorChanges.length,
     ),
   }
 }

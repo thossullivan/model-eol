@@ -225,7 +225,7 @@ assert(semanticMarkdown.includes('old-target') && semanticMarkdown.includes('new
 assert(!compareFeeds(oldFeed, oldFeed).changed, 'semantic diff ignores generated metadata and reports no-change feeds')
 
 const openaiCheck = run(['--provider', 'openai', '--check', '--fixtures', fixtures])
-assert(openaiCheck.code === 3, '--check exits 3 for the real OpenAI fixture changes')
+assert(openaiCheck.code === 0, '--check exits 0 when only informational sections differ (unconfirmed entries are not file changes)')
 assert(openaiCheck.out.includes('Unconfirmed entries') && openaiCheck.out.includes('retained because neither source confirmed it'), '--check retains and reports committed entries the fixture slice does not confirm')
 
 const anthropicCheck = run(['--provider', 'anthropic', '--check', '--fixtures', fixtures])
@@ -233,7 +233,7 @@ assert(anthropicCheck.code === 3, '--check exits 3 when the Anthropic fixture ch
 assert(anthropicCheck.out.includes('claude-sonnet-4-6'), '--check includes the added current model in the diff')
 
 const bedrockCheck = run(['--distributor', 'aws-bedrock', '--check', '--fixtures', fixtures])
-assert(bedrockCheck.code === 3, '--check exits 3 for deterministic Bedrock distribution changes')
+assert(bedrockCheck.code === 0, '--check exits 0 when bedrock differences are informational only (unmatched models are not file changes)')
 assert(bedrockCheck.out.includes('## Distribution changes'), 'Bedrock --check renders the Distribution changes section')
 assert(bedrockCheck.out.includes('no publisher feed'), 'Bedrock --check reports unmatched models (moved-EOL rendering is covered by the merge unit tests)')
 
