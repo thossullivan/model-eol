@@ -107,3 +107,16 @@ here.
   deployment resolvers, gateway route resolvers, or built-in Slack/GitHub issue
   creation. GitHub Actions annotations and Markdown alert output are available via
   `node check.mjs alert`.
+
+## Feed refresh
+
+Track B refreshes the OpenAI and Anthropic feeds from their models endpoints and
+deprecation pages. Use `--check` for a semantic diff without writing files; exit 3
+means a PR-worthy change. Recorded responses make the run deterministic offline:
+
+```sh
+node refresh/refresh.mjs --check
+node refresh/refresh.mjs --check --fixtures refresh/test/fixture
+node refresh/refresh.mjs --out feeds
+node refresh/test/run.mjs
+```
