@@ -66,10 +66,11 @@ assert(openaiById.get('gpt-4-turbo-2024-04-09')?.replacement === 'gpt-5.6-sol', 
 assert(openaiById.get('sora-2')?.replacement === undefined, 'OpenAI preserves a missing replacement from ---')
 assert(dateFromText('2026‑08‑26') === '2026-08-26', 'OpenAI parses nonbreaking-hyphen dates')
 assert(openaiEntries.every(entry => entry.source.startsWith('https://')), 'OpenAI dated entries carry a source URL')
-const feedLifecycleModels = openaiFeed.models.filter(model => model.announced || model.shutdown)
-assert(feedLifecycleModels.every(model => {
-  const parsed = openaiById.get(model.id)
-  return parsed?.announced === model.announced && parsed?.shutdown === model.shutdown
+const feedById = new Map(openaiFeed.models.map(model => [model.id, model]))
+const overlapping = openaiEntries.filter(entry => feedById.has(entry.id))
+assert(overlapping.length > 0 && overlapping.every(entry => {
+  const model = feedById.get(entry.id)
+  return entry.announced === model.announced && entry.shutdown === model.shutdown
 }), 'OpenAI fixture and committed feed agree on covered IDs and lifecycle dates')
 assert(anthropicEntries.length === 7, 'Anthropic deprecation fixture parses all entries')
 assert(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805')?.replacement === 'claude-opus-4-6', 'Anthropic replacement parses')
@@ -155,7 +156,7 @@ assert(!compareFeeds(oldFeed, oldFeed).changed, 'semantic diff ignores generated
 
 const openaiCheck = run(['--provider', 'openai', '--check', '--fixtures', fixtures])
 assert(openaiCheck.code === 3, '--check exits 3 for the real OpenAI fixture changes')
-assert(openaiCheck.out.includes('sora-2') && openaiCheck.out.includes('Replacement changes'), '--check reports real OpenAI fixture changes')
+assert(openaiCheck.out.includes('Unconfirmed entries') && openaiCheck.out.includes('retained because neither source confirmed it'), '--check retains and reports committed entries the fixture slice does not confirm')
 
 const anthropicCheck = run(['--provider', 'anthropic', '--check', '--fixtures', fixtures])
 assert(anthropicCheck.code === 3, '--check exits 3 when the Anthropic fixture changes the feed')
