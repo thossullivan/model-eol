@@ -8,6 +8,8 @@
 **A machine-readable deprecation feed format for AI models, plus the reference
 tooling that turns it into a Dependabot for models.** v0.1.0.
 
+![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
+
 ## The problem
 
 On July 23, 2026, OpenAI shut down 18 models on schedule. Teams that pinned dated
@@ -40,9 +42,19 @@ second, so the existing trackers can converge instead of each scraping alone.
 
 ## Try it
 
+Two commands, no install, no dependencies:
+
 ```sh
-# CI gate: fail when tracked model IDs are retired or retiring within 90 days
+git clone https://github.com/thossullivan/model-eol && cd model-eol
 node check.mjs path/to/your/repo --days 90
+```
+
+That is the whole CI gate. (`npx model-eol` lands with the npm publish.)
+
+<details>
+<summary><b>Every command</b> - PR gate, distributor clocks, SBOM, badges, migration plans</summary>
+
+```sh
 # PR gate: flag only lines THIS change adds relative to the base ref
 node check.mjs check . --changed origin/main --days 90
 # the same repo judged by a distributor's clock instead of the publisher's
@@ -59,6 +71,8 @@ node check.mjs alert path/to/your/repo --format badge > model-eol-badge.json
 node check.mjs plan path/to/your/repo --days 90 > plan.json
 node check.mjs apply --plan plan.json --dry-run
 ```
+
+</details>
 
 Sample output against the test fixture (2026-08-01):
 
