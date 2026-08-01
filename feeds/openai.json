@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-08-01T21:21:22.797Z",
+  "generated": "2026-08-01T21:59:09.709Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
