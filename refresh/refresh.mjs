@@ -10,7 +10,7 @@ import { compareFeeds, renderSemanticDiff } from './diff.mjs'
 import {
   DISTRIBUTORS,
   loadDistributorSource,
-  mergeBedrockDistributions,
+  mergeDistributions,
 } from './distributors.mjs'
 import {
   PROVIDERS,
@@ -22,13 +22,14 @@ const THIS_FILE = fileURLToPath(import.meta.url)
 const ROOT = path.join(path.dirname(THIS_FILE), '..')
 const COMMITTED_FEEDS = path.join(ROOT, 'feeds')
 const VALIDATOR = path.join(ROOT, 'scripts', 'validate-feeds.mjs')
+const AMAZON_PROVIDER = { publisher: 'amazon', feedFile: 'amazon.json' }
 
 export function parseRefreshArgs(argv = process.argv.slice(2)) {
   const { values } = parseCliArgs({
     args: argv,
     options: {
       provider: { type: 'string' },
-      distributor: { type: 'string' },
+      distributor: { type: 'string', multiple: true },
       check: { type: 'boolean' },
       out: { type: 'string' },
       fixtures: { type: 'string' },
@@ -39,20 +40,33 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
   const options = {
     provider: values.provider ?? 'all',
     providerSpecified: values.provider !== undefined,
-    distributor: values.distributor,
+    distributor: undefined,
     check: values.check ?? false,
     out: values.out ?? path.join(ROOT, 'feeds'),
     fixtures: values.fixtures,
     help: values.help ?? false,
   }
 
-  if (!['openai', 'anthropic', 'all'].includes(options.provider)) {
-    throw new Error(`--provider must be openai, anthropic, or all`)
+  if (!['openai', 'anthropic', 'google', 'all'].includes(options.provider)) {
+    throw new Error(`--provider must be openai, anthropic, google, or all`)
   }
-  if (options.distributor && !DISTRIBUTORS[options.distributor]) {
-    throw new Error(`--distributor must be aws-bedrock`)
+  const distributorArgs = values.distributor ?? []
+  const distributors = (Array.isArray(distributorArgs) ? distributorArgs : [distributorArgs])
+    .flatMap(value => String(value).split(','))
+    .map(value => value.trim())
+    .filter(Boolean)
+  for (const distributor of distributors) {
+    if (!DISTRIBUTORS[distributor]) {
+      throw new Error(`--distributor must be aws-bedrock or vertex-ai`)
+    }
   }
-  options.providers = options.provider === 'all' ? ['openai', 'anthropic'] : [options.provider]
+  options.distributors = [...new Set(distributors)]
+  options.distributor = options.distributors.length === 1
+    ? options.distributors[0]
+    : options.distributors.length
+      ? options.distributors.join(',')
+      : undefined
+  options.providers = options.provider === 'all' ? ['openai', 'anthropic', 'google'] : [options.provider]
   options.out = path.resolve(options.out)
   if (options.fixtures) options.fixtures = path.resolve(options.fixtures)
   return options
@@ -60,9 +74,9 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
 
 export function usage() {
   return [
-    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|all] [--distributor aws-bedrock] [--check] [--out feeds/] [--fixtures DIR]',
+    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|google|all] [--distributor aws-bedrock[,vertex-ai]] [--check] [--out feeds/] [--fixtures DIR]',
     '',
-    '--distributor aws-bedrock may run standalone against the selected committed publisher feeds, or compose with --provider.',
+    '--distributor accepts comma-separated values and may run standalone against committed publisher feeds, or compose with --provider.',
     '--check exits 0 when the semantic diff is empty, 3 when it has changes, and 1 on failure.',
   ].join('\n')
 }
@@ -144,7 +158,7 @@ function clone(value) {
 }
 
 function generateCommittedFeed(providerName, options = {}) {
-  const provider = PROVIDERS[providerName]
+  const provider = options.provider ?? PROVIDERS[providerName]
   if (!provider) throw new Error(`unknown provider ${providerName}`)
   const committed = readCommitted(provider)
   return {
@@ -181,7 +195,8 @@ function writeGenerated(items, out) {
 export async function run(options) {
   const generated = []
   const generatedTimestamp = process.env.MODEL_EOL_GENERATED
-  const shouldRefreshProviders = !options.distributor || options.providerSpecified
+  const distributorNames = options.distributors ?? (options.distributor ? String(options.distributor).split(',') : [])
+  const shouldRefreshProviders = !distributorNames.length || options.providerSpecified
   for (const name of options.providers) {
     generated.push(shouldRefreshProviders
       ? await generateProviderFeed(name, {
@@ -192,14 +207,25 @@ export async function run(options) {
   }
 
   let distributorState
-  if (options.distributor) {
-    const source = await loadDistributorSource(options.distributor, { fixtures: options.fixtures })
-    distributorState = mergeBedrockDistributions(generated, {
-      records: source.records,
-      sourceUrl: source.sourceUrl,
-      via: options.distributor,
-    })
-    for (const [index, item] of generated.entries()) item.feed = distributorState.feeds[index]
+  if (distributorNames.length) {
+    if (distributorNames.includes('aws-bedrock')) {
+      generated.push(generateCommittedFeed('amazon', {
+        generated: generatedTimestamp,
+        provider: AMAZON_PROVIDER,
+      }))
+    }
+    distributorState = { unconfirmedDistributions: [], noPublisherFeed: [] }
+    for (const distributor of distributorNames) {
+      const source = await loadDistributorSource(distributor, { fixtures: options.fixtures })
+      const state = mergeDistributions(generated, {
+        records: source.records,
+        sourceUrl: source.sourceUrl,
+        via: distributor,
+      })
+      for (const [index, item] of generated.entries()) item.feed = state.feeds[index]
+      distributorState.unconfirmedDistributions.push(...state.unconfirmedDistributions)
+      distributorState.noPublisherFeed.push(...state.noPublisherFeed)
+    }
   }
 
   validateGeneratedFeeds(generated)

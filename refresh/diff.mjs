@@ -68,7 +68,7 @@ function normaliseNoPublisherFeed(options) {
   return values
     .filter(Boolean)
     .map(item => typeof item === 'string' ? { bedrockId: item, normalizedId: item } : item)
-    .sort((a, b) => String(a.bedrockId ?? '').localeCompare(String(b.bedrockId ?? '')))
+    .sort((a, b) => String(a.bedrockId ?? a.vertexId ?? a.modelId ?? a.id ?? '').localeCompare(String(b.bedrockId ?? b.vertexId ?? b.modelId ?? b.id ?? '')))
 }
 
 function distributionChanges(oldModel, model, publisher) {
@@ -87,7 +87,7 @@ function distributionChanges(oldModel, model, publisher) {
       changes.push({ publisher, id: model.id, via, kind: 'removed', old, next })
       continue
     }
-    if (old.announced !== next.announced || old.shutdown !== next.shutdown) {
+    if (old.announced !== next.announced || old.shutdown !== next.shutdown || old.date_precision !== next.date_precision) {
       changes.push({ publisher, id: model.id, via, kind: 'changed', old, next })
     }
   }
@@ -115,8 +115,14 @@ export function compareFeeds(committed, generated, options = {}) {
     if (!old) {
       added.push(model)
     } else {
-      if (old.shutdown !== model.shutdown) {
-        shutdownChanges.push({ id: model.id, old: old.shutdown, next: model.shutdown })
+      if (old.shutdown !== model.shutdown || old.date_precision !== model.date_precision) {
+        shutdownChanges.push({
+          id: model.id,
+          old: old.shutdown,
+          next: model.shutdown,
+          oldPrecision: old.date_precision,
+          nextPrecision: model.date_precision,
+        })
       }
       if (old.replacement !== model.replacement) {
         replacementChanges.push({ id: model.id, old: old.replacement, next: model.replacement })
@@ -163,10 +169,12 @@ export function compareFeeds(committed, generated, options = {}) {
   }
 }
 
-const dateLine = model => `announced: ${code(model.announced)}; shutdown: ${code(model.shutdown)}`
+const dateValue = (date, precision) => `${code(date)}${precision === 'earliest' ? ' (earliest)' : ''}`
+
+const dateLine = model => `announced: ${code(model.announced)}; shutdown: ${dateValue(model.shutdown, model.date_precision)}`
 
 function distributionDateLine(distribution) {
-  return `announced: ${code(distribution?.announced)}; EOL: ${code(distribution?.shutdown)}`
+  return `announced: ${code(distribution?.announced)}; EOL: ${dateValue(distribution?.shutdown, distribution?.date_precision)}`
 }
 
 function distributionModelLabel(change) {
@@ -186,7 +194,9 @@ function renderDistributionChanges(result) {
         lines.push(`- ${label} - ${code(change.via)} legacy date moved ${code(change.old.announced)} -> ${code(change.next.announced)}`)
       }
       if (change.old.shutdown !== change.next.shutdown) {
-        lines.push(`- ${label} - ${code(change.via)} EOL date moved ${code(change.old.shutdown)} -> ${code(change.next.shutdown)}`)
+        lines.push(`- ${label} - ${code(change.via)} EOL date moved ${dateValue(change.old.shutdown, change.old.date_precision)} -> ${dateValue(change.next.shutdown, change.next.date_precision)}`)
+      } else if (change.old.date_precision !== change.next.date_precision) {
+        lines.push(`- ${label} - ${code(change.via)} EOL date precision changed ${dateValue(change.old.shutdown, change.old.date_precision)} -> ${dateValue(change.next.shutdown, change.next.date_precision)}`)
       }
     }
   }
@@ -195,7 +205,8 @@ function renderDistributionChanges(result) {
     lines.push(`- ${code(label)} - ${code(item.via ?? 'aws-bedrock')} distribution unconfirmed; retained from committed feed`)
   }
   for (const item of result.noPublisherFeed) {
-    lines.push(`- ${code(item.bedrockId)} - no publisher feed for normalized id ${code(item.normalizedId)}`)
+    const sourceId = item.bedrockId ?? item.vertexId ?? item.modelId ?? item.id
+    lines.push(`- ${code(sourceId)} - no publisher feed for normalized id ${code(item.normalizedId)}`)
   }
   return lines
 }
@@ -223,7 +234,7 @@ function renderResult(result, publisher) {
   ))
   pushSection(section(
     'Shutdown date changes',
-    result.shutdownChanges.map(change => `- ${code(change.id)} - ${code(change.old)} -> ${code(change.next)}`),
+    result.shutdownChanges.map(change => `- ${code(change.id)} - ${dateValue(change.old, change.oldPrecision)} -> ${dateValue(change.next, change.nextPrecision)}`),
   ))
   pushSection(section(
     'Replacement changes',

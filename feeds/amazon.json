@@ -1,0 +1,64 @@
+{
+  "spec": "model-eol/0.1",
+  "publisher": "amazon",
+  "generated": "2026-08-01T00:00:00Z",
+  "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html",
+  "models": [
+    {
+      "id": "nova-canvas",
+      "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html",
+      "announced": "2026-03-30",
+      "shutdown": "2026-09-30",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-03-30",
+          "shutdown": "2026-09-30",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
+    },
+    {
+      "id": "nova-reel",
+      "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html",
+      "announced": "2026-03-30",
+      "shutdown": "2026-09-30",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-03-30",
+          "shutdown": "2026-09-30",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
+    },
+    {
+      "id": "nova-premier",
+      "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html",
+      "announced": "2026-03-13",
+      "shutdown": "2026-09-14",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-03-13",
+          "shutdown": "2026-09-14",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
+    },
+    {
+      "id": "nova-sonic",
+      "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html",
+      "announced": "2026-03-13",
+      "shutdown": "2026-09-14",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-03-13",
+          "shutdown": "2026-09-14",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        }
+      ]
+    }
+  ]
+}

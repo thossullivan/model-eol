@@ -9,9 +9,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   BEDROCK_LIFECYCLE_URL,
+  VERTEX_MODEL_VERSIONS_URL,
   mergeBedrockDistributions,
+  mergeVertexDistributions,
   normalizeBedrockId,
+  normalizeVertexId,
   parseBedrockLifecycleHtml,
+  parseVertexModelVersionsHtml,
 } from '../distributors.mjs'
 import {
   PROVIDERS,
@@ -19,6 +23,8 @@ import {
   parseAnthropicDeprecations,
   parseAnthropicModels,
   dateFromText,
+  parseGoogleDeprecations,
+  parseGoogleModels,
   parseOpenAIDeprecations,
   parseOpenAIModels,
 } from '../providers.mjs'
@@ -59,12 +65,20 @@ assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFl
 const openaiHtml = fs.readFileSync(path.join(fixtures, 'openai-deprecations.html'), 'utf8')
 const anthropicHtml = fs.readFileSync(path.join(fixtures, 'anthropic-deprecations.html'), 'utf8')
 const bedrockHtml = fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')
+const googleHtml = fs.readFileSync(path.join(fixtures, 'google-deprecations.html'), 'utf8')
+const vertexHtml = fs.readFileSync(path.join(fixtures, 'vertex-model-versions.html'), 'utf8')
 const openaiEntries = parseOpenAIDeprecations(openaiHtml)
 const anthropicEntries = parseAnthropicDeprecations(anthropicHtml)
 const bedrockEntries = parseBedrockLifecycleHtml(bedrockHtml)
+const googleEntries = parseGoogleDeprecations(googleHtml)
+const vertexEntries = parseVertexModelVersionsHtml(vertexHtml)
 const openaiIds = parseOpenAIModels(fs.readFileSync(path.join(fixtures, 'openai-models.json'), 'utf8'))
 const anthropicIds = parseAnthropicModels(fs.readFileSync(path.join(fixtures, 'anthropic-models.json'), 'utf8'))
+const googleIds = parseGoogleModels(fs.readFileSync(path.join(fixtures, 'google-models.json'), 'utf8'))
 const openaiFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'openai.json'), 'utf8'))
+const anthropicFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'anthropic.json'), 'utf8'))
+const googleFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'google.json'), 'utf8'))
+const amazonFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'amazon.json'), 'utf8'))
 const openaiById = new Map(openaiEntries.map(entry => [entry.id, entry]))
 
 assert(openaiEntries.every(entry => !/[\s/]/.test(entry.id)), 'OpenAI endpoint and product retirement rows are excluded from the model feed')
@@ -72,6 +86,7 @@ assert(normalizeBedrockId('anthropic.claude-3-haiku-20240307-v1:0') === 'claude-
 assert(normalizeBedrockId('meta.llama3-1-405b-instruct-v2:0') === 'llama3-1-405b-instruct', 'Bedrock normalization strips v2 suffixes')
 assert(normalizeBedrockId('future-provider.example-model:0') === 'example-model', 'Bedrock normalization handles an unknown provider prefix generically')
 assert(normalizeBedrockId('cohere.command-r:0') === 'command-r', 'Bedrock normalization strips a bare colon version suffix')
+assert(normalizeVertexId('publishers/google/models/gemini-2.5-pro') === 'gemini-2.5-pro', 'Vertex normalization strips a publisher resource prefix')
 assert(bedrockEntries.length === 17, 'Bedrock lifecycle fixture parses and deduplicates logical model rows')
 assert(bedrockEntries.find(entry => entry.bedrockId === 'anthropic.claude-3-haiku-20240307-v1:0')?.eol === '2026-09-10', 'Bedrock parser handles rowspan model rows')
 assert(bedrockEntries.find(entry => entry.bedrockId === 'amazon.nova-canvas-v1:0')?.legacy === '2026-03-30', 'Bedrock parser reads human legacy dates')
@@ -95,6 +110,15 @@ assert(anthropicEntries.length === 7, 'Anthropic deprecation fixture parses all 
 assert(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805')?.replacement === 'claude-opus-4-6', 'Anthropic replacement parses')
 assert(openaiIds.length === 3 && openaiIds.includes('gpt-5.6-sol'), 'OpenAI models endpoint fixture parses')
 assert(anthropicIds.includes('claude-sonnet-4-6'), 'Anthropic models endpoint fixture parses')
+assert(googleEntries.length === 64, 'Google deprecations fixture parses all model rows')
+assert(googleEntries.find(entry => entry.id === 'gemini-2.5-pro')?.date_precision === 'earliest', 'Google marks earliest possible shutdown dates')
+assert(googleEntries.find(entry => entry.id === 'gemini-2.5-pro')?.shutdown === '2026-10-16', 'Google parses a human shutdown date')
+assert(googleEntries.find(entry => entry.id === 'gemini-3.6-flash')?.shutdown === undefined, 'Google preserves models without a shutdown date')
+assert(googleIds.length === 3 && googleIds.includes('gemini-2.5-pro'), 'Google models endpoint fixture strips the models/ prefix')
+assert(vertexEntries.length === 41, 'Vertex model-versions fixture parses model rows')
+assert(vertexEntries.find(entry => entry.vertexId === 'gemini-2.5-pro')?.date_precision === 'earliest', 'Vertex marks dates that cannot move earlier')
+assert(vertexEntries.find(entry => entry.vertexId === 'claude-sonnet-4-20250514')?.shutdown === '2026-10-14', 'Vertex parses an Anthropic model row')
+assert(VERTEX_MODEL_VERSIONS_URL.includes('/model-versions'), 'Vertex distributor cites its model versions source')
 
 const minimalCommitted = {
   spec: 'model-eol/0.1',
@@ -192,6 +216,24 @@ assert(distributorMerge.unconfirmedDistributions.some(item => item.id === 'stale
 assert(distributorMerge.noPublisherFeed.some(item => item.bedrockId === 'meta.llama3-1-405b-instruct-v1:0'), 'Bedrock merge reports unmatched models without inventing entries')
 assert(!distributorFeed.models.some(model => model.id === 'llama3-1-405b-instruct'), 'Bedrock merge does not create an unmatched publisher entry')
 
+const vertexMerge = mergeVertexDistributions([googleFeed, anthropicFeed], {
+  records: vertexEntries,
+  sourceUrl: VERTEX_MODEL_VERSIONS_URL,
+})
+const vertexGoogle = vertexMerge.feeds[0].models.find(model => model.id === 'gemini-2.5-pro')
+const vertexAnthropic = vertexMerge.feeds[1].models.find(model => model.id === 'claude-sonnet-4-20250514')
+assert(vertexGoogle?.distributions?.some(distribution => distribution.via === 'vertex-ai' && distribution.shutdown === '2026-10-20' && distribution.date_precision === 'earliest'), 'Vertex merge annotates a Google publisher entry')
+assert(vertexAnthropic?.distributions?.some(distribution => distribution.via === 'vertex-ai' && distribution.shutdown === '2026-10-14'), 'Vertex merge annotates an Anthropic publisher entry')
+assert(vertexMerge.noPublisherFeed.some(item => item.vertexId === 'vertex-unmatched-model'), 'Vertex merge reports an unmatched model')
+assert(!vertexMerge.feeds.some(feed => feed.models.some(model => model.id === 'vertex-unmatched-model')), 'Vertex merge does not invent an unmatched publisher entry')
+
+const amazonBedrock = mergeBedrockDistributions([amazonFeed], {
+  records: bedrockEntries,
+  sourceUrl: BEDROCK_LIFECYCLE_URL,
+})
+assert(amazonBedrock.feeds[0].models.some(model => model.id === 'nova-canvas'), 'Amazon seed contains Nova publisher entries')
+assert(!amazonBedrock.noPublisherFeed.some(item => item.normalizedId.startsWith('nova-')), 'Bedrock resolves Nova models to the Amazon feed')
+
 const oldFeed = {
   spec: 'model-eol/0.1', publisher: 'openai', generated: '2026-07-25T00:00:00Z', models: [
     { id: 'stable', shutdown: '2026-10-01', replacement: 'old-target' },
@@ -223,6 +265,9 @@ assert(!semanticMarkdown.includes('## Distribution changes'), 'semantic diff omi
 assert(semanticMarkdown.includes('2026-10-01') && semanticMarkdown.includes('2026-11-01'), 'semantic diff renders shutdown date movement')
 assert(semanticMarkdown.includes('old-target') && semanticMarkdown.includes('new-target'), 'semantic diff renders replacement movement')
 assert(!compareFeeds(oldFeed, oldFeed).changed, 'semantic diff ignores generated metadata and reports no-change feeds')
+const precisionFeed = { ...oldFeed, models: [{ id: 'precision', shutdown: '2026-10-01', date_precision: 'earliest' }] }
+const precisionDiff = renderSemanticDiff({ ...oldFeed, models: [{ id: 'precision', shutdown: '2026-10-01' }] }, precisionFeed)
+assert(precisionDiff.includes('2026-10-01') && precisionDiff.includes('(earliest)'), 'semantic diff renders earliest date precision')
 
 const openaiCheck = run(['--provider', 'openai', '--check', '--fixtures', fixtures])
 assert(openaiCheck.code === 0, '--check exits 0 when only informational sections differ (unconfirmed entries are not file changes)')
@@ -232,10 +277,23 @@ const anthropicCheck = run(['--provider', 'anthropic', '--check', '--fixtures', 
 assert(anthropicCheck.code === 3, '--check exits 3 when the Anthropic fixture changes the feed')
 assert(anthropicCheck.out.includes('claude-sonnet-4-6'), '--check includes the added current model in the diff')
 
+const googleCheck = run(['--provider', 'google', '--check', '--fixtures', fixtures])
+assert(googleCheck.code === 0, 'Google --check is deterministic against the recorded fixtures')
+
 const bedrockCheck = run(['--distributor', 'aws-bedrock', '--check', '--fixtures', fixtures])
 assert(bedrockCheck.code === 0, '--check exits 0 when bedrock differences are informational only (unmatched models are not file changes)')
 assert(bedrockCheck.out.includes('## Distribution changes'), 'Bedrock --check renders the Distribution changes section')
 assert(bedrockCheck.out.includes('no publisher feed'), 'Bedrock --check reports unmatched models (moved-EOL rendering is covered by the merge unit tests)')
+assert(!bedrockCheck.out.includes('normalized id `nova-'), 'Bedrock --check no longer reports Nova as feedless')
+
+const vertexCheck = run(['--distributor', 'vertex-ai', '--check', '--fixtures', fixtures])
+assert(vertexCheck.code === 3, 'Vertex --check reports distributor additions as semantic changes')
+assert(vertexCheck.out.includes('google/gemini-2.5-pro') && vertexCheck.out.includes('anthropic/claude-sonnet-4-20250514'), 'Vertex --check annotates Google and Anthropic entries')
+assert(vertexCheck.out.includes('(earliest)'), 'Vertex --check renders earliest precision')
+assert(vertexCheck.out.includes('no publisher feed'), 'Vertex --check reports unmatched models')
+
+const bothDistributorsCheck = run(['--distributor', 'aws-bedrock,vertex-ai', '--check', '--fixtures', fixtures])
+assert(bothDistributorsCheck.code === 3 && bothDistributorsCheck.out.includes('vertex-ai'), 'refresh accepts comma-separated distributors')
 
 const composedBedrockCheck = run(['--provider', 'anthropic', '--distributor', 'aws-bedrock', '--check', '--fixtures', fixtures])
 assert(composedBedrockCheck.code === 3 && composedBedrockCheck.out.includes('Distribution changes'), 'Bedrock distributor composes with a selected publisher refresh')

@@ -20,6 +20,16 @@ export const PROVIDERS = {
       'anthropic-version': '2023-06-01',
     },
   },
+  google: {
+    publisher: 'google',
+    feedFile: 'google.json',
+    modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
+    deprecationsUrl: 'https://ai.google.dev/gemini-api/docs/deprecations',
+    keyEnv: 'GEMINI_API_KEY',
+    keyEnvs: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    keyHeader: 'x-goog-api-key',
+    headers: {},
+  },
 }
 
 const DATE_PATTERN = /\b((?:19|20)\d{2})[-‐‑‒–\u2014−](\d{1,2})[-‐‑‒–\u2014−](\d{1,2})\b/
@@ -330,6 +340,86 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
 export const parseAnthropicDeprecations = (html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) =>
   parseDeprecationsHtml(html, sourceUrl, 'anthropic')
 
+function googleModelId(fragment) {
+  const fromCode = codeText(fragment)[0]
+  if (fromCode) return fromCode.trim()
+  const text = plainText(fragment)
+  if (!text || /\s/.test(text)) return undefined
+  return text
+}
+
+function googleShutdown(text, id) {
+  if (!text || /^no\s+shutdown\s+date(?:\s+announced)?$/i.test(text) || /^[-\u2013\u2014]+$/.test(text)) return undefined
+  const parsed = dateFromText(text)
+  if (!parsed) throw new Error(`google deprecations entry ${id} has an unrecognised shutdown date: ${text}`)
+  return parsed
+}
+
+function googleDatePrecision(html, shutdownText) {
+  return /earliest\s+possible|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i.test(`${plainText(html)} ${shutdownText}`)
+    ? 'earliest'
+    : undefined
+}
+
+/** Parse Google's Gemini deprecations tables. */
+export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.deprecationsUrl) {
+  if (typeof html !== 'string' || !html.trim()) throw new Error('google deprecations page is empty')
+  try {
+    new URL(sourceUrl)
+  } catch {
+    throw new Error(`google deprecations source is not a URL: ${sourceUrl}`)
+  }
+
+  const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+  const records = []
+  let recognisedTables = 0
+  for (const table of tables) {
+    const rows = tableRows(table[1])
+    const headers = headerIndexes(rows)
+    if (!headers) continue
+    recognisedTables++
+    for (const row of rows.slice(headers.row + 1)) {
+      const modelCell = row.cells[headers.model]
+      const shutdownCell = row.cells[headers.date]
+      if (!modelCell || !shutdownCell || !modelCell.text) continue
+      const id = googleModelId(modelCell.html)
+      if (!id) continue
+      const shutdownText = shutdownCell.text
+      const shutdown = googleShutdown(shutdownText, id)
+      const item = { id, source: sourceUrl }
+      if (shutdown) {
+        item.shutdown = shutdown
+        const precision = googleDatePrecision(html, shutdownText)
+        if (precision) item.date_precision = precision
+      }
+      const replacementCell = row.cells[headers.recommended]
+      const nextReplacement = replacementCell ? replacement(replacementCell.html) : undefined
+      if (nextReplacement) item.replacement = nextReplacement
+      records.push(item)
+    }
+  }
+
+  if (!recognisedTables) throw new Error('google deprecations page has no recognised model tables')
+  if (!records.length) throw new Error('google deprecations page has no model entries')
+
+  const unique = new Map()
+  for (const record of records) {
+    const previous = unique.get(record.id)
+    if (!previous) {
+      unique.set(record.id, record)
+      continue
+    }
+    const same = previous.announced === record.announced &&
+      previous.shutdown === record.shutdown &&
+      previous.date_precision === record.date_precision &&
+      previous.replacement === record.replacement
+    if (!same) throw new Error(`google deprecations page has conflicting rows for ${record.id}`)
+  }
+  return [...unique.values()]
+}
+
+export const parseGoogleGeminiDeprecations = parseGoogleDeprecations
+
 /** Parse the JSON response returned by a provider's models endpoint. */
 export function parseModelsResponse(body, provider = 'provider') {
   let parsed
@@ -354,8 +444,35 @@ export function parseModelsResponse(body, provider = 'provider') {
   return ids
 }
 
+/** Parse Google's models endpoint response and remove its resource prefix. */
+export function parseGoogleModelsResponse(body) {
+  let parsed
+  try {
+    parsed = typeof body === 'string' ? JSON.parse(body) : body
+  } catch (error) {
+    throw new Error(`google models response is not valid JSON: ${error.message}`)
+  }
+  const rows = parsed?.models
+  if (!Array.isArray(rows)) throw new Error('google models response has no models array')
+  const ids = []
+  const seen = new Set()
+  for (const row of rows) {
+    if (!row || typeof row.name !== 'string' || !row.name.trim()) {
+      throw new Error('google models response contains an entry without a model name')
+    }
+    const id = row.name.trim().replace(/^models\//, '')
+    if (!id) throw new Error('google models response contains an empty model id')
+    if (seen.has(id)) throw new Error(`google models response contains duplicate model id ${id}`)
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
+}
+
 export const parseOpenAIModels = body => parseModelsResponse(body, 'openai')
 export const parseAnthropicModels = body => parseModelsResponse(body, 'anthropic')
+export const parseGoogleModels = parseGoogleModelsResponse
+export const parseGoogleModelsEndpoint = parseGoogleModelsResponse
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -395,7 +512,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
     let target = locate(record.id)
     if (!target) target = add({ id: record.id })
 
-    for (const field of ['announced', 'shutdown', 'replacement']) delete target[field]
+    for (const field of ['announced', 'shutdown', 'date_precision', 'replacement']) delete target[field]
     Object.assign(target, clone(record))
     confirmed.add(target.id)
     deprecationConfirmed.add(target.id)
@@ -410,7 +527,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
         // Presence in the endpoint is affirmative current-model data. A
         // lifecycle record from the old feed is stale unless the page still
         // confirms it in this refresh.
-        for (const field of ['announced', 'shutdown', 'replacement']) delete target[field]
+        for (const field of ['announced', 'shutdown', 'date_precision', 'replacement']) delete target[field]
       }
       confirmed.add(target.id)
     }
@@ -474,7 +591,8 @@ async function fetchBody(url, headers, provider, fetchImpl = globalThis.fetch) {
   if (typeof fetchImpl !== 'function') throw new Error('this Node runtime has no built-in fetch')
   let response
   try {
-    response = await fetchImpl(url, { headers })
+    // Providers geo-localize without Accept-Language; the date parsers are English-only.
+    response = await fetchImpl(url, { headers: { 'accept-language': 'en', ...headers } })
   } catch (error) {
     throw new Error(`${provider} fetch failed for ${url}: ${error.message}`)
   }
@@ -496,19 +614,27 @@ export async function loadProviderSources(config, options = {}) {
 
   if (fixtures) {
     const modelFixture = findFixture(fixtures, config.publisher, 'models')
-    currentIds = parseModelsResponse(fs.readFileSync(modelFixture, 'utf8'), config.publisher)
+    const modelBody = fs.readFileSync(modelFixture, 'utf8')
+    currentIds = config.publisher === 'google'
+      ? parseGoogleModelsResponse(modelBody)
+      : parseModelsResponse(modelBody, config.publisher)
     endpointAvailable = true
     notice(`notice: ${config.publisher} models endpoint fixture: ${path.relative(process.cwd(), modelFixture)}`)
   } else {
-    const key = env[config.keyEnv]
+    const keyEnvs = config.keyEnvs ?? [config.keyEnv]
+    const keyEnv = keyEnvs.find(name => env[name])
+    const key = keyEnv ? env[keyEnv] : undefined
     if (!key) {
-      notice(`notice: ${config.keyEnv} is unset; skipping ${config.publisher} models endpoint and preserving committed entries`)
+      notice(`notice: ${keyEnvs.join(' or ')} is unset; skipping ${config.publisher} models endpoint and preserving committed entries`)
     } else {
       const headers = { ...config.headers }
       if (config.publisher === 'openai') headers.Authorization = `Bearer ${key}`
       if (config.publisher === 'anthropic') headers['x-api-key'] = key
+      if (config.keyHeader) headers[config.keyHeader] = key
       const body = await fetchBody(config.modelsUrl, headers, config.publisher, fetchImpl)
-      currentIds = parseModelsResponse(body, config.publisher)
+      currentIds = config.publisher === 'google'
+        ? parseGoogleModelsResponse(body)
+        : parseModelsResponse(body, config.publisher)
       endpointAvailable = true
     }
   }
@@ -525,6 +651,8 @@ export async function loadProviderSources(config, options = {}) {
 
   const deprecations = config.publisher === 'openai'
     ? parseOpenAIDeprecations(html, config.deprecationsUrl)
-    : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
+    : config.publisher === 'google'
+      ? parseGoogleDeprecations(html, config.deprecationsUrl)
+      : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
   return { currentIds, endpointAvailable, deprecations }
 }

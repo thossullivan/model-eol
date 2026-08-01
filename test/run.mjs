@@ -10,6 +10,7 @@ import path from 'node:path'
 
 import { color, colorEnabled } from '../lib/color.mjs'
 import { findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
+import { formatCheck, formatSchedule } from '../lib/reports.mjs'
 
 const root = path.join(import.meta.dirname, '..')
 const run = (args, options = {}) => {
@@ -248,6 +249,27 @@ const announcedChannel = lifecycleFor({ distributions: [{ via: 'test-channel', a
 assert(announcedChannel.status === 'watch' && announcedChannel.via === 'test-channel', 'announced distribution without shutdown is watch')
 const fallbackLifecycle = lifecycleFor({ shutdown: '2026-07-23' }, { days: 90, via: 'missing-channel', today: testToday })
 assert(fallbackLifecycle.status === 'retired' && fallbackLifecycle.via === 'publisher-fallback', 'missing distribution uses publisher-fallback clock')
+
+const earliestFinding = findingFromRef({
+  file: 'fixture.py',
+  line: 1,
+  matched: 'earliest-model',
+  entry: { id: 'earliest-model', shutdown: '2026-08-20', date_precision: 'earliest' },
+  publisher: 'google',
+  usage: 'model-reference',
+  resolved_provider: 'google',
+  confidence: 'medium',
+}, { days: 30, today: testToday })
+assert(earliestFinding.date_precision === 'earliest', 'findings carry date precision')
+const earliestCheck = formatCheck({ findings: [earliestFinding], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
+assert(earliestCheck.includes('no earlier than 2026-08-20'), 'human check output renders earliest shutdown as a lower bound')
+const earliestSchedule = formatSchedule({
+  items: [earliestFinding],
+  candidate_model_references: [],
+  unresolved_integrations: [],
+  earliest_risk: { safe_until: '2026-08-20', id: 'earliest-model' },
+}, 30)
+assert(earliestSchedule.includes('no earlier than 2026-08-20'), 'human schedule output renders earliest shutdown as a lower bound')
 
 const duplicateFeeds = path.join(tempRoot, 'duplicate-feeds')
 fs.mkdirSync(duplicateFeeds)

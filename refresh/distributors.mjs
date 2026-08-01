@@ -4,12 +4,19 @@ import path from 'node:path'
 import { dateFromText } from './providers.mjs'
 
 export const BEDROCK_LIFECYCLE_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html'
+export const VERTEX_MODEL_VERSIONS_URL = 'https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions'
+export const VERTEX_LIFECYCLE_URL = VERTEX_MODEL_VERSIONS_URL
 
 export const DISTRIBUTORS = {
   'aws-bedrock': {
     name: 'aws-bedrock',
     sourceUrl: BEDROCK_LIFECYCLE_URL,
     fixture: 'bedrock-lifecycle.html',
+  },
+  'vertex-ai': {
+    name: 'vertex-ai',
+    sourceUrl: VERTEX_MODEL_VERSIONS_URL,
+    fixture: 'vertex-model-versions.html',
   },
 }
 
@@ -99,7 +106,8 @@ function headerIndexes(rows) {
     const legacy = labels.findIndex(label => /\blegacy\b.*\bdate\b|\bdate\b.*\blegacy\b/i.test(label))
     const eol = labels.findIndex(label => (
       /\beol\b.*\bdate\b|\bdate\b.*\beol\b/i.test(label) ||
-      /end\s*[- ]?of\s*[- ]?life.*\bdate\b|\bdate\b.*end\s*[- ]?of\s*[- ]?life/i.test(label)
+      /end\s*[- ]?of\s*[- ]?life.*\bdate\b|\bdate\b.*end\s*[- ]?of\s*[- ]?life/i.test(label) ||
+      /\b(?:retirement|discontinuation)\b.*\bdate\b|\bdate\b.*\b(?:retirement|discontinuation)\b/i.test(label)
     ))
     if (model >= 0 && legacy >= 0 && eol >= 0) return { row, model, legacy, eol }
   }
@@ -107,7 +115,7 @@ function headerIndexes(rows) {
 }
 
 function missingDate(text) {
-  return !text || /^(?:-+|n\/?a|none|not\s+(?:available|applicable))$/i.test(text)
+  return !text || /^(?:-+|n\/?a|none|not\s+(?:available|applicable)|no\s+(?:shutdown|retirement)\s+date\s+announced)$/i.test(text)
 }
 
 function lifecycleDate(cell, field, bedrockId) {
@@ -115,6 +123,16 @@ function lifecycleDate(cell, field, bedrockId) {
   const parsed = dateFromText(cell.text)
   if (!parsed) throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has an unrecognised ${field} date: ${cell.text}`)
   return parsed
+}
+
+function vertexHeaderIndexes(rows) {
+  for (const [row, candidate] of rows.entries()) {
+    const labels = candidate.cells.map(cell => cell.text.toLowerCase())
+    const model = labels.findIndex(label => /\bmodel\s+(?:id|identifier)\b/i.test(label))
+    const retirement = labels.findIndex(label => /\b(?:retirement|discontinuation)\b.*\bdate\b|\bdate\b.*\b(?:retirement|discontinuation)\b/i.test(label))
+    if (model >= 0 && retirement >= 0) return { row, model, eol: retirement }
+  }
+  return undefined
 }
 
 function sameRecord(left, right) {
@@ -184,6 +202,78 @@ export function parseBedrockLifecycleHtml(html) {
 export const parseAwsBedrockLifecycle = parseBedrockLifecycleHtml
 export const parseAWSBedrockLifecycle = parseBedrockLifecycleHtml
 
+function vertexModelId(fragment) {
+  const code = [...String(fragment).matchAll(/<code\b[^>]*>([\s\S]*?)<\/code>/gi)]
+    .map(match => plainText(match[1]))
+    .find(Boolean)
+  const value = code ?? plainText(fragment)
+  const id = value.replace(/\s*\*+$/, '').trim()
+  return id && !/\s/.test(id) ? id : undefined
+}
+
+function vertexDate(cell, modelId) {
+  if (!cell || missingDate(cell.text)) return undefined
+  const date = dateFromText(cell.text)
+  if (!date) throw new Error(`vertex-ai lifecycle entry ${modelId} has an unrecognised retirement date: ${cell.text}`)
+  return date
+}
+
+function vertexDatePrecision(html, text) {
+  return /earliest\s+possible|retirement\s+timelines?\s+may\s+be\s+extended|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i.test(`${plainText(html)} ${text}`)
+    ? 'earliest'
+    : undefined
+}
+
+/** Parse Vertex model versions and lifecycle tables. */
+export function parseVertexModelVersionsHtml(html) {
+  if (typeof html !== 'string' || !html.trim()) throw new Error('vertex-ai lifecycle page is empty')
+
+  const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+  const records = []
+  let recognisedTables = 0
+  for (const table of tables) {
+    const rows = tableRows(table[1])
+    const headers = vertexHeaderIndexes(rows)
+    if (!headers) continue
+    recognisedTables++
+    for (const row of rows.slice(headers.row + 1)) {
+      const modelCell = row.cells[headers.model]
+      if (!modelCell || !modelCell.text) continue
+      const modelId = vertexModelId(modelCell.html)
+      if (!modelId) continue
+      const retirementCell = row.cells[headers.eol]
+      if (!retirementCell) throw new Error(`vertex-ai lifecycle entry ${modelId} is missing retirement date`)
+      const shutdown = vertexDate(retirementCell, modelId)
+      const record = { vertexId: modelId }
+      if (shutdown) {
+        record.shutdown = shutdown
+        const precision = vertexDatePrecision(html, retirementCell.text)
+        if (precision) record.date_precision = precision
+      }
+      records.push(record)
+    }
+  }
+
+  if (!recognisedTables) throw new Error('vertex-ai lifecycle page has no recognised model table')
+  if (!records.length) throw new Error('vertex-ai lifecycle page has no model entries')
+
+  const unique = new Map()
+  for (const record of records) {
+    const previous = unique.get(record.vertexId)
+    if (!previous) {
+      unique.set(record.vertexId, record)
+      continue
+    }
+    const same = previous.shutdown === record.shutdown && previous.date_precision === record.date_precision
+    if (!same) throw new Error(`vertex-ai lifecycle page has conflicting rows for ${record.vertexId}`)
+  }
+  return [...unique.values()]
+}
+
+export const parseVertexLifecycleHtml = parseVertexModelVersionsHtml
+export const parseVertexModelLifecycle = parseVertexModelVersionsHtml
+export const parseVertexModelVersions = parseVertexModelVersionsHtml
+
 /**
  * Convert a Bedrock model ID to the publisher ID used by a feed. Bedrock
  * namespaces are intentionally treated generically so a future provider does
@@ -203,6 +293,15 @@ export function normalizeBedrockId(value) {
 
 export const normaliseBedrockId = normalizeBedrockId
 
+export function normalizeVertexId(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new TypeError('Vertex model id must be a non-empty string')
+  }
+  return value.trim().replace(/^publishers\/[^/]+\/models\//, '')
+}
+
+export const normaliseVertexId = normalizeVertexId
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
@@ -213,29 +312,60 @@ function feedParts(feeds) {
       return { feed: item.feed, publisher: item.provider?.publisher ?? item.feed.publisher ?? `feed-${index}` }
     }
     if (item && Array.isArray(item.models)) return { feed: item, publisher: item.publisher ?? `feed-${index}` }
-    throw new Error('aws-bedrock merge received a feed without a models array')
+    throw new Error('distributor merge received a feed without a models array')
   })
   if (feeds && typeof feeds === 'object') return feedParts(Object.values(feeds))
-  throw new Error('aws-bedrock merge requires one or more publisher feeds')
+  throw new Error('distributor merge requires one or more publisher feeds')
 }
 
-function dateField(value, field, bedrockId) {
+function dateField(value, field, modelId, via) {
   if (value === undefined) return undefined
   if (typeof value !== 'string' || !DATE.test(value)) {
-    throw new Error(`aws-bedrock record ${bedrockId} has an invalid ${field} date`)
+    throw new Error(`${via} record ${modelId} has an invalid ${field} date`)
   }
   return value
 }
 
-function recordForMerge(record) {
-  if (!record || typeof record.bedrockId !== 'string' || !record.bedrockId.trim()) {
-    throw new Error('aws-bedrock record is missing bedrockId')
+function precisionField(value, modelId, via) {
+  if (value === undefined) return undefined
+  if (!['exact', 'earliest'].includes(value)) {
+    throw new Error(`${via} record ${modelId} has an invalid date_precision`)
   }
-  const bedrockId = record.bedrockId.trim()
-  const legacy = dateField(record.legacy, 'legacy', bedrockId)
-  const eol = dateField(record.eol, 'EOL', bedrockId)
-  if (legacy && eol && eol < legacy) throw new Error(`aws-bedrock record ${bedrockId} has EOL before legacy date`)
-  return { bedrockId, normalizedId: normalizeBedrockId(bedrockId), legacy, eol }
+  return value
+}
+
+function statusField(value, modelId, via) {
+  if (value === undefined) return undefined
+  if (!['active', 'legacy', 'extended-access', 'retired'].includes(value)) {
+    throw new Error(`${via} record ${modelId} has an invalid status`)
+  }
+  return value
+}
+
+function recordForMerge(record, via) {
+  const isBedrock = via === 'aws-bedrock'
+  const idField = isBedrock ? 'bedrockId' : 'vertexId'
+  const rawId = isBedrock ? record?.bedrockId : record?.vertexId ?? record?.modelId ?? record?.id
+  if (typeof rawId !== 'string' || !rawId.trim()) {
+    throw new Error(`${via} record is missing ${idField}`)
+  }
+  const sourceId = rawId.trim()
+  const announcedValue = isBedrock ? record.legacy : record.announced
+  const shutdownValue = isBedrock ? record.eol : record.shutdown ?? record.retirement
+  const announced = dateField(announcedValue, isBedrock ? 'legacy' : 'announced', sourceId, via)
+  const shutdown = dateField(shutdownValue, isBedrock ? 'EOL' : 'retirement', sourceId, via)
+  if (announced && shutdown && shutdown < announced) {
+    throw new Error(`${via} record ${sourceId} has shutdown before announced`)
+  }
+  return {
+    idField,
+    sourceId,
+    normalizedId: isBedrock ? normalizeBedrockId(sourceId) : normalizeVertexId(sourceId),
+    announced,
+    shutdown,
+    date_precision: precisionField(record.date_precision, sourceId, via),
+    status: statusField(record.status, sourceId, via),
+  }
 }
 
 function withoutDistributions(model) {
@@ -257,35 +387,33 @@ function assertDistributorPreserved(before, after, via) {
   const afterById = new Map((after.models ?? []).map(model => [model.id, model]))
   for (const oldModel of before.models ?? []) {
     const nextModel = afterById.get(oldModel.id)
-    if (!nextModel) throw new Error(`aws-bedrock merge would drop committed model ${oldModel.id}`)
+    if (!nextModel) throw new Error(`${via} merge would drop committed model ${oldModel.id}`)
     if (JSON.stringify(withoutDistributions(oldModel)) !== JSON.stringify(withoutDistributions(nextModel))) {
-      throw new Error(`aws-bedrock merge modified entry-level fields for ${oldModel.id}`)
+      throw new Error(`${via} merge modified entry-level fields for ${oldModel.id}`)
     }
     const oldForeign = (oldModel.distributions ?? []).filter(distribution => distribution?.via !== via)
     const nextForeign = (nextModel.distributions ?? []).filter(distribution => distribution?.via !== via)
     if (JSON.stringify(oldForeign) !== JSON.stringify(nextForeign)) {
-      throw new Error(`aws-bedrock merge modified foreign distributions for ${oldModel.id}`)
+      throw new Error(`${via} merge modified foreign distributions for ${oldModel.id}`)
     }
   }
 }
 
-/**
- * Upsert one distributor clock across loaded publisher feeds. Existing
- * distributor entries not confirmed by this parse are retained and returned
- * as unconfirmed; no publisher model is created for an unmatched record.
- */
-export function mergeBedrockDistributions(feeds, {
+/** Upsert one distributor clock across loaded publisher feeds. */
+export function mergeDistributions(feeds, {
   records = [],
-  sourceUrl = BEDROCK_LIFECYCLE_URL,
-  via = 'aws-bedrock',
+  sourceUrl,
+  via,
 } = {}) {
+  if (!via || !DISTRIBUTORS[via]) throw new Error(`unknown distributor ${via || '(empty)'}`)
+  const config = DISTRIBUTORS[via]
+  const source = sourceUrl ?? config.sourceUrl
   try {
-    new URL(sourceUrl)
+    new URL(source)
   } catch {
-    throw new Error(`aws-bedrock source is not a URL: ${sourceUrl}`)
+    throw new Error(`${via} source is not a URL: ${source}`)
   }
-  if (!Array.isArray(records)) throw new Error('aws-bedrock merge records must be an array')
-  if (!via) throw new Error('distributor via is required')
+  if (!Array.isArray(records)) throw new Error(`${via} merge records must be an array`)
 
   const parts = feedParts(feeds)
   const working = parts.map(part => ({
@@ -311,25 +439,34 @@ export function mergeBedrockDistributions(feeds, {
   const confirmed = new Set()
   const matchedRecords = new Map()
   for (const raw of records) {
-    const record = recordForMerge(raw)
+    const record = recordForMerge(raw, via)
     const target = identity.get(record.normalizedId)
     if (!target) {
-      unmatched.push({ bedrockId: record.bedrockId, normalizedId: record.normalizedId })
+      const item = { normalizedId: record.normalizedId, [record.idField]: record.sourceId }
+      if (record.idField === 'vertexId') item.modelId = record.sourceId
+      unmatched.push(item)
       continue
     }
 
     const targetKey = `${target.feedIndex}:${target.model.id}`
     const priorRecord = matchedRecords.get(targetKey)
-    if (priorRecord && (priorRecord.legacy !== record.legacy || priorRecord.eol !== record.eol)) {
-      throw new Error(`aws-bedrock records map to ${target.model.id} with conflicting dates`)
+    if (priorRecord && (
+      priorRecord.announced !== record.announced ||
+      priorRecord.shutdown !== record.shutdown ||
+      priorRecord.date_precision !== record.date_precision ||
+      priorRecord.status !== record.status
+    )) {
+      throw new Error(`${via} records map to ${target.model.id} with conflicting dates`)
     }
     matchedRecords.set(targetKey, record)
 
     const existing = distributionFor(target.model, via)
     const distribution = { via }
-    if (record.legacy !== undefined) distribution.announced = record.legacy
-    if (record.eol !== undefined) distribution.shutdown = record.eol
-    distribution.source = sourceUrl
+    if (record.announced !== undefined) distribution.announced = record.announced
+    if (record.shutdown !== undefined) distribution.shutdown = record.shutdown
+    if (record.date_precision !== undefined) distribution.date_precision = record.date_precision
+    if (record.status !== undefined) distribution.status = record.status
+    distribution.source = source
     if (existing) {
       target.model.distributions[existing.index] = distribution
     } else {
@@ -356,7 +493,7 @@ export function mergeBedrockDistributions(feeds, {
     assertDistributorPreserved(part.before, part.feed, via)
   }
 
-  unmatched.sort((a, b) => a.bedrockId.localeCompare(b.bedrockId))
+  unmatched.sort((a, b) => `${a.bedrockId ?? a.vertexId}`.localeCompare(`${b.bedrockId ?? b.vertexId}`))
   unconfirmedDistributions.sort((a, b) => `${a.publisher}:${a.id}`.localeCompare(`${b.publisher}:${b.id}`))
   return {
     feeds: working.map(part => part.feed),
@@ -364,6 +501,22 @@ export function mergeBedrockDistributions(feeds, {
     noPublisherFeeds: unmatched,
     unconfirmedDistributions,
   }
+}
+
+export function mergeBedrockDistributions(feeds, options = {}) {
+  return mergeDistributions(feeds, {
+    ...options,
+    via: options.via ?? 'aws-bedrock',
+    sourceUrl: options.sourceUrl ?? BEDROCK_LIFECYCLE_URL,
+  })
+}
+
+export function mergeVertexDistributions(feeds, options = {}) {
+  return mergeDistributions(feeds, {
+    ...options,
+    via: options.via ?? 'vertex-ai',
+    sourceUrl: options.sourceUrl ?? VERTEX_MODEL_VERSIONS_URL,
+  })
 }
 
 export function findDistributorFixture(dir, distributor = 'aws-bedrock') {
@@ -382,17 +535,18 @@ export function findDistributorFixture(dir, distributor = 'aws-bedrock') {
   throw new Error(`missing ${distributor} fixture in ${dir}`)
 }
 
-async function fetchBody(url, fetchImpl = globalThis.fetch) {
+async function fetchBody(url, distributor, fetchImpl = globalThis.fetch) {
   if (typeof fetchImpl !== 'function') throw new Error('this Node runtime has no built-in fetch')
   let response
   try {
-    response = await fetchImpl(url)
+    // Providers geo-localize without Accept-Language; the date parsers are English-only.
+    response = await fetchImpl(url, { headers: { 'accept-language': 'en' } })
   } catch (error) {
-    throw new Error(`aws-bedrock fetch failed for ${url}: ${error.message}`)
+    throw new Error(`${distributor} fetch failed for ${url}: ${error.message}`)
   }
-  if (!response.ok) throw new Error(`aws-bedrock fetch failed for ${url}: HTTP ${response.status}`)
+  if (!response.ok) throw new Error(`distributor fetch failed for ${url}: HTTP ${response.status}`)
   const body = await response.text()
-  if (!body.trim()) throw new Error(`aws-bedrock fetch returned an empty response for ${url}`)
+  if (!body.trim()) throw new Error(`${distributor} fetch returned an empty response for ${url}`)
   return body
 }
 
@@ -406,11 +560,13 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
     html = fs.readFileSync(fixturePath, 'utf8')
     ;(options.notice ?? console.error)(`notice: ${distributor} lifecycle fixture: ${path.relative(process.cwd(), fixturePath)}`)
   } else {
-    html = await fetchBody(config.sourceUrl, options.fetchImpl)
+    html = await fetchBody(config.sourceUrl, distributor, options.fetchImpl)
   }
   return {
     ...config,
     fixturePath,
-    records: parseBedrockLifecycleHtml(html),
+    records: distributor === 'aws-bedrock'
+      ? parseBedrockLifecycleHtml(html)
+      : parseVertexModelVersionsHtml(html),
   }
 }

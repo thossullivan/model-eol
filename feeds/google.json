@@ -1,0 +1,404 @@
+{
+  "spec": "model-eol/0.1",
+  "publisher": "google",
+  "generated": "2026-08-01T00:00:00Z",
+  "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+  "models": [
+    {
+      "id": "gemini-3.6-flash",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.5-flash-lite",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.1-flash-image",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3-pro-image",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.1-flash-lite",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2027-05-07",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.5-flash-lite"
+    },
+    {
+      "id": "gemini-3.1-flash-image-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-25",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-image"
+    },
+    {
+      "id": "gemini-3.1-pro-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3-pro-image-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-25",
+      "date_precision": "earliest",
+      "replacement": "gemini-3-pro-image"
+    },
+    {
+      "id": "gemini-3-flash-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "replacement": "gemini-3.6-flash"
+    },
+    {
+      "id": "gemini-3-pro-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-03-09",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-pro-preview"
+    },
+    {
+      "id": "gemini-3.1-flash-lite-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-05-25",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-lite"
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-10-16",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-pro-preview"
+    },
+    {
+      "id": "gemini-2.5-pro-preview-03-25",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-12-02",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-pro-preview"
+    },
+    {
+      "id": "gemini-2.5-pro-preview-05-06",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-12-02",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-pro-preview"
+    },
+    {
+      "id": "gemini-2.5-pro-preview-06-05",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-12-02",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-pro-preview"
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-10-16",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.6-flash"
+    },
+    {
+      "id": "gemini-2.5-flash-image",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-10-02",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-image-preview"
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-10-16",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-lite"
+    },
+    {
+      "id": "gemini-2.5-flash-lite-preview-09-2025",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-03-31",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-lite"
+    },
+    {
+      "id": "gemini-2.5-flash-preview-05-20",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-11-18",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.6-flash"
+    },
+    {
+      "id": "gemini-2.5-flash-image-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-01-15",
+      "date_precision": "earliest",
+      "replacement": "gemini-2.5-flash-image"
+    },
+    {
+      "id": "gemini-2.5-flash-preview-09-25",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-02-17",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.6-flash"
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-01",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.6-flash"
+    },
+    {
+      "id": "gemini-2.0-flash-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-01",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.6-flash"
+    },
+    {
+      "id": "gemini-2.0-flash-lite",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-01",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-lite"
+    },
+    {
+      "id": "gemini-2.0-flash-lite-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-01",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-lite"
+    },
+    {
+      "id": "gemini-2.0-flash-preview-image-generation",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-11-14",
+      "date_precision": "earliest",
+      "replacement": "gemini-2.5-flash-image"
+    },
+    {
+      "id": "gemini-2.0-flash-lite-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-12-09",
+      "date_precision": "earliest",
+      "replacement": "gemini-2.5-flash-lite"
+    },
+    {
+      "id": "gemini-2.0-flash-lite-preview-02-05",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-12-09",
+      "date_precision": "earliest",
+      "replacement": "gemini-2.5-flash-lite"
+    },
+    {
+      "id": "gemini-2.0-flash-live-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-12-09",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-live-preview"
+    },
+    {
+      "id": "gemini-3.1-flash-live-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "replacement": "gemini-3.1-flash-live-preview"
+    },
+    {
+      "id": "gemini-live-2.5-flash-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-12-09",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-live-preview"
+    },
+    {
+      "id": "gemini-3.1-flash-tts-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-2.5-flash-preview-tts",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "replacement": "gemini-3.1-flash-tts-preview"
+    },
+    {
+      "id": "gemini-2.5-pro-preview-tts",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "replacement": "gemini-3.1-flash-tts-preview"
+    },
+    {
+      "id": "gemini-embedding-2",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-embedding-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2028-05-14",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
+    },
+    {
+      "id": "text-embedding-004",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-01-14",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
+    },
+    {
+      "id": "embedding-2-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-08-10",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
+    },
+    {
+      "id": "embedding-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-10-30",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
+    },
+    {
+      "id": "embedding-gecko-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-10-30",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
+    },
+    {
+      "id": "gemini-embedding-exp",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-10-30",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
+    },
+    {
+      "id": "gemini-embedding-exp-03-07",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-10-30",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
+    },
+    {
+      "id": "imagen-4.0-generate-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-08-17",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-image"
+    },
+    {
+      "id": "imagen-4.0-ultra-generate-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-08-17",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-image"
+    },
+    {
+      "id": "imagen-4.0-fast-generate-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-08-17",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-image"
+    },
+    {
+      "id": "imagen-3.0-generate-002",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-11-10",
+      "date_precision": "earliest",
+      "replacement": "imagen-4.0-generate-001"
+    },
+    {
+      "id": "imagen-4.0-generate-preview-06-06",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-02-17",
+      "date_precision": "earliest",
+      "replacement": "imagen-4.0-generate-001"
+    },
+    {
+      "id": "imagen-4.0-ultra-generate-preview-06-06",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-02-17",
+      "date_precision": "earliest",
+      "replacement": "imagen-4.0-ultra-generate-001"
+    },
+    {
+      "id": "veo-3.0-generate-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-30",
+      "date_precision": "earliest",
+      "replacement": "veo-3.1-generate-preview or the GA models on the Gemini Enterprise Agent Platform"
+    },
+    {
+      "id": "veo-3.0-fast-generate-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-30",
+      "date_precision": "earliest",
+      "replacement": "veo-3.1-fast-generate-preview or the GA models on the Gemini Enterprise Agent Platform"
+    },
+    {
+      "id": "veo-2.0-generate-001",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-06-30",
+      "date_precision": "earliest",
+      "replacement": "veo-3.1-generate-preview or the GA models on the Gemini Enterprise Agent Platform"
+    },
+    {
+      "id": "veo-3.1-lite-generate-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "veo-3.1-generate-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "veo-3.1-fast-generate-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "veo-3.0-generate-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-11-12",
+      "date_precision": "earliest",
+      "replacement": "veo-3.1-generate-preview"
+    },
+    {
+      "id": "veo-3.0-fast-generate-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2025-11-12",
+      "date_precision": "earliest",
+      "replacement": "veo-3.1-fast-generate-preview"
+    },
+    {
+      "id": "lyria-3-clip-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "lyria-3-pro-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "lyria-realtime-exp",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-robotics-er-1.6-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-08-31",
+      "date_precision": "earliest",
+      "replacement": "gemini-robotics-er-2-preview"
+    },
+    {
+      "id": "gemini-robotics-er-1.5-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-04-30",
+      "date_precision": "earliest",
+      "replacement": "gemini-robotics-er-1.6-preview"
+    }
+  ]
+}
+
