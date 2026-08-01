@@ -127,3 +127,20 @@ node refresh/refresh.mjs --check --fixtures refresh/test/fixture
 node refresh/refresh.mjs --out feeds
 node refresh/test/run.mjs
 ```
+
+## GitHub bot adapter
+
+Copy `bot.yml.example` to `.github/workflows/model-eol-bot.yml` to run the
+temporary-clone migration bot weekly. It reads optional `.model-eol.json` config,
+opens labelled migration PRs for patchable direct references, and maintains issues
+for actionable findings that need human resolution. Use `--dry-run` to print the
+decision table without GitHub calls or pushes:
+
+```sh
+node bot/bot.mjs --dry-run --target-dir . --repo OWNER/REPO
+```
+
+The workflow keeps provider keys in its read-only plan and eval job. PRs created
+with `GITHUB_TOKEN` do not trigger `pull_request` workflows, so checks may be
+skipped; use a narrowly scoped fine-grained PAT or a GitHub App token when checks
+must run.

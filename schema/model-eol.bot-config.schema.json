@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.invalid/model-eol/0.1/bot-config.schema.json",
+  "title": "model-eol bot configuration",
+  "description": "Optional .model-eol.json configuration for the zero-dependency GitHub bot adapter.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "days": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 90,
+      "description": "Open migration work for models retiring within this many days."
+    },
+    "scope": {
+      "enum": ["direct", "all"],
+      "default": "direct",
+      "description": "Use direct API references only, or include generic model references."
+    },
+    "via": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Optional distributor lifecycle clock, such as azure-ai-foundry."
+    },
+    "ignore": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Canonical IDs or aliases to ignore. A canonical ID ignores all of its aliases."
+        },
+        "paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Repo-relative simple globs supporting *, **, and ?."
+        }
+      },
+      "default": { "models": [], "paths": [] }
+    },
+    "issues": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Maintain GitHub issues for non-patchable actionable findings."
+        }
+      },
+      "default": { "enabled": true }
+    },
+    "eval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": ["string", "null"],
+          "default": null,
+          "description": "Opt-in command run in the temporary clone for changed patches."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 600000
+        },
+        "max_report_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 65536
+        }
+      },
+      "default": { "command": null, "timeout_ms": 600000, "max_report_bytes": 65536 }
+    }
+  },
+  "default": {
+    "days": 90,
+    "scope": "direct",
+    "via": null,
+    "ignore": { "models": [], "paths": [] },
+    "issues": { "enabled": true },
+    "eval": { "command": null, "timeout_ms": 600000, "max_report_bytes": 65536 }
+  }
+}

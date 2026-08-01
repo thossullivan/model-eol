@@ -1,0 +1,86 @@
+name: model-eol bot
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: model-eol-bot
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan and evaluate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the versioned plan
+        run: node check.mjs plan . --days 90 --scope direct > model-eol-plan.json
+      - name: Run the configured eval harness
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL_EOL_EVAL_COMMAND: ${{ vars.MODEL_EOL_EVAL_COMMAND }}
+          MODEL_EOL_PLAN: ${{ github.workspace }}/model-eol-plan.json
+          MODEL_EOL_REPORT: ${{ github.workspace }}/model-eol-report.md
+        run: |
+          # Supply a provider-backed harness for this repository. It may read the
+          # plan and write Markdown to MODEL_EOL_REPORT, but this job has read-only
+          # contents permission and the publish job receives no provider keys.
+          if [ -n "${MODEL_EOL_EVAL_COMMAND:-}" ]; then
+            set +e
+            sh -c "$MODEL_EOL_EVAL_COMMAND"
+            eval_status=$?
+            set -e
+            printf '%s\n' "$eval_status" > model-eol-eval-exit-code
+          else
+            : > "$MODEL_EOL_REPORT"
+            printf '0\n' > model-eol-eval-exit-code
+          fi
+      - name: Upload plan and eval report
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-eol-plan-and-report
+          path: |
+            model-eol-plan.json
+            model-eol-report.md
+            model-eol-eval-exit-code
+
+  publish:
+    name: publish migration work
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Download the plan and eval report
+        uses: actions/download-artifact@v4
+        with:
+          name: model-eol-plan-and-report
+      - name: Publish model-eol PRs and issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODEL_EOL_PLAN_FILE: ${{ github.workspace }}/model-eol-plan.json
+          MODEL_EOL_EVAL_REPORT_FILE: ${{ github.workspace }}/model-eol-report.md
+          MODEL_EOL_EVAL_STATUS_FILE: ${{ github.workspace }}/model-eol-eval-exit-code
+          MODEL_EOL_TOKEN_KIND: github-token
+        run: node bot/bot.mjs --repo "${{ github.repository }}" --target-dir .
+
+# Security and checks note:
+# A PR made with GITHUB_TOKEN does not trigger pull_request workflows, so checks
+# may be skipped even though this job has opened the PR. For required checks, use
+# a narrowly scoped fine-grained PAT or a GitHub App installation token instead.
+# Keep provider API keys only in the read-only plan/eval job and never pass them to
+# the publish job.
