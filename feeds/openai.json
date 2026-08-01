@@ -1,16 +1,15 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-07-25T00:00:00Z",
+  "generated": "2026-08-01T19:14:18.735Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
     {
       "id": "o3-deep-research-2025-06-26",
-      "aliases": ["o3-deep-research"],
-      "announced": "2026-04-22",
-      "shutdown": "2026-07-23",
-      "replacement": "gpt-5.6-sol",
+      "aliases": [
+        "o3-deep-research"
+      ],
       "notes": "Deep-research post-trained agent; replacement is a general model + tools, not a structural successor. Replacement recommendation changed during the notice window (was GPT-5.5-era guidance until gpt-5.6-sol GA'd 2026-07-09).",
       "distributions": [
         {
@@ -18,68 +17,95 @@
           "shutdown": "2026-12-26",
           "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/model-retirements"
         }
-      ]
+      ],
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
     },
     {
       "id": "o4-mini-deep-research-2025-06-26",
-      "aliases": ["o4-mini-deep-research"],
+      "aliases": [
+        "o4-mini-deep-research"
+      ],
       "announced": "2026-04-22",
       "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement": "gpt-5.6-sol"
     },
     {
       "id": "gpt-4-0613",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.6-luna"
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
     },
     {
       "id": "gpt-4-turbo-2024-04-09",
-      "aliases": ["gpt-4-turbo"],
+      "aliases": [
+        "gpt-4-turbo"
+      ],
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.6-luna"
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
     },
     {
       "id": "gpt-3.5-turbo-0125",
-      "aliases": ["gpt-3.5-turbo"],
+      "aliases": [
+        "gpt-3.5-turbo"
+      ],
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.6-luna"
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
     },
     {
       "id": "o1-2024-12-17",
-      "aliases": ["o1"],
+      "aliases": [
+        "o1"
+      ],
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.6-terra"
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
     },
     {
       "id": "o3-mini-2025-01-31",
-      "aliases": ["o3-mini"],
+      "aliases": [
+        "o3-mini"
+      ],
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.6-terra"
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
     },
     {
       "id": "gpt-5-2025-08-07",
       "announced": "2026-06-11",
       "shutdown": "2026-12-11",
-      "replacement": "gpt-5.6-terra"
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
     },
     {
       "id": "o3-2025-04-16",
-      "aliases": ["o3"],
+      "aliases": [
+        "o3"
+      ],
       "announced": "2026-06-11",
       "shutdown": "2026-12-11",
-      "replacement": "gpt-5.6-terra"
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
     },
     {
       "id": "o3-pro-2025-06-10",
-      "aliases": ["o3-pro"],
+      "aliases": [
+        "o3-pro"
+      ],
       "announced": "2026-06-11",
       "shutdown": "2026-12-11",
-      "replacement": "gpt-5.6-sol"
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol ( reasoning.mode: pro )"
     },
     {
       "id": "gpt-5.6-sol"
@@ -89,6 +115,778 @@
     },
     {
       "id": "gpt-5.6-luna"
+    },
+    {
+      "id": "gpt-realtime",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-2.1"
+    },
+    {
+      "id": "gpt-audio",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
+    },
+    {
+      "id": "gpt-4o-audio",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
+    },
+    {
+      "id": "gpt-4o-realtime",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-2.1"
+    },
+    {
+      "id": "gpt-realtime-mini",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-2.1-mini"
+    },
+    {
+      "id": "gpt-audio-mini",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
+    },
+    {
+      "id": "gpt-4o-mini-realtime",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-2.1-mini"
+    },
+    {
+      "id": "gpt-4o-mini-audio",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
+    },
+    {
+      "id": "gpt-4o-mini-transcribe-2025-03-20",
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o-mini-transcribe-2025-12-15"
+    },
+    {
+      "id": "gpt-5-mini-2025-08-07",
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "gpt-5-nano-2025-08-07",
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-luna"
+    },
+    {
+      "id": "gpt-5-pro-2025-10-06",
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol ( reasoning.mode: pro )"
+    },
+    {
+      "id": "gpt-image-1-mini",
+      "announced": "2026-06-02",
+      "shutdown": "2026-12-01",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-image-2"
+    },
+    {
+      "id": "gpt-image-1.5",
+      "announced": "2026-06-02",
+      "shutdown": "2026-12-01",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-image-2"
+    },
+    {
+      "id": "chatgpt-image-latest",
+      "announced": "2026-06-02",
+      "shutdown": "2026-12-01",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-image-2"
+    },
+    {
+      "id": "gpt-5.2-chat-latest",
+      "announced": "2026-05-08",
+      "shutdown": "2026-08-10",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-5.3-chat-latest",
+      "announced": "2026-05-08",
+      "shutdown": "2026-08-10",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-4-1106-preview",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-4.1-nano-2025-04-14",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-luna"
+    },
+    {
+      "id": "gpt-4o-2024-05-13",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-image-1",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-image-2"
+    },
+    {
+      "id": "o1-pro-2025-03-19",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol ( reasoning.mode: pro )"
+    },
+    {
+      "id": "ft-o4-mini-2025-04-16",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "o4-mini-2025-04-16",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "ft-gpt-3.5-turbo",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.4-mini"
+    },
+    {
+      "id": "ft-gpt-4",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.5"
+    },
+    {
+      "id": "ft-gpt-4.1-nano-2025-04-14",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.4-nano"
+    },
+    {
+      "id": "ft-babbage-002",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.4-mini"
+    },
+    {
+      "id": "ft-davinci-002",
+      "announced": "2026-04-22",
+      "shutdown": "2026-10-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.4-mini"
+    },
+    {
+      "id": "sora-2",
+      "announced": "2026-03-24",
+      "shutdown": "2026-09-24",
+      "source": "https://developers.openai.com/api/docs/deprecations"
+    },
+    {
+      "id": "sora-2-pro",
+      "announced": "2026-03-24",
+      "shutdown": "2026-09-24",
+      "source": "https://developers.openai.com/api/docs/deprecations"
+    },
+    {
+      "id": "sora-2-2025-10-06",
+      "announced": "2026-03-24",
+      "shutdown": "2026-09-24",
+      "source": "https://developers.openai.com/api/docs/deprecations"
+    },
+    {
+      "id": "sora-2-2025-12-08",
+      "announced": "2026-03-24",
+      "shutdown": "2026-09-24",
+      "source": "https://developers.openai.com/api/docs/deprecations"
+    },
+    {
+      "id": "sora-2-pro-2025-10-06",
+      "announced": "2026-03-24",
+      "shutdown": "2026-09-24",
+      "source": "https://developers.openai.com/api/docs/deprecations"
+    },
+    {
+      "id": "gpt-3.5-turbo-instruct",
+      "announced": "2025-09-26",
+      "shutdown": "2026-09-28",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.4-mini or gpt-5-mini"
+    },
+    {
+      "id": "babbage-002",
+      "announced": "2025-09-26",
+      "shutdown": "2026-09-28",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.4-mini or gpt-5-mini"
+    },
+    {
+      "id": "davinci-002",
+      "announced": "2025-09-26",
+      "shutdown": "2026-09-28",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.4-mini or gpt-5-mini"
+    },
+    {
+      "id": "gpt-3.5-turbo-1106",
+      "announced": "2025-09-26",
+      "shutdown": "2026-09-28",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.4-mini or gpt-5-mini"
+    },
+    {
+      "id": "computer-use-preview-2025-03-11",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "gpt-4o-mini-search-preview-2025-03-11",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "gpt-4o-mini-tts-2025-03-20",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o-mini-tts-2025-12-15"
+    },
+    {
+      "id": "gpt-4o-search-preview-2025-03-11",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "gpt-5-chat-latest",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-5-codex",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-5.1-chat-latest",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-5.1-codex",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-5.1-codex-max",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "gpt-5.1-codex-mini",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
+    },
+    {
+      "id": "gpt-audio-mini-2025-10-06",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
+    },
+    {
+      "id": "gpt-realtime-mini-2025-10-06",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-2.1-mini"
+    },
+    {
+      "id": "gpt-5.2-codex",
+      "announced": "2026-04-22",
+      "shutdown": "2026-07-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
+    },
+    {
+      "id": "chatgpt-4o-latest",
+      "announced": "2025-11-18",
+      "shutdown": "2026-02-17",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.1-chat-latest"
+    },
+    {
+      "id": "codex-mini-latest",
+      "announced": "2025-11-17",
+      "shutdown": "2026-02-12",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5-codex-mini"
+    },
+    {
+      "id": "dall-e-2",
+      "announced": "2025-11-14",
+      "shutdown": "2026-05-12",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-image-2 , gpt-image-1 , or gpt-image-1-mini"
+    },
+    {
+      "id": "dall-e-3",
+      "announced": "2025-11-14",
+      "shutdown": "2026-05-12",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-image-2 , gpt-image-1 , or gpt-image-1-mini"
+    },
+    {
+      "id": "gpt-4-0314",
+      "announced": "2025-09-26",
+      "shutdown": "2026-03-26",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5 or gpt-4.1*"
+    },
+    {
+      "id": "gpt-4-0125-preview",
+      "announced": "2025-09-26",
+      "shutdown": "2026-03-26",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5 or gpt-4.1*"
+    },
+    {
+      "id": "gpt-4o-realtime-preview",
+      "announced": "2025-09-15",
+      "shutdown": "2026-05-07",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-1.5"
+    },
+    {
+      "id": "gpt-4o-realtime-preview-2025-06-03",
+      "announced": "2025-09-15",
+      "shutdown": "2026-05-07",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-1.5"
+    },
+    {
+      "id": "gpt-4o-realtime-preview-2024-12-17",
+      "announced": "2025-09-15",
+      "shutdown": "2026-05-07",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-1.5"
+    },
+    {
+      "id": "gpt-4o-mini-realtime-preview",
+      "announced": "2025-09-15",
+      "shutdown": "2026-05-07",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-mini"
+    },
+    {
+      "id": "gpt-4o-audio-preview",
+      "announced": "2025-09-15",
+      "shutdown": "2026-05-07",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
+    },
+    {
+      "id": "gpt-4o-mini-audio-preview",
+      "announced": "2025-09-15",
+      "shutdown": "2026-05-07",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-mini"
+    },
+    {
+      "id": "gpt-4o-realtime-preview-2024-10-01",
+      "announced": "2025-06-10",
+      "shutdown": "2025-10-10",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-1.5"
+    },
+    {
+      "id": "gpt-4o-audio-preview-2024-10-01",
+      "announced": "2025-06-10",
+      "shutdown": "2025-10-10",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
+    },
+    {
+      "id": "text-moderation-007",
+      "announced": "2025-04-28",
+      "shutdown": "2025-10-27",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "omni-moderation"
+    },
+    {
+      "id": "text-moderation-stable",
+      "announced": "2025-04-28",
+      "shutdown": "2025-10-27",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "omni-moderation"
+    },
+    {
+      "id": "text-moderation-latest",
+      "announced": "2025-04-28",
+      "shutdown": "2025-10-27",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "omni-moderation"
+    },
+    {
+      "id": "o1-preview",
+      "announced": "2025-04-28",
+      "shutdown": "2025-07-28",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "o3"
+    },
+    {
+      "id": "o1-mini",
+      "announced": "2025-04-28",
+      "shutdown": "2025-10-27",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "o4-mini"
+    },
+    {
+      "id": "gpt-4.5-preview",
+      "announced": "2025-04-14",
+      "shutdown": "2025-07-14",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4.1"
+    },
+    {
+      "id": "gpt-4-32k",
+      "announced": "2024-06-06",
+      "shutdown": "2025-06-06",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "gpt-4-32k-0613",
+      "announced": "2024-06-06",
+      "shutdown": "2025-06-06",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "gpt-4-32k-0314",
+      "announced": "2024-06-06",
+      "shutdown": "2025-06-06",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "gpt-4-vision-preview",
+      "announced": "2024-06-06",
+      "shutdown": "2024-12-06",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "gpt-4-1106-vision-preview",
+      "announced": "2024-06-06",
+      "shutdown": "2024-12-06",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "gpt-3.5-turbo-0613",
+      "announced": "2023-11-06",
+      "shutdown": "2024-09-13",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo"
+    },
+    {
+      "id": "gpt-3.5-turbo-16k-0613",
+      "announced": "2023-11-06",
+      "shutdown": "2024-09-13",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo"
+    },
+    {
+      "id": "text-ada-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo-instruct"
+    },
+    {
+      "id": "text-babbage-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo-instruct"
+    },
+    {
+      "id": "text-curie-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo-instruct"
+    },
+    {
+      "id": "text-davinci-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo-instruct"
+    },
+    {
+      "id": "text-davinci-002",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo-instruct"
+    },
+    {
+      "id": "text-davinci-003",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo-instruct"
+    },
+    {
+      "id": "ada",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "babbage-002"
+    },
+    {
+      "id": "babbage",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "babbage-002"
+    },
+    {
+      "id": "curie",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "davinci-002"
+    },
+    {
+      "id": "davinci",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "davinci-002"
+    },
+    {
+      "id": "code-davinci-002",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo-instruct"
+    },
+    {
+      "id": "text-davinci-edit-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "code-davinci-edit-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "text-similarity-ada-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-search-ada-doc-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-search-ada-query-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "code-search-ada-code-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "code-search-ada-text-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-similarity-babbage-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-search-babbage-doc-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-search-babbage-query-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "code-search-babbage-code-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "code-search-babbage-text-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-similarity-curie-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-search-curie-doc-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-search-curie-query-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-similarity-davinci-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-search-davinci-doc-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "text-search-davinci-query-001",
+      "announced": "2023-07-06",
+      "shutdown": "2024-01-04",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "text-embedding-3-small"
+    },
+    {
+      "id": "gpt-3.5-turbo-0301",
+      "announced": "2023-06-13",
+      "shutdown": "2024-09-13",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-3.5-turbo"
+    },
+    {
+      "id": "code-davinci-001",
+      "announced": "2023-03-20",
+      "shutdown": "2023-03-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "code-cushman-002",
+      "announced": "2023-03-20",
+      "shutdown": "2023-03-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
+    },
+    {
+      "id": "code-cushman-001",
+      "announced": "2023-03-20",
+      "shutdown": "2023-03-23",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-4o"
     }
   ]
 }
