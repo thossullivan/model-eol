@@ -67,7 +67,7 @@ function plainText(fragment) {
     .trim()
 }
 
-function dateFromText(text) {
+export function dateFromText(text) {
   const normalised = plainText(text)
   const iso = normalised.match(DATE_PATTERN)
   if (iso) {
@@ -200,8 +200,132 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
   return [...unique.values()]
 }
 
-export const parseOpenAIDeprecations = (html, sourceUrl = PROVIDERS.openai.deprecationsUrl) =>
-  parseDeprecationsHtml(html, sourceUrl, 'openai')
+function openAIHeaderIndexes(rows) {
+  for (const [index, row] of rows.entries()) {
+    const labels = row.cells.map(cell => cell.text.toLowerCase())
+    const date = labels.findIndex(label => /(shutdown|retirement|sunset|removal).*date|date.*(shutdown|retirement|sunset|removal)/i.test(label))
+    const model = labels.findIndex(label => /\b(model|system|endpoint)\b/i.test(label) && !/replacement|substitute/i.test(label))
+    const replacement = labels.findIndex(label => /recommended\s+replacement|replacement|substitute\s+model|successor/i.test(label))
+    if (date >= 0 && model >= 0 && replacement >= 0) return { row: index, date, model, replacement }
+  }
+  return undefined
+}
+
+function stripOpenAIChrome(html) {
+  return html.replace(/<(script|style|nav|header|footer)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+}
+
+function openAIHeadings(html) {
+  return [...html.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)].map(match => ({
+    index: match.index,
+    level: Number(match[1]),
+    date: dateFromText(match[2]),
+  }))
+}
+
+function openAIAnnouncementDate(headings, tableStart) {
+  const preceding = headings.filter(heading => heading.index < tableStart)
+  let heading = preceding.at(-1)
+  while (heading && !heading.date) {
+    const position = preceding.indexOf(heading)
+    heading = preceding.slice(0, position).reverse().find(candidate => candidate.level < heading.level)
+  }
+  return heading?.date
+}
+
+function openAIModelId(fragment) {
+  const codes = codeText(fragment)
+  const dated = codes.find(code => /\b(?:19|20)\d{2}[-_]\d{2}[-_]\d{2}\b/.test(code))
+  if (dated) return dated.trim()
+  if (codes[0]) return codes[0].trim()
+  return modelId(fragment)
+}
+
+function openAIReplacement(fragment) {
+  const text = plainText(fragment)
+  if (!text || /^(?:-{1,3}|[–—]+|n\/?a|none)$/i.test(text)) return undefined
+  return text
+}
+
+/** Parse the OpenAI docs page, whose announcement date is a section heading. */
+export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl) {
+  if (typeof html !== 'string' || !html.trim()) throw new Error('openai deprecations page is empty')
+  try {
+    new URL(sourceUrl)
+  } catch {
+    throw new Error(`openai deprecations source is not a URL: ${sourceUrl}`)
+  }
+
+  const content = stripOpenAIChrome(html)
+  const headings = openAIHeadings(content)
+  const tables = [...content.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+  const records = []
+  let recognisedTables = 0
+
+  for (const table of tables) {
+    const rows = tableRows(table[1])
+    const headers = openAIHeaderIndexes(rows)
+    if (!headers) continue
+    recognisedTables++
+
+    const announced = openAIAnnouncementDate(headings, table.index)
+    if (!announced) throw new Error('openai deprecations table has no announcement date')
+
+    for (const row of rows.slice(headers.row + 1)) {
+      const modelCell = row.cells[headers.model]
+      if (!modelCell || !modelCell.text) continue
+      const id = openAIModelId(modelCell.html)
+      if (!id) throw new Error('openai deprecations table contains a row without a model id')
+      // The page also lists endpoint and product retirements ("/v1/edits",
+      // "Assistants API"). A feed id is the exact model identifier as sent
+      // over the wire (SPEC.md), so rows whose id contains a slash or
+      // whitespace are out of scope for a model feed.
+      if (/[\s/]/.test(id)) continue
+
+      const shutdownCell = row.cells[headers.date]
+      const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
+      if (!shutdown) throw new Error(`openai deprecations entry ${id} has no valid shutdown date`)
+
+      const replacementCell = row.cells[headers.replacement]
+      const item = { id, announced, shutdown, source: sourceUrl }
+      const nextReplacement = replacementCell ? openAIReplacement(replacementCell.html) : undefined
+      if (nextReplacement) item.replacement = nextReplacement
+      if (item.shutdown < item.announced) {
+        throw new Error(`openai deprecations entry ${id} has shutdown before announcement`)
+      }
+      records.push(item)
+    }
+  }
+
+  if (!recognisedTables) throw new Error('openai deprecations page has no recognisable deprecations content')
+  if (!records.length) throw new Error('openai deprecations page has no model entries')
+
+  const unique = new Map()
+  for (const record of records) {
+    const previous = unique.get(record.id)
+    if (!previous) {
+      unique.set(record.id, record)
+      continue
+    }
+    const same = previous.announced === record.announced &&
+      previous.shutdown === record.shutdown &&
+      previous.replacement === record.replacement
+    if (same) continue
+    if (record.announced > previous.announced) {
+      // The page lists newer announcements before older historical rows.
+      unique.set(record.id, record)
+      continue
+    }
+    if (record.announced < previous.announced) continue
+    if (record.shutdown !== previous.shutdown) {
+      throw new Error(`openai deprecations page has conflicting rows for ${record.id}`)
+    }
+    // A few historical subsections repeat a model with a narrower scope. Keep
+    // the first row when the announcement date is the same; it is the page's
+    // primary lifecycle row and carries the same shutdown date.
+  }
+  return [...unique.values()]
+}
 
 export const parseAnthropicDeprecations = (html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) =>
   parseDeprecationsHtml(html, sourceUrl, 'anthropic')
@@ -399,6 +523,8 @@ export async function loadProviderSources(config, options = {}) {
     html = await fetchBody(config.deprecationsUrl, {}, config.publisher, fetchImpl)
   }
 
-  const deprecations = parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
+  const deprecations = config.publisher === 'openai'
+    ? parseOpenAIDeprecations(html, config.deprecationsUrl)
+    : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
   return { currentIds, endpointAvailable, deprecations }
 }

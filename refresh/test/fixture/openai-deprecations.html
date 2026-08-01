@@ -4,34 +4,111 @@
   <body>
     <main>
       <h1>Deprecations</h1>
-      <h2>2026-04-22: General models</h2>
-      <p>On April 22, 2026, we notified developers of these model deprecations.</p>
-      <table>
-        <thead>
-          <tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>2026-07-23</td><td><code>o3-deep-research-2025-06-26</code></td><td><code>gpt-5.6-sol</code></td></tr>
-          <tr><td>2026-07-23</td><td><code>o4-mini-deep-research-2025-06-26</code></td><td><code>gpt-5.6-sol</code></td></tr>
-          <tr><td>2026-10-23</td><td><code>gpt-4-0613</code></td><td><code>gpt-5.6-luna</code></td></tr>
-          <tr><td>2026-10-23</td><td><code>gpt-4-turbo-2024-04-09</code></td><td><code>gpt-5.6-luna</code></td></tr>
-          <tr><td>2026-10-23</td><td><code>gpt-3.5-turbo-0125</code></td><td><code>gpt-5.6-luna</code></td></tr>
-          <tr><td>2026-10-23</td><td><code>o1-2024-12-17</code></td><td><code>gpt-5.6-terra</code></td></tr>
-          <tr><td>2026-10-23</td><td><code>o3-mini-2025-01-31</code></td><td><code>gpt-5.6-terra</code></td></tr>
-        </tbody>
-      </table>
+      <h2 id="upcoming-deprecations"><span>Upcoming deprecations</span></h2>
+      <p>Upcoming deprecations are listed below, with the most recent announcements at the top.</p>
 
-      <h2>2026-06-11: Newer reasoning models</h2>
-      <table>
-        <thead>
-          <tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>2026-12-11</td><td><code>gpt-5-2025-08-07</code></td><td><code>gpt-5.6-terra</code></td></tr>
-          <tr><td>2026-12-11</td><td><code>o3-2025-04-16</code></td><td><code>gpt-5.6-terra</code></td></tr>
-          <tr><td>2026-12-11</td><td><code>o3-pro-2025-06-10</code></td><td><code>gpt-5.6-sol</code></td></tr>
-        </tbody>
-      </table>
+      <h3 id="2026-06-11-gpt-5-and-o3-model-deprecations" class="group"><span class="min-w-0">2026-06-11: GPT-5 and o3 model deprecations</span></h3>
+      <p>On June 11, 2026, we notified developers using older GPT-5 and o3 model snapshots of their deprecation and removal from the API on December 11, 2026.</p>
+      <div class="md:max-w-5xl mx-auto overflow-x-auto">
+        <table class="w-full ">
+          <thead><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr></thead>
+          <tbody>
+            <tr><td>Dec 11, 2026</td><td><code>gpt-5-2025-08-07</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>Dec 11, 2026</td><td><code>gpt-5-mini-2025-08-07</code></td><td><code>gpt-5.6-terra</code></td></tr>
+            <tr><td>Dec 11, 2026</td><td><code>gpt-5-nano-2025-08-07</code></td><td><code>gpt-5.6-luna</code></td></tr>
+            <tr><td>Dec 11, 2026</td><td><code>gpt-5-pro-2025-10-06</code></td><td><code>gpt-5.6-sol</code> (<code>reasoning.mode: pro</code>)</td></tr>
+            <tr><td>Dec 11, 2026</td><td><code>o3-2025-04-16</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>Dec 11, 2026</td><td><code>o3-pro-2025-06-10</code></td><td><code>gpt-5.6-sol</code> (<code>reasoning.mode: pro</code>)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="2026-04-22-legacy-gpt-model-snapshots" class="group"><span class="min-w-0">2026-04-22: Legacy GPT model snapshots</span></h3>
+      <p>To improve reliability and make it easier for developers to choose the right models, we are deprecating a set of older OpenAI models. Access to these models will be shut down on the dates below.</p>
+      <div class="md:max-w-5xl mx-auto overflow-x-auto">
+        <table class="w-full ">
+          <thead><tr><th>Shutdown date</th><th>Model snapshot</th><th>Substitute model</th></tr></thead>
+          <tbody>
+            <tr><td>October 23, 2026</td><td><code>gpt-3.5-turbo-0125</code> | <code>gpt-3.5-turbo</code>, <code>gpt-3.5-turbo-completions</code></td><td><code>gpt-5.6-terra</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>gpt-4-0613</code> | <code>gpt-4</code>, <code>gpt-4-0613-completions</code>, <code>gpt-4-completions</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>gpt-4-1106-preview</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>gpt-4-turbo</code> | <code>gpt-4-turbo-2024-04-09</code>, <code>gpt-4-turbo-completions</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>gpt-4.1-nano</code> | <code>gpt-4.1-nano-2025-04-14</code></td><td><code>gpt-5.6-luna</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>gpt-4o-2024-05-13</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>gpt-image-1</code></td><td><code>gpt-image-2</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>o1-2024-12-17</code> | <code>o1</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>o1-pro-2025-03-19</code> | <code>o1-pro</code></td><td><code>gpt-5.6-sol</code> (<code>reasoning.mode: pro</code>)</td></tr>
+            <tr><td>October 23, 2026</td><td><code>o3-mini-2025-01-31</code> | <code>o3-mini</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>ft-o4-mini-2025-04-16</code></td><td><code>gpt-5.6-terra</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>o4-mini-2025-04-16</code> | <code>o4-mini</code></td><td><code>gpt-5.6-terra</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>We are also removing fine-tuned versions as below:</p>
+      <div class="md:max-w-5xl mx-auto overflow-x-auto">
+        <table class="w-full ">
+          <thead><tr><th>Shutdown date</th><th>Model snapshot</th><th>Recommended replacement base model</th></tr></thead>
+          <tbody>
+            <tr><td>October 23, 2026</td><td><code>ft-gpt-3.5-turbo</code></td><td><code>gpt-5.4-mini</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>ft-gpt-4</code></td><td><code>gpt-5.5</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>ft-gpt-4.1-nano-2025-04-14</code></td><td><code>gpt-5.4-nano</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>ft-babbage-002</code></td><td><code>gpt-5.4-mini</code></td></tr>
+            <tr><td>October 23, 2026</td><td><code>ft-davinci-002</code></td><td><code>gpt-5.4-mini</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="past-deprecations"><span>Past deprecations</span></h2>
+      <p>Past deprecations are listed below, with the most recent announcements at the top.</p>
+      <h3 id="2026-04-22-legacy-gpt-model-snapshots-july-2026-shutdown" class="group"><span class="min-w-0">2026-04-22: Legacy GPT model snapshots (July 2026 shutdown)</span></h3>
+      <p>On April 22, 2026, we announced the deprecation of the following older OpenAI models. Access to these models was shut down on July 23, 2026.</p>
+      <div class="md:max-w-5xl mx-auto overflow-x-auto">
+        <table class="w-full ">
+          <thead><tr><th>Shutdown date</th><th>Model snapshot</th><th>Substitute model</th></tr></thead>
+          <tbody>
+            <tr><td>July 23, 2026</td><td><code>computer-use-preview-2025-03-11</code> | <code>computer-use-preview</code></td><td><code>gpt-5.6-terra</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-4o-mini-search-preview-2025-03-11</code></td><td><code>gpt-5.6-terra</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-4o-mini-tts-2025-03-20</code></td><td><code>gpt-4o-mini-tts-2025-12-15</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-4o-search-preview-2025-03-11</code></td><td><code>gpt-5.6-terra</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-5-chat-latest</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-5-codex</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-5.1-chat-latest</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-5.1-codex</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-5.1-codex-max</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-5.1-codex-mini</code></td><td><code>gpt-5.6-terra</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-audio-mini-2025-10-06</code></td><td><code>gpt-audio-1.5</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-realtime-mini-2025-10-06</code></td><td><code>gpt-realtime-2.1-mini</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>o3-deep-research-2025-06-26</code> | <code>o3-deep-research</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>o4-mini-deep-research-2025-06-26</code> | <code>o4-mini-deep-research</code></td><td><code>gpt-5.6-sol</code></td></tr>
+            <tr><td>July 23, 2026</td><td><code>gpt-5.2-codex</code></td><td><code>gpt-5.6-sol</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="2026-03-24-sora-2-video-generation-models-and-videos-api" class="group"><span class="min-w-0">2026-03-24: Sora 2 video generation models and Videos API</span></h3>
+      <p>On March 24th, 2026, we notified developers using the Videos API and Sora 2 video generation model aliases and snapshots of their deprecation and removal from the API on September 24, 2026.</p>
+      <div class="md:max-w-5xl mx-auto overflow-x-auto">
+        <table class="w-full ">
+          <thead><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr></thead>
+          <tbody>
+            <tr><td>2026-09-24</td><td>Videos API</td><td>---</td></tr>
+            <tr><td>2026-09-24</td><td><code>sora-2</code></td><td>---</td></tr>
+            <tr><td>2026-09-24</td><td><code>sora-2-pro</code></td><td>---</td></tr>
+            <tr><td>2026-09-24</td><td><code>sora-2-2025-10-06</code></td><td>---</td></tr>
+            <tr><td>2026-09-24</td><td><code>sora-2-2025-12-08</code></td><td>---</td></tr>
+            <tr><td>2026-09-24</td><td><code>sora-2-pro-2025-10-06</code></td><td>---</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="2025-08-20-assistants-api" class="group"><span class="min-w-0">2025-08-20: Assistants API</span></h3>
+      <p>On August 26th, 2025, we notified developers using the Assistants API of its deprecation and removal from the API one year later, on August 26, 2026.</p>
+      <div class="md:max-w-5xl mx-auto overflow-x-auto">
+        <table class="w-full ">
+          <thead><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr></thead>
+          <tbody><tr><td>2026‑08‑26</td><td>Assistants API</td><td>Responses API and Conversations API</td></tr></tbody>
+        </table>
+      </div>
     </main>
   </body>
 </html>
