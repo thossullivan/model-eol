@@ -245,6 +245,25 @@ fs.writeFileSync(disabledIssueConfig, JSON.stringify({ issues: { enabled: false 
 const disabled = await issueRun({ configPath: disabledIssueConfig })
 assert(!disabled.decisions.some(item => item.group.kind === 'issue') && issueGithub.callsFor('POST', '/issues').length === 1, 'issues.enabled false suppresses issue maintenance')
 
+const referenceRepo = makeRepo({
+  name: 'model-reference',
+  files: { 'prompts/evals.yaml': 'providers:\n  - anthropic:messages:claude-sonnet-4-20250514\n' },
+})
+const referenceGithub = new FakeGitHub()
+const referenceResult = await runBot({
+  repo: 'example/model-reference',
+  targetDir: referenceRepo.work,
+  token: 'test-token',
+  transport: referenceGithub.transport.bind(referenceGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const referenceIssue = referenceResult.decisions.find(item => item.group.kind === 'issue' && item.action === 'create')
+assert(referenceIssue, 'retired model-reference without a direct API signal creates an issue')
+assert(referenceIssue.body.includes('not-direct-api'), 'model-reference issue carries the not-direct-api reason')
+assert(referenceIssue.body.includes('`claude-sonnet-4-6`'), 'model-reference issue surfaces the feed replacement')
+assert(!referenceResult.decisions.some(item => item.group.kind === 'pr'), 'retired model-reference never creates a PR')
+
 const ignoreRepo = makeRepo({
   name: 'ignores',
   files: {

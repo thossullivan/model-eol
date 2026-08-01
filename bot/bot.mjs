@@ -35,6 +35,7 @@ const VENDORED_FEEDS = path.join(ROOT, 'feeds')
 const PLAN_SCHEMA = 'model-eol.plan/0.1'
 const BOT_SCHEMA = 'model-eol.bot/0.1'
 const ISSUE_REASONS = new Set([
+  'not-direct-api',
   'no-replacement',
   'replacement-unresolved',
   'replacement-retiring',
@@ -377,6 +378,9 @@ export const buildIssueBody = ({ group, now = new Date() }) => {
     `- Reason: ${group.issues[0].reason}`,
     `- Status: ${group.issues[0].status ?? 'unresolved'}`,
     `- Shutdown: ${group.shutdown ?? 'not scheduled'}`,
+    ...(group.issues[0].replacement
+      ? [`- Replacement per feed as of ${now.toISOString().slice(0, 10)}: \`${group.issues[0].replacement}\`. Treat as a snapshot in time, not a constant.`]
+      : []),
     `- Recorded on: ${now.toISOString().slice(0, 10)}`,
     '',
     '## Evidence',
