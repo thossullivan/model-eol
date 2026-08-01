@@ -24,8 +24,9 @@ vulnerability feeds. This is the model version.
 ## What's here
 
 - **`SPEC.md`** - the feed format (model-eol/0.1): id, aliases, announced, shutdown,
-  replacement, and `distributions` for per-channel lifecycles. Small enough that a
-  provider could serve it at `/.well-known/model-eol.json` in an afternoon.
+  replacement, `distributions` for per-channel lifecycles, and optional publisher
+  policy floors. Small enough that a provider could serve it at
+  `/.well-known/model-eol.json` in an afternoon.
 - **`feeds/`** - seed datasets for OpenAI and Anthropic, compiled 2026-07-25 from the
   providers' deprecation pages, every entry with a source URL. Illustrative; verify
   before acting.
@@ -44,13 +45,19 @@ node check.mjs path/to/your/repo --days 90 --scope direct
 node check.mjs path/to/your/repo --days 90 --via azure-ai-foundry
 # machine-readable output for CI annotations
 node check.mjs . --json
-# direct/cloud/gateway inventory without failing CI
+# PR CI: inspect only lines this change adds relative to the base ref
+node check.mjs check . --changed origin/main --days 90
+# direct/cloud/gateway inventory without failing CI (JSON is the default; --json is an alias)
 node check.mjs inventory path/to/your/repo --json
+# CycloneDX 1.6 ML-BOM for tracked model IDs (candidates and resolver hints omitted)
+node check.mjs inventory path/to/your/repo --format cyclonedx > model-bom.json
 # retirement schedule for tracked references, plus unresolved cloud/gateway hints
 node check.mjs schedule path/to/your/repo
 # GitHub Actions annotations or Markdown alerts
 node check.mjs alert path/to/your/repo --scope direct
 node check.mjs alert path/to/your/repo --format markdown
+# Shields endpoint JSON for a status badge
+node check.mjs alert path/to/your/repo --format badge > model-eol-badge.json
 # JSON migration plan - only high-confidence direct API replacements are patchable
 node check.mjs plan path/to/your/repo --days 90 > plan.json
 # Verify hashes and apply the plan; preview with --dry-run
@@ -68,6 +75,12 @@ Sample output against a fixture:
 
 Exit 1 on findings at or past the threshold - wire it into CI as-is. `plan` always
 emits JSON; `apply` refuses changed lines and exits 1 when any item cannot be applied.
+The `--changed` form is for PR CI: it answers "this PR ADDS a dependency on a model
+that already has a death date" while leaving unchanged legacy references to the
+normal full-repository check.
+
+The badge JSON can be committed somewhere CI-accessible or served from a gist, then
+used with the [Shields endpoint documentation](https://shields.io/endpoint).
 
 ## Direct-first inventory
 

@@ -47,7 +47,7 @@
         { "$ref": "#/definitions/location" },
         {
           "type": "object",
-          "required": ["kind", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "evidence", "status", "shutdown", "via", "days", "replacement", "source"],
+          "required": ["kind", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "evidence", "status", "shutdown", "via", "days", "safe_until", "replacement", "source"],
           "properties": {
             "kind": { "const": "model-reference" },
             "matched": { "type": "string" },
@@ -61,8 +61,19 @@
             "shutdown": { "type": ["string", "null"] },
             "via": { "type": ["string", "null"] },
             "days": { "type": ["integer", "null"] },
+            "safe_until": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
             "replacement": { "type": ["string", "null"] },
-            "source": { "type": ["string", "null"] }
+            "source": { "type": ["string", "null"] },
+            "policy": {
+              "type": ["object", "null"],
+              "required": ["min_notice_days", "source"],
+              "properties": {
+                "min_notice_days": { "type": "integer", "minimum": 0 },
+                "source": { "type": "string", "format": "uri" }
+              },
+              "additionalProperties": false
+            },
+            "feed_generated": { "type": ["string", "null"], "format": "date-time" }
           }
         }
       ]
