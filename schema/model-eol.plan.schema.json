@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.invalid/model-eol/0.1/plan.schema.json",
+  "title": "model-eol migration plan",
+  "description": "Deterministic, hash-guarded migration plan emitted by `model-eol plan`. Draft 0.1 - the $id is a placeholder until the repo is public.",
+  "type": "object",
+  "required": ["plan_schema", "generated", "threshold_days", "via", "items", "issues"],
+  "properties": {
+    "plan_schema": { "const": "model-eol.plan/0.1" },
+    "generated": { "type": "string", "format": "date-time" },
+    "threshold_days": { "type": "number" },
+    "via": { "type": ["string", "null"] },
+    "items": { "type": "array", "items": { "$ref": "#/definitions/item" } },
+    "issues": { "type": "array", "items": { "$ref": "#/definitions/issue" } }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "item": {
+      "type": "object",
+      "required": ["file", "line", "occurrence", "matched", "expected_line_sha256", "id", "publisher", "replacement", "shutdown", "days", "status", "sources", "notes"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "occurrence": { "type": "integer", "minimum": 0 },
+        "matched": { "type": "string", "minLength": 1 },
+        "expected_line_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "id": { "type": "string", "minLength": 1 },
+        "publisher": { "type": "string", "minLength": 1 },
+        "replacement": { "type": "string", "minLength": 1 },
+        "shutdown": { "type": "string" },
+        "days": { "type": "integer" },
+        "status": { "enum": ["retired", "retiring"] },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "required": ["file", "line", "reason"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "matched": { "type": "string" },
+        "id": { "type": "string" },
+        "publisher": { "type": "string" },
+        "usage": { "enum": ["direct-api", "cloud-provider", "gateway", "model-reference"] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "status": { "enum": ["retired", "retiring", "scheduled", "watch", "ok"] },
+        "shutdown": { "type": ["string", "null"] },
+        "via": { "type": ["string", "null"] },
+        "days": { "type": ["integer", "null"] },
+        "replacement": { "type": ["string", "null"] },
+        "provider": { "type": "string" },
+        "reason": { "type": "string", "minLength": 1 },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

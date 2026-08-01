@@ -31,7 +31,8 @@ vulnerability feeds. This is the model version.
   before acting.
 - **`schema/`** - JSON Schema for the draft feed format.
 - **`check.mjs`** - zero-dependency reference CLI. It can fail CI on tracked model
-  IDs, emit a repo-level model inventory, or produce a deprecation schedule.
+  IDs, emit a repo-level model inventory, produce a deprecation schedule, or build
+  and safely apply a migration plan.
 
 ## Try it
 
@@ -50,6 +51,11 @@ node check.mjs schedule path/to/your/repo
 # GitHub Actions annotations or Markdown alerts
 node check.mjs alert path/to/your/repo --scope direct
 node check.mjs alert path/to/your/repo --format markdown
+# JSON migration plan - only high-confidence direct API replacements are patchable
+node check.mjs plan path/to/your/repo --days 90 > plan.json
+# Verify hashes and apply the plan; preview with --dry-run
+node check.mjs apply --plan plan.json --dry-run
+node check.mjs apply --plan plan.json
 ```
 
 Sample output against a fixture:
@@ -60,7 +66,8 @@ Sample output against a fixture:
 · app.py:3  gpt-5.6-sol               no retirement scheduled
 ```
 
-Exit 1 on findings at or past the threshold - wire it into CI as-is.
+Exit 1 on findings at or past the threshold - wire it into CI as-is. `plan` always
+emits JSON; `apply` refuses changed lines and exits 1 when any item cannot be applied.
 
 ## Direct-first inventory
 
