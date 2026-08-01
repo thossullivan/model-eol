@@ -7,10 +7,38 @@
     "model-eol": "./check.mjs"
   },
   "scripts": {
-    "test": "node test/run.mjs"
+    "test": "node test/run.mjs && node refresh/test/run.mjs && node bot/test/run.mjs && node scripts/test-feed-changelog.mjs"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thossullivan/model-eol.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thossullivan/model-eol/issues"
+  },
+  "homepage": "https://github.com/thossullivan/model-eol",
   "license": "MIT",
   "author": "Tom Sullivan",
+  "keywords": [
+    "model deprecation",
+    "eol",
+    "llm",
+    "dependabot",
+    "sbom",
+    "model lifecycle",
+    "ai models",
+    "software bill of materials"
+  ],
+  "files": [
+    "check.mjs",
+    "lib/",
+    "feeds/",
+    "schema/",
+    "SPEC.md",
+    "README.md",
+    "LICENSE",
+    "action.yml"
+  ],
   "engines": {
     "node": ">=20"
   }
