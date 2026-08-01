@@ -42,6 +42,58 @@ function normaliseUnconfirmed(options, generated) {
   return result.sort((a, b) => a.id.localeCompare(b.id))
 }
 
+function distributionIndex(model) {
+  const index = new Map()
+  for (const distribution of model?.distributions ?? []) {
+    if (!distribution?.via || index.has(distribution.via)) continue
+    index.set(distribution.via, distribution)
+  }
+  return index
+}
+
+function normaliseUnconfirmedDistributions(options) {
+  const supplied = options.unconfirmedDistributions ?? options.unconfirmedDistribution ?? []
+  const values = supplied instanceof Set ? [...supplied] : supplied
+  return values
+    .filter(Boolean)
+    .map(item => typeof item === 'string'
+      ? { id: item, via: 'aws-bedrock' }
+      : item)
+    .sort((a, b) => `${a.publisher ?? ''}:${a.id ?? ''}`.localeCompare(`${b.publisher ?? ''}:${b.id ?? ''}`))
+}
+
+function normaliseNoPublisherFeed(options) {
+  const supplied = options.noPublisherFeed ?? options.noPublisherFeeds ?? []
+  const values = supplied instanceof Set ? [...supplied] : supplied
+  return values
+    .filter(Boolean)
+    .map(item => typeof item === 'string' ? { bedrockId: item, normalizedId: item } : item)
+    .sort((a, b) => String(a.bedrockId ?? '').localeCompare(String(b.bedrockId ?? '')))
+}
+
+function distributionChanges(oldModel, model, publisher) {
+  const oldIndex = distributionIndex(oldModel)
+  const nextIndex = distributionIndex(model)
+  const vias = new Set([...oldIndex.keys(), ...nextIndex.keys()])
+  const changes = []
+  for (const via of vias) {
+    const old = oldIndex.get(via)
+    const next = nextIndex.get(via)
+    if (!old && next) {
+      changes.push({ publisher, id: model.id, via, kind: 'added', old, next })
+      continue
+    }
+    if (old && !next) {
+      changes.push({ publisher, id: model.id, via, kind: 'removed', old, next })
+      continue
+    }
+    if (old.announced !== next.announced || old.shutdown !== next.shutdown) {
+      changes.push({ publisher, id: model.id, via, kind: 'changed', old, next })
+    }
+  }
+  return changes
+}
+
 /**
  * Compare a committed feed with a generated feed.
  *
@@ -55,6 +107,8 @@ export function compareFeeds(committed, generated, options = {}) {
   const shutdownChanges = []
   const replacementChanges = []
   const newlyAnnounced = []
+  const distributorChanges = []
+  const publisher = options.publisher ?? generated.publisher
 
   for (const model of generated.models ?? []) {
     const old = findModel(oldIndex, model)
@@ -68,6 +122,7 @@ export function compareFeeds(committed, generated, options = {}) {
         replacementChanges.push({ id: model.id, old: old.replacement, next: model.replacement })
       }
     }
+    distributorChanges.push(...distributionChanges(old, model, publisher))
     if (model.announced && !old?.announced) newlyAnnounced.push(model)
   }
 
@@ -77,6 +132,10 @@ export function compareFeeds(committed, generated, options = {}) {
   shutdownChanges.sort(sortById)
   replacementChanges.sort(sortById)
   newlyAnnounced.sort(sortById)
+  distributorChanges.sort((a, b) => `${a.publisher}:${a.id}:${a.via}`.localeCompare(`${b.publisher}:${b.id}:${b.via}`))
+
+  const unconfirmedDistributions = normaliseUnconfirmedDistributions(options)
+  const noPublisherFeed = normaliseNoPublisherFeed(options)
 
   return {
     added,
@@ -88,17 +147,60 @@ export function compareFeeds(committed, generated, options = {}) {
     newlyAnnouncedDeprecations: newlyAnnounced,
     unconfirmed,
     unconfirmedEntries: unconfirmed,
+    distributionChanges: distributorChanges,
+    distributionDateChanges: distributorChanges,
+    unconfirmedDistributions,
+    noPublisherFeed,
+    noPublisherFeeds: noPublisherFeed,
     changed: Boolean(
       added.length ||
       shutdownChanges.length ||
       replacementChanges.length ||
       newlyAnnounced.length ||
-      unconfirmed.length,
+      unconfirmed.length ||
+      distributorChanges.length ||
+      unconfirmedDistributions.length ||
+      noPublisherFeed.length,
     ),
   }
 }
 
 const dateLine = model => `announced: ${code(model.announced)}; shutdown: ${code(model.shutdown)}`
+
+function distributionDateLine(distribution) {
+  return `announced: ${code(distribution?.announced)}; EOL: ${code(distribution?.shutdown)}`
+}
+
+function distributionModelLabel(change) {
+  return change.publisher ? `${change.publisher}/${change.id}` : change.id
+}
+
+function renderDistributionChanges(result) {
+  const lines = []
+  for (const change of result.distributionChanges) {
+    const label = code(distributionModelLabel(change))
+    if (change.kind === 'added') {
+      lines.push(`- ${label} - ${code(change.via)} dates added; ${distributionDateLine(change.next)}`)
+    } else if (change.kind === 'removed') {
+      lines.push(`- ${label} - ${code(change.via)} distribution removed`)
+    } else {
+      if (change.old.announced !== change.next.announced) {
+        lines.push(`- ${label} - ${code(change.via)} legacy date moved ${code(change.old.announced)} -> ${code(change.next.announced)}`)
+      }
+      if (change.old.shutdown !== change.next.shutdown) {
+        lines.push(`- ${label} - ${code(change.via)} EOL date moved ${code(change.old.shutdown)} -> ${code(change.next.shutdown)}`)
+      }
+    }
+  }
+  for (const item of result.unconfirmedDistributions) {
+    const label = item.publisher ? `${item.publisher}/${item.id}` : item.id
+    lines.push(`- ${code(label)} - ${code(item.via ?? 'aws-bedrock')} distribution unconfirmed; retained from committed feed`)
+  }
+  for (const item of result.noPublisherFeed) {
+    lines.push(`- ${code(item.bedrockId)} - no publisher feed for normalized id ${code(item.normalizedId)}`)
+  }
+  return lines
+}
 
 function section(title, lines) {
   return [`## ${title}`, '', ...(lines.length ? lines : ['- None']), ''].join('\n')
@@ -124,6 +226,7 @@ function renderResult(result, publisher) {
     'Newly announced deprecations',
     result.newlyAnnounced.map(model => `- ${code(model.id)} - ${dateLine(model)}; replacement: ${code(model.replacement)}`),
   ))
+  lines.push(section('Distribution changes', renderDistributionChanges(result)))
   lines.push(section(
     'Unconfirmed entries',
     result.unconfirmed.map(model => `- ${code(model.id)} - retained because neither source confirmed it`),

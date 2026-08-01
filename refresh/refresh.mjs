@@ -7,6 +7,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compareFeeds, renderSemanticDiff } from './diff.mjs'
 import {
+  DISTRIBUTORS,
+  loadDistributorSource,
+  mergeBedrockDistributions,
+} from './distributors.mjs'
+import {
   PROVIDERS,
   loadProviderSources,
   mergeFeed,
@@ -20,6 +25,8 @@ const VALIDATOR = path.join(ROOT, 'scripts', 'validate-feeds.mjs')
 export function parseArgs(argv = process.argv.slice(2)) {
   const options = {
     provider: 'all',
+    providerSpecified: false,
+    distributor: undefined,
     check: false,
     out: path.join(ROOT, 'feeds'),
     fixtures: undefined,
@@ -32,11 +39,21 @@ export function parseArgs(argv = process.argv.slice(2)) {
     } else if (arg === '--provider' || arg === '--out' || arg === '--fixtures') {
       const value = argv[++i]
       if (!value) throw new Error(`${arg} requires a value`)
-      if (arg === '--provider') options.provider = value
+      if (arg === '--provider') {
+        options.provider = value
+        options.providerSpecified = true
+      }
       if (arg === '--out') options.out = value
       if (arg === '--fixtures') options.fixtures = value
+    } else if (arg === '--distributor') {
+      const value = argv[++i]
+      if (!value) throw new Error('--distributor requires a value')
+      options.distributor = value
     } else if (arg.startsWith('--provider=')) {
       options.provider = arg.slice('--provider='.length)
+      options.providerSpecified = true
+    } else if (arg.startsWith('--distributor=')) {
+      options.distributor = arg.slice('--distributor='.length)
     } else if (arg.startsWith('--out=')) {
       options.out = arg.slice('--out='.length)
     } else if (arg.startsWith('--fixtures=')) {
@@ -51,6 +68,9 @@ export function parseArgs(argv = process.argv.slice(2)) {
   if (!['openai', 'anthropic', 'all'].includes(options.provider)) {
     throw new Error(`--provider must be openai, anthropic, or all`)
   }
+  if (options.distributor && !DISTRIBUTORS[options.distributor]) {
+    throw new Error(`--distributor must be aws-bedrock`)
+  }
   options.providers = options.provider === 'all' ? ['openai', 'anthropic'] : [options.provider]
   options.out = path.resolve(options.out)
   if (options.fixtures) options.fixtures = path.resolve(options.fixtures)
@@ -59,8 +79,9 @@ export function parseArgs(argv = process.argv.slice(2)) {
 
 export function usage() {
   return [
-    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|all] [--check] [--out feeds/] [--fixtures DIR]',
+    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|all] [--distributor aws-bedrock] [--check] [--out feeds/] [--fixtures DIR]',
     '',
+    '--distributor aws-bedrock may run standalone against the selected committed publisher feeds, or compose with --provider.',
     '--check exits 0 when the semantic diff is empty, 3 when it has changes, and 1 on failure.',
   ].join('\n')
 }
@@ -137,6 +158,25 @@ export async function generateProviderFeed(providerName, options = {}) {
   }
 }
 
+function clone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function generateCommittedFeed(providerName, options = {}) {
+  const provider = PROVIDERS[providerName]
+  if (!provider) throw new Error(`unknown provider ${providerName}`)
+  const committed = readCommitted(provider)
+  return {
+    provider,
+    committed,
+    feed: {
+      ...clone(committed),
+      generated: options.generated ?? new Date().toISOString(),
+    },
+    unconfirmedIds: [],
+  }
+}
+
 function combinedDiff(items) {
   if (items.length === 1) return items[0].markdown
   const output = ['# Feed refresh diff', '']
@@ -159,26 +199,46 @@ function writeGenerated(items, out) {
 
 export async function run(options) {
   const generated = []
+  const generatedTimestamp = process.env.MODEL_EOL_GENERATED
+  const shouldRefreshProviders = !options.distributor || options.providerSpecified
   for (const name of options.providers) {
-    generated.push(await generateProviderFeed(name, {
-      fixtures: options.fixtures,
-      generated: process.env.MODEL_EOL_GENERATED,
-    }))
+    generated.push(shouldRefreshProviders
+      ? await generateProviderFeed(name, {
+        fixtures: options.fixtures,
+        generated: generatedTimestamp,
+      })
+      : generateCommittedFeed(name, { generated: generatedTimestamp }))
+  }
+
+  let distributorState
+  if (options.distributor) {
+    const source = await loadDistributorSource(options.distributor, { fixtures: options.fixtures })
+    distributorState = mergeBedrockDistributions(generated, {
+      records: source.records,
+      sourceUrl: source.sourceUrl,
+      via: options.distributor,
+    })
+    for (const [index, item] of generated.entries()) item.feed = distributorState.feeds[index]
   }
 
   validateGeneratedFeeds(generated)
 
-  const diffs = generated.map(item => ({
-    provider: item.provider,
-    result: compareFeeds(item.committed, item.feed, {
+  const diffs = generated.map((item, index) => {
+    const unconfirmedDistributions = distributorState?.unconfirmedDistributions
+      .filter(distribution => distribution.publisher === item.provider.publisher) ?? []
+    const noPublisherFeed = index === 0 ? distributorState?.noPublisherFeed ?? [] : []
+    const diffOptions = {
       unconfirmed: item.unconfirmedIds,
+      unconfirmedDistributions,
+      noPublisherFeed,
       publisher: item.provider.publisher,
-    }),
-    markdown: renderSemanticDiff(item.committed, item.feed, {
-      unconfirmed: item.unconfirmedIds,
-      publisher: item.provider.publisher,
-    }),
-  }))
+    }
+    return {
+      provider: item.provider,
+      result: compareFeeds(item.committed, item.feed, diffOptions),
+      markdown: renderSemanticDiff(item.committed, item.feed, diffOptions),
+    }
+  })
   const changed = diffs.some(item => item.result.changed)
   const markdown = combinedDiff(diffs)
   process.stdout.write(markdown)
