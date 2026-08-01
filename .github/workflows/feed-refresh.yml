@@ -51,6 +51,8 @@ jobs:
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "providers=$providers" >> "$GITHUB_OUTPUT"
+          echo "bedrock=$bedrock" >> "$GITHUB_OUTPUT"
 
       - name: Regenerate feeds and README freshness
         if: steps.check.outputs.changed == 'true'
@@ -78,9 +80,9 @@ jobs:
           {
             echo "Automated weekly refresh. Review the semantic diff - a broken parse reads as a nonsense diff, not silently wrong data."
             echo
-            cat provider-diff.md
-            echo
-            cat bedrock-diff.md
+            # Include only the sources that materially changed.
+            if [ "${{ steps.check.outputs.providers }}" = "3" ]; then cat provider-diff.md; echo; fi
+            if [ "${{ steps.check.outputs.bedrock }}" = "3" ]; then cat bedrock-diff.md; fi
           } > pr-body.md
           gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md --label model-eol || \
             gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md

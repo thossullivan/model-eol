@@ -152,10 +152,7 @@ export function compareFeeds(committed, generated, options = {}) {
     unconfirmedDistributions,
     noPublisherFeed,
     noPublisherFeeds: noPublisherFeed,
-    // Informational sections (unconfirmed entries, unconfirmed distributions,
-    // no-publisher-feed models) never alter the generated files, so they must
-    // not trip the exit-3 "PR-worthy change" signal - a keyless weekly run
-    // would otherwise open a no-op PR forever. They still render in the diff.
+    // Informational sections never alter the files, so they never trip exit 3.
     changed: Boolean(
       added.length ||
       shutdownChanges.length ||
@@ -204,31 +201,40 @@ function renderDistributionChanges(result) {
 }
 
 function section(title, lines) {
-  return [`## ${title}`, '', ...(lines.length ? lines : ['- None']), ''].join('\n')
+  // Empty sections render as nothing, not "- None".
+  if (!lines.length) return ''
+  return [`## ${title}`, '', ...lines, ''].join('\n')
 }
 
 function renderResult(result, publisher) {
   const lines = ['# Feed refresh diff', '']
   if (publisher) lines.push(`Publisher: ${publisher}`, '')
+  const pushSection = rendered => { if (rendered) lines.push(rendered) }
 
-  lines.push(section(
+  pushSection(section(
     'Models added',
-    result.added.map(model => `- ${code(model.id)} - ${dateLine(model)}; replacement: ${code(model.replacement)}`),
+    result.added.filter(model => model.announced || model.shutdown)
+      .map(model => `- ${code(model.id)} - ${dateLine(model)}; replacement: ${code(model.replacement)}`),
   ))
-  lines.push(section(
+  const currentAdded = result.added.filter(model => !model.announced && !model.shutdown)
+  pushSection(section(
+    'Current models added - no retirement scheduled',
+    currentAdded.map(model => `- ${code(model.id)}`),
+  ))
+  pushSection(section(
     'Shutdown date changes',
     result.shutdownChanges.map(change => `- ${code(change.id)} - ${code(change.old)} -> ${code(change.next)}`),
   ))
-  lines.push(section(
+  pushSection(section(
     'Replacement changes',
     result.replacementChanges.map(change => `- ${code(change.id)} - ${code(change.old)} -> ${code(change.next)}`),
   ))
-  lines.push(section(
+  pushSection(section(
     'Newly announced deprecations',
     result.newlyAnnounced.map(model => `- ${code(model.id)} - ${dateLine(model)}; replacement: ${code(model.replacement)}`),
   ))
-  lines.push(section('Distribution changes', renderDistributionChanges(result)))
-  lines.push(section(
+  pushSection(section('Distribution changes', renderDistributionChanges(result)))
+  pushSection(section(
     'Unconfirmed entries',
     result.unconfirmed.map(model => `- ${code(model.id)} - retained because neither source confirmed it`),
   ))
