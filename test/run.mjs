@@ -388,6 +388,36 @@ const missingReplacementPlan = run(['plan', gateDir, '--feeds', gateFeeds, '--da
 const missingReplacementJson = JSON.parse(missingReplacementPlan.out)
 assert(!missingReplacementJson.items.length && missingReplacementJson.issues.some(issue => issue.reason === 'no-replacement'), 'missing replacement is not patchable')
 
+const ar6Dir = path.join(tempRoot, 'ar6-proximity')
+const ar6Feeds = path.join(tempRoot, 'ar6-feeds')
+fs.mkdirSync(ar6Dir)
+fs.mkdirSync(ar6Feeds)
+fs.writeFileSync(path.join(ar6Dir, 'cloud-mixed.ts'), 'import OpenAI from "openai";\nconst model = "ar6-cloud-mixed";\n\n\nconst azureDeployment = new AzureOpenAI({ deployment: "chat-prod" });\n')
+fs.writeFileSync(path.join(ar6Dir, 'direct-call.py'), 'from openai import OpenAI\nclient = OpenAI()\nclient.chat.completions.create(model="ar6-direct-call")\n')
+fs.writeFileSync(path.join(ar6Dir, 'gateway.py'), 'OPENROUTER_API_KEY = "test-key"\nMODEL = "ar6-gateway"\n')
+fs.writeFileSync(path.join(ar6Feeds, 'ar6.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'test',
+  generated: '2026-08-01T00:00:00Z',
+  source: 'https://example.invalid/ar6',
+  models: [
+    { id: 'ar6-cloud-mixed', shutdown: '2026-07-01', replacement: 'ar6-replacement' },
+    { id: 'ar6-direct-call', shutdown: '2026-07-01', replacement: 'ar6-replacement' },
+    { id: 'ar6-gateway', shutdown: '2026-07-01', replacement: 'ar6-replacement' },
+    { id: 'ar6-replacement' },
+  ],
+}))
+const ar6Inventory = JSON.parse(run(['inventory', ar6Dir, '--feeds', ar6Feeds, '--json']).out)
+const ar6Ref = (file, matched) => ar6Inventory.model_references.find(ref => ref.file.endsWith(file) && ref.matched === matched)
+assert(ar6Ref('cloud-mixed.ts', 'ar6-cloud-mixed')?.usage === 'direct-api' && ar6Ref('cloud-mixed.ts', 'ar6-cloud-mixed')?.confidence === 'medium', 'AR-6 competing Azure signal caps nearby direct usage at medium confidence')
+assert(ar6Ref('direct-call.py', 'ar6-direct-call')?.usage === 'direct-api' && ar6Ref('direct-call.py', 'ar6-direct-call')?.confidence === 'high', 'AR-6 same-line direct call remains high confidence without competing signals')
+assert(ar6Ref('gateway.py', 'ar6-gateway')?.usage === 'gateway' && ar6Ref('gateway.py', 'ar6-gateway')?.confidence === 'medium', 'AR-6 gateway-only usage remains medium confidence')
+const ar6Plan = JSON.parse(run(['plan', ar6Dir, '--feeds', ar6Feeds, '--days', '90']).out)
+assert(!ar6Plan.items.some(item => item.file.endsWith('cloud-mixed.ts')), 'AR-6 cloud-mixed reference is never patchable')
+assert(ar6Plan.issues.some(issue => issue.file.endsWith('cloud-mixed.ts') && issue.reason === 'not-direct-api' && issue.confidence === 'medium'), 'AR-6 cloud-mixed reference is issue-only')
+assert(ar6Plan.items.some(item => item.file.endsWith('direct-call.py') && item.matched === 'ar6-direct-call'), 'AR-6 same-line direct call remains patchable')
+assert(!ar6Plan.items.some(item => item.file.endsWith('gateway.py')) && ar6Plan.issues.some(issue => issue.file.endsWith('gateway.py') && issue.reason === 'not-direct-api'), 'AR-6 gateway-only reference remains issue-only')
+
 const hash = value => crypto.createHash('sha256').update(value).digest('hex')
 const applyDir = path.join(tempRoot, 'apply')
 fs.mkdirSync(applyDir)

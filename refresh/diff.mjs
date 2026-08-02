@@ -106,6 +106,8 @@ export function compareFeeds(committed, generated, options = {}) {
   const added = []
   const shutdownChanges = []
   const replacementChanges = []
+  const aliasChanges = []
+  const announcementChanges = []
   const newlyAnnounced = []
   const distributorChanges = []
   const publisher = options.publisher ?? generated.publisher
@@ -127,6 +129,16 @@ export function compareFeeds(committed, generated, options = {}) {
       if (old.replacement !== model.replacement) {
         replacementChanges.push({ id: model.id, old: old.replacement, next: model.replacement })
       }
+      if (old.announced !== model.announced && old.announced) {
+        announcementChanges.push({ id: model.id, old: old.announced, next: model.announced })
+      }
+      const oldAliases = new Set(old.aliases ?? [])
+      const nextAliases = new Set(model.aliases ?? [])
+      const addedAliases = [...nextAliases].filter(alias => !oldAliases.has(alias)).sort()
+      const removedAliases = [...oldAliases].filter(alias => !nextAliases.has(alias)).sort()
+      if (addedAliases.length || removedAliases.length) {
+        aliasChanges.push({ id: model.id, added: addedAliases, removed: removedAliases })
+      }
     }
     distributorChanges.push(...distributionChanges(old, model, publisher))
     if (model.announced && !old?.announced) newlyAnnounced.push(model)
@@ -137,6 +149,8 @@ export function compareFeeds(committed, generated, options = {}) {
   added.sort(sortById)
   shutdownChanges.sort(sortById)
   replacementChanges.sort(sortById)
+  aliasChanges.sort(sortById)
+  announcementChanges.sort(sortById)
   newlyAnnounced.sort(sortById)
   distributorChanges.sort((a, b) => `${a.publisher}:${a.id}:${a.via}`.localeCompare(`${b.publisher}:${b.id}:${b.via}`))
 
@@ -149,6 +163,9 @@ export function compareFeeds(committed, generated, options = {}) {
     shutdownChanges,
     shutdownDateChanges: shutdownChanges,
     replacementChanges,
+    aliasChanges,
+    announcedChanges: announcementChanges,
+    announcementChanges,
     newlyAnnounced,
     newlyAnnouncedDeprecations: newlyAnnounced,
     unconfirmed,
@@ -163,6 +180,8 @@ export function compareFeeds(committed, generated, options = {}) {
       added.length ||
       shutdownChanges.length ||
       replacementChanges.length ||
+      aliasChanges.length ||
+      announcementChanges.length ||
       newlyAnnounced.length ||
       distributorChanges.length,
     ),
@@ -239,6 +258,19 @@ function renderResult(result, publisher) {
   pushSection(section(
     'Replacement changes',
     result.replacementChanges.map(change => `- ${code(change.id)} - ${code(change.old)} -> ${code(change.next)}`),
+  ))
+  pushSection(section(
+    'Alias changes',
+    (result.aliasChanges ?? []).map(change => {
+      const parts = []
+      if (change.added.length) parts.push(`aliases added: ${change.added.map(code).join(', ')}`)
+      if (change.removed.length) parts.push(`aliases removed: ${change.removed.map(code).join(', ')}`)
+      return `- ${code(change.id)} - ${parts.join('; ')}`
+    }),
+  ))
+  pushSection(section(
+    'Announcement date changes',
+    (result.announcementChanges ?? []).map(change => `- ${code(change.id)} - announced date moved ${code(change.old)} -> ${code(change.next)}`),
   ))
   pushSection(section(
     'Newly announced deprecations',

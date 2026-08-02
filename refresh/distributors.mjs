@@ -272,11 +272,23 @@ export const parseVertexLifecycleHtml = parseVertexModelVersionsHtml
 export const parseVertexModelLifecycle = parseVertexModelVersionsHtml
 export const parseVertexModelVersions = parseVertexModelVersionsHtml
 
-/**
- * Convert a Bedrock model ID to the publisher ID used by a feed. Bedrock
- * namespaces are intentionally treated generically so a future provider does
- * not require a parser change just to remove its namespace.
- */
+const PUBLISHER_BY_NAMESPACE = new Map([
+  ['anthropic', 'anthropic'],
+  ['amazon', 'amazon'],
+  ['openai', 'openai'],
+  ['google', 'google'],
+])
+
+function sourceNamespace(value, via) {
+  if (via === 'aws-bedrock') return value.match(/^([^.]+)\./)?.[1].toLowerCase()
+  return value.match(/^publishers\/([^/]+)\/models\//i)?.[1].toLowerCase()
+}
+
+function expectedPublisher(namespace) {
+  return namespace ? PUBLISHER_BY_NAMESPACE.get(namespace) : undefined
+}
+
+/** Convert a Bedrock model ID to the publisher ID used by a feed. */
 export function normalizeBedrockId(value) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new TypeError('Bedrock model id must be a non-empty string')
@@ -357,9 +369,12 @@ function recordForMerge(record, via) {
   if (announced && shutdown && shutdown < announced) {
     throw new Error(`${via} record ${sourceId} has shutdown before announced`)
   }
+  const namespace = sourceNamespace(sourceId, via)
   return {
     idField,
     sourceId,
+    namespace,
+    expectedPublisher: expectedPublisher(namespace),
     normalizedId: isBedrock ? normalizeBedrockId(sourceId) : normalizeVertexId(sourceId),
     announced,
     shutdown,
@@ -430,7 +445,7 @@ export function mergeDistributions(feeds, {
         if (previous && (previous.model !== model || previous.feedIndex !== feedIndex)) {
           throw new Error(`publisher feeds have an ambiguous id or alias: ${key}`)
         }
-        identity.set(key, { feedIndex, model })
+        identity.set(key, { feedIndex, model, publisher: part.publisher })
       }
     }
   }
@@ -440,12 +455,19 @@ export function mergeDistributions(feeds, {
   const matchedRecords = new Map()
   for (const raw of records) {
     const record = recordForMerge(raw, via)
+    const unmatchedItem = { normalizedId: record.normalizedId, [record.idField]: record.sourceId }
+    if (record.idField === 'vertexId') unmatchedItem.modelId = record.sourceId
+    if (record.namespace && !record.expectedPublisher) {
+      unmatched.push(unmatchedItem)
+      continue
+    }
     const target = identity.get(record.normalizedId)
     if (!target) {
-      const item = { normalizedId: record.normalizedId, [record.idField]: record.sourceId }
-      if (record.idField === 'vertexId') item.modelId = record.sourceId
-      unmatched.push(item)
+      unmatched.push(unmatchedItem)
       continue
+    }
+    if (record.expectedPublisher && target.publisher !== record.expectedPublisher) {
+      throw new Error(`${via} namespace ${record.namespace} binds to ${record.expectedPublisher}, but normalized id ${record.normalizedId} matched the ${target.publisher} feed`)
     }
 
     const targetKey = `${target.feedIndex}:${target.model.id}`

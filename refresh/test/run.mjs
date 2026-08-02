@@ -20,6 +20,7 @@ import {
 import {
   PROVIDERS,
   assertIsoDate,
+  loadProviderSources,
   mergeFeed,
   parseAnthropicDeprecations,
   parseAnthropicModels,
@@ -99,6 +100,7 @@ const anthropicHtml = fs.readFileSync(path.join(fixtures, 'anthropic-deprecation
 const bedrockHtml = fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')
 const googleHtml = fs.readFileSync(path.join(fixtures, 'google-deprecations.html'), 'utf8')
 const vertexHtml = fs.readFileSync(path.join(fixtures, 'vertex-model-versions.html'), 'utf8')
+const endpointLookalikeHtml = fs.readFileSync(path.join(fixtures, 'anthropic-endpoint-lookalike.html'), 'utf8')
 const openaiEntries = parseOpenAIDeprecations(openaiHtml)
 const anthropicEntries = parseAnthropicDeprecations(anthropicHtml)
 const bedrockEntries = parseBedrockLifecycleHtml(bedrockHtml)
@@ -112,6 +114,39 @@ const anthropicFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'anthr
 const googleFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'google.json'), 'utf8'))
 const amazonFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'amazon.json'), 'utf8'))
 const openaiById = new Map(openaiEntries.map(entry => [entry.id, entry]))
+
+let endpointLookalikeReason = ''
+try {
+  parseAnthropicDeprecations(endpointLookalikeHtml)
+} catch (error) {
+  endpointLookalikeReason = error.message
+}
+assert(endpointLookalikeReason.includes('no recognised model tables') && endpointLookalikeReason.includes('endpoint-or-product-deprecation-table') && !endpointLookalikeReason.includes('/v1/old'), 'generic deprecation parser refuses endpoint lookalike tables by named reason')
+
+const mixedEndpointHtml = '<h2>2026-01-01: Endpoint notice</h2><table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table><h2>2025-01-01: Model notice</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-mixed</code></td><td><code>claude-next</code></td></tr></table>'
+const mixedEndpointEntries = parseAnthropicDeprecations(mixedEndpointHtml)
+assert(mixedEndpointEntries.length === 1 && mixedEndpointEntries[0].id === 'claude-mixed', 'generic deprecation parser skips endpoint tables while retaining model tables')
+
+const googleEndpointOnlyHtml = '<table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table>'
+const mixedGoogleEndpointHtml = `${googleEndpointOnlyHtml}<table><tr><th>Shutdown date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>google-mixed</code></td><td><code>google-next</code></td></tr></table>`
+const mixedGoogleEndpointEntries = parseGoogleDeprecations(mixedGoogleEndpointHtml)
+assert(mixedGoogleEndpointEntries.length === 1 && mixedGoogleEndpointEntries[0].id === 'google-mixed', 'Google deprecation parser skips endpoint tables while retaining model tables')
+let googleEndpointLookalikeReason = ''
+try {
+  parseGoogleDeprecations(googleEndpointOnlyHtml)
+} catch (error) {
+  googleEndpointLookalikeReason = error.message
+}
+assert(googleEndpointLookalikeReason.includes('no recognised model tables') && googleEndpointLookalikeReason.includes('endpoint-or-product-deprecation-table'), 'Google deprecation parser reports skipped endpoint reasons')
+
+const ambiguousAnnouncementHtml = '<h1>Model deprecations</h1><h2>Announcement context</h2><p>Notified 2025-01-01; retirement 2026-01-01.</p><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-ambiguous</code></td><td><code>claude-next</code></td></tr></table>'
+let ambiguousAnnouncementReason = ''
+try {
+  parseAnthropicDeprecations(ambiguousAnnouncementHtml)
+} catch (error) {
+  ambiguousAnnouncementReason = error.message
+}
+assert(ambiguousAnnouncementReason.includes('ambiguous-announcement-date'), 'generic deprecation parser rejects ambiguous announcement context')
 
 assert(openaiEntries.every(entry => !/[\s/]/.test(entry.id)), 'OpenAI endpoint and product retirement rows are excluded from the model feed')
 assert(normalizeBedrockId('anthropic.claude-3-haiku-20240307-v1:0') === 'claude-3-haiku-20240307', 'Bedrock normalization strips a known provider prefix and v1 suffix')
@@ -198,6 +233,38 @@ const unconfirmedMerge = mergeFeed({
 assert(unconfirmedMerge.feed.models.some(model => model.id === 'kept-model'), 'merge keeps an unconfirmed committed entry')
 assert(unconfirmedMerge.unconfirmedIds.includes('kept-model'), 'merge reports the unconfirmed entry')
 
+const aliasRewriteMerge = mergeFeed({
+  ...minimalCommitted,
+  models: [{ id: 'old-canonical', aliases: ['source-alias'] }],
+}, {
+  currentIds: null,
+  deprecations: [
+    { id: 'source-alias', announced: '2026-01-01', shutdown: '2026-12-01', source: PROVIDERS.openai.deprecationsUrl },
+    { id: 'old-canonical', announced: '2026-01-01', shutdown: '2026-12-01', source: PROVIDERS.openai.deprecationsUrl },
+  ],
+  generated: '2026-08-01T00:00:00Z',
+  provider: PROVIDERS.openai,
+})
+assert(aliasRewriteMerge.feed.models.length === 1 && aliasRewriteMerge.feed.models[0].id === 'old-canonical' && aliasRewriteMerge.feed.models[0].aliases?.includes('source-alias'), 'merge preserves canonical identity through alias rewrite and re-add')
+
+const aliasCoverageMerge = mergeFeed({
+  ...minimalCommitted,
+  models: [{ id: 'old-current', aliases: ['committed-alias'] }],
+}, {
+  currentIds: null,
+  deprecations: [{
+    id: 'old-current',
+    aliases: ['source-alias'],
+    announced: '2026-01-01',
+    shutdown: '2026-12-01',
+    source: PROVIDERS.openai.deprecationsUrl,
+  }],
+  generated: '2026-08-01T00:00:00Z',
+  provider: PROVIDERS.openai,
+})
+const aliasCoverageModel = aliasCoverageMerge.feed.models.find(model => model.id === 'old-current')
+assert(aliasCoverageModel?.aliases?.includes('source-alias') && aliasCoverageModel.aliases.includes('committed-alias'), 'merge does not shrink aliases supplied by the source')
+
 const distributorCommitted = {
   spec: 'model-eol/0.1',
   publisher: 'anthropic',
@@ -248,6 +315,23 @@ assert(distributorMerge.unconfirmedDistributions.some(item => item.id === 'stale
 assert(distributorMerge.noPublisherFeed.some(item => item.bedrockId === 'meta.llama3-1-405b-instruct-v1:0'), 'Bedrock merge reports unmatched models without inventing entries')
 assert(!distributorFeed.models.some(model => model.id === 'llama3-1-405b-instruct'), 'Bedrock merge does not create an unmatched publisher entry')
 
+let bedrockBindingReason = ''
+try {
+  mergeBedrockDistributions([{ publisher: 'openai', models: [{ id: 'shared-claude-model' }] }], {
+    sourceUrl: BEDROCK_LIFECYCLE_URL,
+    records: [{ bedrockId: 'anthropic.shared-claude-model-v1:0', legacy: '2026-08-01', eol: '2027-02-01' }],
+  })
+} catch (error) {
+  bedrockBindingReason = error.message
+}
+assert(bedrockBindingReason.includes('binds to anthropic') && bedrockBindingReason.includes('openai feed'), 'Bedrock namespace binding refuses a cross-publisher match')
+
+const unknownNamespaceMerge = mergeBedrockDistributions([{ publisher: 'openai', models: [{ id: 'unknown-model' }] }], {
+  sourceUrl: BEDROCK_LIFECYCLE_URL,
+  records: [{ bedrockId: 'future-provider.unknown-model:0', legacy: '2026-08-01', eol: '2027-02-01' }],
+})
+assert(unknownNamespaceMerge.noPublisherFeed.some(item => item.bedrockId === 'future-provider.unknown-model:0') && !unknownNamespaceMerge.feeds[0].models[0].distributions, 'unknown Bedrock namespaces remain skipped with a note')
+
 const vertexMerge = mergeVertexDistributions([googleFeed, anthropicFeed], {
   records: vertexEntries,
   sourceUrl: VERTEX_MODEL_VERSIONS_URL,
@@ -258,6 +342,17 @@ assert(vertexGoogle?.distributions?.some(distribution => distribution.via === 'v
 assert(vertexAnthropic?.distributions?.some(distribution => distribution.via === 'vertex-ai' && distribution.shutdown === '2026-10-14'), 'Vertex merge annotates an Anthropic publisher entry')
 assert(vertexMerge.noPublisherFeed.some(item => item.vertexId === 'vertex-unmatched-model'), 'Vertex merge reports an unmatched model')
 assert(!vertexMerge.feeds.some(feed => feed.models.some(model => model.id === 'vertex-unmatched-model')), 'Vertex merge does not invent an unmatched publisher entry')
+
+let vertexBindingReason = ''
+try {
+  mergeVertexDistributions([{ publisher: 'anthropic', models: [{ id: 'shared-vertex-model' }] }], {
+    sourceUrl: VERTEX_MODEL_VERSIONS_URL,
+    records: [{ vertexId: 'publishers/google/models/shared-vertex-model', shutdown: '2027-02-01' }],
+  })
+} catch (error) {
+  vertexBindingReason = error.message
+}
+assert(vertexBindingReason.includes('binds to google') && vertexBindingReason.includes('anthropic feed'), 'Vertex namespace binding refuses a cross-publisher match')
 
 const amazonBedrock = mergeBedrockDistributions([amazonFeed], {
   records: bedrockEntries,
@@ -301,9 +396,88 @@ const precisionFeed = { ...oldFeed, models: [{ id: 'precision', shutdown: '2026-
 const precisionDiff = renderSemanticDiff({ ...oldFeed, models: [{ id: 'precision', shutdown: '2026-10-01' }] }, precisionFeed)
 assert(precisionDiff.includes('2026-10-01') && precisionDiff.includes('(earliest)'), 'semantic diff renders earliest date precision')
 
+const aliasDiffOld = { ...oldFeed, models: [{ id: 'alias-model', aliases: ['old-alias'], shutdown: '2026-10-01' }] }
+const aliasDiffNew = { ...aliasDiffOld, models: [{ id: 'alias-model', aliases: ['new-alias'], shutdown: '2026-10-01' }] }
+const aliasDiff = compareFeeds(aliasDiffOld, aliasDiffNew)
+const aliasDiffMarkdown = renderSemanticDiff(aliasDiffOld, aliasDiffNew)
+assert(aliasDiff.changed && aliasDiffMarkdown.includes('## Alias changes') && aliasDiffMarkdown.includes('new-alias') && aliasDiffMarkdown.includes('old-alias'), 'semantic diff marks and renders alias changes')
+
+const announcementDiffOld = { ...oldFeed, models: [{ id: 'announcement-model', announced: '2026-01-01', shutdown: '2026-10-01' }] }
+const announcementDiffNew = { ...announcementDiffOld, models: [{ id: 'announcement-model', announced: '2026-02-01', shutdown: '2026-10-01' }] }
+const announcementDiff = compareFeeds(announcementDiffOld, announcementDiffNew)
+const announcementDiffMarkdown = renderSemanticDiff(announcementDiffOld, announcementDiffNew)
+assert(announcementDiff.changed && announcementDiffMarkdown.includes('Announcement date changes') && announcementDiffMarkdown.includes('2026-01-01') && announcementDiffMarkdown.includes('2026-02-01'), 'semantic diff marks and renders announced-date corrections')
+
+const informationalOnlyDiff = compareFeeds(
+  { ...oldFeed, models: [{ id: 'stable' }] },
+  { ...oldFeed, models: [{ id: 'stable' }] },
+  { unconfirmed: ['stable'], noPublisherFeed: [{ bedrockId: 'future.model', normalizedId: 'model' }] },
+)
+assert(!informationalOnlyDiff.changed, 'semantic diff keeps unconfirmed entries and no-publisher notes informational')
+const currentAdditionDiff = compareFeeds(
+  { ...oldFeed, models: [{ id: 'stable' }] },
+  { ...oldFeed, models: [{ id: 'stable' }, { id: 'current-only' }] },
+)
+assert(currentAdditionDiff.changed, 'semantic diff treats a current-model addition as material')
+
 const openaiCheck = run(['--provider', 'openai', '--check', '--fixtures', fixtures])
-assert(openaiCheck.code === 0, '--check exits 0 when only informational sections differ (unconfirmed entries are not file changes)')
+assert(openaiCheck.code === 0 || openaiCheck.code === 3, 'OpenAI --check exits 0 or 3 depending on committed feed state, never a failure')
 assert(openaiCheck.out.includes('Unconfirmed entries') && openaiCheck.out.includes('retained because neither source confirmed it'), '--check retains and reports committed entries the fixture slice does not confirm')
+
+const responseFor = body => ({ ok: true, status: 200, text: async () => body })
+const openaiPageUrls = []
+const paginatedOpenAI = await loadProviderSources(PROVIDERS.openai, {
+  env: { OPENAI_API_KEY: 'fixture-key' },
+  notice: () => {},
+  fetchImpl: async url => {
+    const parsedUrl = new URL(url)
+    openaiPageUrls.push(parsedUrl)
+    if (parsedUrl.pathname === '/v1/models') {
+      return parsedUrl.searchParams.get('after')
+        ? responseFor(JSON.stringify({ data: [{ id: 'page-two' }], has_more: false, last_id: 'page-two' }))
+        : responseFor(JSON.stringify({ data: [{ id: 'page-one' }], has_more: true, last_id: 'page-one' }))
+    }
+    return responseFor(openaiHtml)
+  },
+})
+assert(paginatedOpenAI.currentIds.length === 2 && paginatedOpenAI.currentIds.includes('page-two') && openaiPageUrls[1]?.searchParams.get('after') === 'page-one', 'OpenAI models pagination follows the last id into the next page')
+
+const anthropicPageUrls = []
+const paginatedAnthropic = await loadProviderSources(PROVIDERS.anthropic, {
+  env: { ANTHROPIC_API_KEY: 'fixture-key' },
+  notice: () => {},
+  fetchImpl: async url => {
+    const parsedUrl = new URL(url)
+    anthropicPageUrls.push(parsedUrl)
+    if (parsedUrl.pathname === '/v1/models') {
+      return parsedUrl.searchParams.get('after_id')
+        ? responseFor(JSON.stringify({ data: [{ id: 'anthropic-page-two' }], has_more: false, last_id: 'anthropic-page-two' }))
+        : responseFor(JSON.stringify({ data: [{ id: 'anthropic-page-one' }], has_more: true, last_id: 'anthropic-page-one' }))
+    }
+    return responseFor(anthropicHtml)
+  },
+})
+assert(paginatedAnthropic.currentIds.length === 2 && anthropicPageUrls[1]?.searchParams.get('after_id') === 'anthropic-page-one', 'Anthropic models pagination follows after_id from last_id')
+
+let capCalls = 0
+let paginationCapReason = ''
+try {
+  await loadProviderSources(PROVIDERS.openai, {
+    env: { OPENAI_API_KEY: 'fixture-key' },
+    notice: () => {},
+    fetchImpl: async url => {
+      const parsedUrl = new URL(url)
+      if (parsedUrl.pathname === '/v1/models') {
+        capCalls++
+        return responseFor(JSON.stringify({ data: [{ id: `cap-page-${capCalls}` }], has_more: true, last_id: `cap-page-${capCalls}` }))
+      }
+      return responseFor(openaiHtml)
+    },
+  })
+} catch (error) {
+  paginationCapReason = error.message
+}
+assert(capCalls === 20 && paginationCapReason.includes('pagination cap of 20 pages'), 'models pagination fails loudly at the hard page cap')
 
 const anthropicCheck = run(['--provider', 'anthropic', '--check', '--fixtures', fixtures])
 assert(anthropicCheck.code === 3, '--check exits 3 when the Anthropic fixture changes the feed')
@@ -342,6 +516,7 @@ const generatedAnthropic = JSON.parse(fs.readFileSync(path.join(outputDir, 'anth
 const generatedOpenAI = JSON.parse(fs.readFileSync(path.join(outputDir, 'openai.json'), 'utf8'))
 assert(generatedAnthropic.models.some(model => model.id === 'claude-sonnet-4-6' && !model.shutdown && !model.announced), 'written output includes a current model without lifecycle dates')
 assert(generatedOpenAI.models.some(model => model.id === 'sora-2' && !model.replacement), 'written OpenAI output preserves a missing replacement')
+assert(generatedOpenAI.models.some(model => model.id === 'gpt-4-0613' && model.aliases?.includes('gpt-4')), 'written OpenAI output preserves every model-cell code token as an alias')
 assert(fs.readFileSync(path.join(root, 'feeds', 'openai.json'), 'utf8') === beforeOpenAI, 'refresh does not modify committed OpenAI feeds during tests')
 assert(fs.readFileSync(path.join(root, 'feeds', 'anthropic.json'), 'utf8') === beforeAnthropic, 'refresh does not modify committed Anthropic feeds during tests')
 

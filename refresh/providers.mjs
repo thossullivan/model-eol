@@ -38,6 +38,7 @@ const MONTHS = new Map([
   ['jan', 1], ['feb', 2], ['mar', 3], ['apr', 4], ['may', 5], ['jun', 6],
   ['jul', 7], ['aug', 8], ['sep', 9], ['sept', 9], ['oct', 10], ['nov', 11], ['dec', 12],
 ])
+const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 function pad(number) {
   return String(number).padStart(2, '0')
@@ -87,22 +88,25 @@ function plainText(fragment) {
     .trim()
 }
 
-export function dateFromText(text) {
+function dateCandidates(text) {
   const normalised = plainText(text)
-  const iso = normalised.match(DATE_PATTERN)
-  if (iso) {
-    const date = validDate(iso[1], iso[2], iso[3])
-    if (!date) throw new Error(`invalid date "${iso[0]}"`)
-    return date
+  const candidates = []
+  for (const match of normalised.matchAll(new RegExp(DATE_PATTERN.source, 'g'))) {
+    const date = validDate(match[1], match[2], match[3])
+    if (!date) throw new Error(`invalid date "${match[0]}"`)
+    candidates.push({ date, index: match.index })
   }
-  const human = normalised.match(HUMAN_DATE_PATTERN)
-  if (human) {
-    const month = MONTHS.get(human[1].toLowerCase().slice(0, 4)) ?? MONTHS.get(human[1].toLowerCase().slice(0, 3))
-    const date = validDate(human[3], month, human[2])
-    if (!date) throw new Error(`invalid date "${human[0]}"`)
-    return date
+  for (const match of normalised.matchAll(new RegExp(HUMAN_DATE_PATTERN.source, 'gi'))) {
+    const month = MONTHS.get(match[1].toLowerCase().slice(0, 4)) ?? MONTHS.get(match[1].toLowerCase().slice(0, 3))
+    const date = validDate(match[3], month, match[2])
+    if (!date) throw new Error(`invalid date "${match[0]}"`)
+    candidates.push({ date, index: match.index })
   }
-  return undefined
+  return candidates.sort((left, right) => left.index - right.index)
+}
+
+export function dateFromText(text) {
+  return dateCandidates(text)[0]?.date
 }
 
 function codeText(fragment) {
@@ -145,21 +149,34 @@ function headerIndexes(rows) {
   for (const [index, row] of rows.entries()) {
     const labels = row.cells.map(cell => cell.text.toLowerCase())
     const date = labels.findIndex(label => /(shutdown|retirement|sunset|removal).*date|date.*(shutdown|retirement|sunset|removal)/i.test(label))
-    const model = labels.findIndex(label => /model|deprecated|system|endpoint/i.test(label))
+    const model = labels.findIndex(label => /\bmodel\b|\bsystem\b/i.test(label))
+    const endpointLike = labels.some(label => /\b(?:endpoint|product|api|service|operation|capability)\b/i.test(label) && !/\bmodel\b/i.test(label))
     const recommended = labels.findIndex(label => /recommended\s+replacement|replacement|successor/i.test(label))
-    if (date >= 0 && model >= 0 && recommended >= 0) return { row: index, date, model, recommended }
+    if (date >= 0 && endpointLike) {
+      return { rejectedReason: 'endpoint-or-product-deprecation-table' }
+    }
+    if (date >= 0 && model >= 0 && recommended >= 0) {
+      return { row: index, date, model, recommended }
+    }
   }
   return undefined
 }
 
-function announcementDate(html, tableStart) {
+function announcementDate(html, tableStart, provider) {
   const before = html.slice(0, tableStart)
   const headings = [...before.matchAll(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi)]
   const heading = headings.at(-1)
-  const fromHeading = heading ? dateFromText(heading[1]) : undefined
-  if (fromHeading) return fromHeading
+  const headingDates = heading ? dateCandidates(heading[1]) : []
+  if (headingDates.length > 1) {
+    throw new Error(`${provider} deprecations table has ambiguous-announcement-date context`)
+  }
+  if (headingDates.length === 1) return headingDates[0].date
   const segmentStart = heading ? heading.index + heading[0].length : Math.max(0, before.length - 6000)
-  return dateFromText(before.slice(segmentStart))
+  const contextDates = dateCandidates(before.slice(segmentStart))
+  if (contextDates.length > 1) {
+    throw new Error(`${provider} deprecations table has ambiguous-announcement-date context`)
+  }
+  return contextDates[0]?.date
 }
 
 /** Parse an HTML deprecations page into lifecycle records. */
@@ -173,14 +190,19 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
 
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
   const records = []
+  const skippedReasons = new Set()
   let recognisedTables = 0
   for (const table of tables) {
     const rows = tableRows(table[1])
     const headers = headerIndexes(rows)
     if (!headers) continue
+    if (headers.rejectedReason) {
+      skippedReasons.add(headers.rejectedReason)
+      continue
+    }
     recognisedTables++
-    const announced = announcementDate(html, table.index)
-    if (!announced) {
+    const tableAnnounced = announcementDate(html, table.index, provider)
+    if (!tableAnnounced) {
       throw new Error(`${provider} deprecations table has no announcement date`)
     }
     for (const row of rows.slice(headers.row + 1)) {
@@ -188,11 +210,15 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
       if (!modelCell || !modelCell.text) continue
       const id = modelId(modelCell.html)
       if (!id) throw new Error(`${provider} deprecations table contains a row without a model id`)
+      if (!MODEL_ID_PATTERN.test(id)) {
+        const reason = /[\s/]/.test(id) ? 'endpoint-or-product-row' : 'invalid-model-id'
+        throw new Error(`${provider} deprecations table refused row: ${reason}: ${id}`)
+      }
       const shutdownCell = row.cells[headers.date]
       const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
       if (!shutdown) throw new Error(`${provider} deprecations entry ${id} has no valid shutdown date`)
       const replacementCell = headers.recommended >= 0 ? row.cells[headers.recommended] : undefined
-      const item = { id, announced, shutdown, source: sourceUrl }
+      const item = { id, announced: tableAnnounced, shutdown, source: sourceUrl }
       const nextReplacement = replacementCell ? replacement(replacementCell.html) : undefined
       if (nextReplacement) item.replacement = nextReplacement
       if (item.announced && item.shutdown < item.announced) {
@@ -202,7 +228,10 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
     }
   }
 
-  if (!recognisedTables) throw new Error(`${provider} deprecations page has no recognised model tables`)
+  if (!recognisedTables) {
+    const reason = skippedReasons.size ? `: ${[...skippedReasons].join(', ')}` : ''
+    throw new Error(`${provider} deprecations page has no recognised model tables${reason}`)
+  }
   if (!records.length) throw new Error(`${provider} deprecations page has no model entries`)
 
   const unique = new Map()
@@ -212,10 +241,11 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
       unique.set(record.id, record)
       continue
     }
-    const same = previous.announced === record.announced &&
-      previous.shutdown === record.shutdown &&
-      previous.replacement === record.replacement
-    if (!same) throw new Error(`${provider} deprecations page has conflicting rows for ${record.id}`)
+    const sameLifecycle = previous.announced === record.announced && previous.shutdown === record.shutdown
+    if (!sameLifecycle || (previous.replacement && record.replacement && previous.replacement !== record.replacement)) {
+      throw new Error(`${provider} deprecations page has conflicting rows for ${record.id}`)
+    }
+    if (!previous.replacement && record.replacement) previous.replacement = record.replacement
   }
   return [...unique.values()]
 }
@@ -253,12 +283,15 @@ function openAIAnnouncementDate(headings, tableStart) {
   return heading?.date
 }
 
-function openAIModelId(fragment) {
+function openAIModelIds(fragment) {
   const codes = codeText(fragment)
-  const dated = codes.find(code => /\b(?:19|20)\d{2}[-_]\d{2}[-_]\d{2}\b/.test(code))
-  if (dated) return dated.trim()
-  if (codes[0]) return codes[0].trim()
-  return modelId(fragment)
+  const tokens = [...new Set((codes.length ? codes : [modelId(fragment)]).filter(Boolean).map(token => token.trim()))]
+  if (!tokens.length) return undefined
+  const canonical = tokens.find(token => /\b(?:19|20)\d{2}[-_]\d{2}[-_]\d{2}\b/.test(token)) ?? tokens[0]
+  return {
+    id: canonical,
+    aliases: tokens.filter(token => token !== canonical),
+  }
 }
 
 function openAIReplacement(fragment) {
@@ -280,6 +313,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
   const headings = openAIHeadings(content)
   const tables = [...content.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
   const records = []
+  const skippedReasons = new Set()
   let recognisedTables = 0
 
   for (const table of tables) {
@@ -294,31 +328,36 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       if (!modelCell || !modelCell.text) continue
-      const id = openAIModelId(modelCell.html)
-      if (!id) throw new Error('openai deprecations table contains a row without a model id')
-      // The page also lists endpoint and product retirements ("/v1/edits",
-      // "Assistants API"). A feed id is the exact model identifier as sent
-      // over the wire (SPEC.md), so rows whose id contains a slash or
-      // whitespace are out of scope for a model feed.
-      if (/[\s/]/.test(id)) continue
+      const parsedModel = openAIModelIds(modelCell.html)
+      if (!parsedModel) throw new Error('openai deprecations table contains a row without a model id')
+      const modelTokens = [parsedModel.id, ...parsedModel.aliases]
+      if (modelTokens.some(token => !MODEL_ID_PATTERN.test(token))) {
+        const invalid = modelTokens.find(token => !MODEL_ID_PATTERN.test(token))
+        skippedReasons.add(/[\s/]/.test(invalid) ? 'endpoint-or-product-row' : 'invalid-model-id')
+        continue
+      }
 
       const shutdownCell = row.cells[headers.date]
       const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
-      if (!shutdown) throw new Error(`openai deprecations entry ${id} has no valid shutdown date`)
+      if (!shutdown) throw new Error(`openai deprecations entry ${parsedModel.id} has no valid shutdown date`)
 
       const replacementCell = row.cells[headers.replacement]
-      const item = { id, announced, shutdown, source: sourceUrl }
+      const item = { id: parsedModel.id, announced, shutdown, source: sourceUrl }
+      if (parsedModel.aliases.length) item.aliases = parsedModel.aliases
       const nextReplacement = replacementCell ? openAIReplacement(replacementCell.html) : undefined
       if (nextReplacement) item.replacement = nextReplacement
       if (item.shutdown < item.announced) {
-        throw new Error(`openai deprecations entry ${id} has shutdown before announcement`)
+        throw new Error(`openai deprecations entry ${parsedModel.id} has shutdown before announcement`)
       }
       records.push(item)
     }
   }
 
   if (!recognisedTables) throw new Error('openai deprecations page has no recognisable deprecations content')
-  if (!records.length) throw new Error('openai deprecations page has no model entries')
+  if (!records.length) {
+    const reason = skippedReasons.size ? `: ${[...skippedReasons].join(', ')}` : ''
+    throw new Error(`openai deprecations page has no model entries${reason}`)
+  }
 
   const unique = new Map()
   for (const record of records) {
@@ -330,19 +369,31 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     const same = previous.announced === record.announced &&
       previous.shutdown === record.shutdown &&
       previous.replacement === record.replacement
-    if (same) continue
+    if (same) {
+      previous.aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
+        .filter(alias => alias !== previous.id)
+      if (!previous.aliases.length) delete previous.aliases
+      continue
+    }
     if (record.announced > previous.announced) {
-      // The page lists newer announcements before older historical rows.
+      record.aliases = [...new Set([...(record.aliases ?? []), ...(previous.aliases ?? [])])]
+        .filter(alias => alias !== record.id)
+      if (!record.aliases.length) delete record.aliases
       unique.set(record.id, record)
       continue
     }
-    if (record.announced < previous.announced) continue
+    if (record.announced < previous.announced) {
+      previous.aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
+        .filter(alias => alias !== previous.id)
+      if (!previous.aliases.length) delete previous.aliases
+      continue
+    }
     if (record.shutdown !== previous.shutdown) {
       throw new Error(`openai deprecations page has conflicting rows for ${record.id}`)
     }
-    // A few historical subsections repeat a model with a narrower scope. Keep
-    // the first row when the announcement date is the same; it is the page's
-    // primary lifecycle row and carries the same shutdown date.
+    previous.aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
+      .filter(alias => alias !== previous.id)
+    if (!previous.aliases.length) delete previous.aliases
   }
   return [...unique.values()]
 }
@@ -382,11 +433,16 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
 
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
   const records = []
+  const skippedReasons = new Set()
   let recognisedTables = 0
   for (const table of tables) {
     const rows = tableRows(table[1])
     const headers = headerIndexes(rows)
     if (!headers) continue
+    if (headers.rejectedReason) {
+      skippedReasons.add(headers.rejectedReason)
+      continue
+    }
     recognisedTables++
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
@@ -409,7 +465,10 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
     }
   }
 
-  if (!recognisedTables) throw new Error('google deprecations page has no recognised model tables')
+  if (!recognisedTables) {
+    const reason = skippedReasons.size ? `: ${[...skippedReasons].join(', ')}` : ''
+    throw new Error(`google deprecations page has no recognised model tables${reason}`)
+  }
   if (!records.length) throw new Error('google deprecations page has no model entries')
 
   const unique = new Map()
@@ -430,8 +489,9 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
 
 export const parseGoogleGeminiDeprecations = parseGoogleDeprecations
 
-/** Parse the JSON response returned by a provider's models endpoint. */
-export function parseModelsResponse(body, provider = 'provider') {
+const MAX_MODEL_PAGES = 20
+
+function parseModelsPage(body, provider) {
   let parsed
   try {
     parsed = typeof body === 'string' ? JSON.parse(body) : body
@@ -451,7 +511,23 @@ export function parseModelsResponse(body, provider = 'provider') {
     seen.add(id)
     ids.push(id)
   }
-  return ids
+  if (parsed && !Array.isArray(parsed) && parsed.has_more !== undefined && typeof parsed.has_more !== 'boolean') {
+    throw new Error(`${provider} models response has a non-boolean has_more value`)
+  }
+  const lastId = parsed && !Array.isArray(parsed) ? parsed.last_id : undefined
+  if (lastId !== undefined && lastId !== null && (typeof lastId !== 'string' || !lastId.trim())) {
+    throw new Error(`${provider} models response has an invalid last_id value`)
+  }
+  return {
+    ids,
+    hasMore: parsed && !Array.isArray(parsed) ? parsed.has_more === true : false,
+    lastId: typeof lastId === 'string' && lastId.trim() ? lastId.trim() : ids.at(-1),
+  }
+}
+
+/** Parse the JSON response returned by a provider's models endpoint. */
+export function parseModelsResponse(body, provider = 'provider') {
+  return parseModelsPage(body, provider).ids
 }
 
 /** Parse Google's models endpoint response and remove its resource prefix. */
@@ -484,6 +560,38 @@ export const parseAnthropicModels = body => parseModelsResponse(body, 'anthropic
 export const parseGoogleModels = parseGoogleModelsResponse
 export const parseGoogleModelsEndpoint = parseGoogleModelsResponse
 
+function nextPageUrl(url, parameter, cursor) {
+  const next = new URL(url)
+  next.searchParams.set(parameter, cursor)
+  return next.toString()
+}
+
+async function fetchPaginatedModels(config, headers, fetchImpl) {
+  const cursorParameter = config.publisher === 'openai' ? 'after' : 'after_id'
+  const ids = []
+  const seen = new Set()
+  let url = config.modelsUrl
+  let cursor
+  for (let page = 1; page <= MAX_MODEL_PAGES; page++) {
+    const body = await fetchBody(url, headers, config.publisher, fetchImpl)
+    const parsed = parseModelsPage(body, config.publisher)
+    for (const id of parsed.ids) {
+      if (seen.has(id)) throw new Error(`${config.publisher} models response contains duplicate model id across pages: ${id}`)
+      seen.add(id)
+      ids.push(id)
+    }
+    if (!parsed.hasMore) return ids
+    if (page === MAX_MODEL_PAGES) {
+      throw new Error(`${config.publisher} models endpoint exceeded pagination cap of ${MAX_MODEL_PAGES} pages`)
+    }
+    if (!parsed.lastId) throw new Error(`${config.publisher} models response has_more is true without a last_id`)
+    if (parsed.lastId === cursor) throw new Error(`${config.publisher} models pagination cursor did not advance`)
+    cursor = parsed.lastId
+    url = nextPageUrl(config.modelsUrl, cursorParameter, cursor)
+  }
+  throw new Error(`${config.publisher} models endpoint pagination failed`)
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
@@ -493,7 +601,9 @@ function identityIndex(models) {
   for (const model of models) {
     for (const key of [model.id, ...(model.aliases ?? [])]) {
       if (!key) continue
-      if (!index.has(key)) index.set(key, model)
+      const previous = index.get(key)
+      if (previous && previous !== model) throw new Error(`models have an ambiguous id or alias: ${key}`)
+      index.set(key, model)
     }
   }
   return index
@@ -507,6 +617,7 @@ function identityIndex(models) {
 export function mergeFeed(committed, { deprecations = [], currentIds = null, generated, provider }) {
   if (!committed || !Array.isArray(committed.models)) throw new Error('committed feed has no models array')
   const models = committed.models.map(clone)
+  const committedEntries = committed.models.map((old, index) => ({ id: old.id, model: models[index] }))
   const confirmed = new Set()
   const deprecationConfirmed = new Set()
   let index = identityIndex(models)
@@ -517,13 +628,44 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
     index = identityIndex(models)
     return model
   }
+  const absorb = (target, other, aliases) => {
+    if (target === other) return
+    aliases.add(other.id)
+    for (const alias of other.aliases ?? []) aliases.add(alias)
+    const metadata = new Set(['announced', 'shutdown', 'date_precision', 'replacement', 'source'])
+    for (const [field, value] of Object.entries(other)) {
+      if (field === 'id' || field === 'aliases' || metadata.has(field)) continue
+      if (target[field] === undefined) {
+        target[field] = clone(value)
+      } else if (JSON.stringify(target[field]) !== JSON.stringify(value)) {
+        throw new Error(`merge found conflicting fields while joining ${target.id} and ${other.id}`)
+      }
+    }
+    const otherIndex = models.indexOf(other)
+    if (otherIndex < 0) throw new Error(`merge could not locate model ${other.id} while joining aliases`)
+    for (const entry of committedEntries) {
+      if (entry.model === other) entry.model = target
+    }
+    models.splice(otherIndex, 1)
+    index = identityIndex(models)
+  }
 
   for (const record of deprecations) {
     let target = locate(record.id)
     if (!target) target = add({ id: record.id })
 
+    const canonicalId = target.id
+    const aliases = new Set(target.aliases ?? [])
+    for (const alias of [record.id, ...(record.aliases ?? [])]) {
+      if (!alias || alias === canonicalId) continue
+      const owner = locate(alias)
+      if (owner && owner !== target) absorb(target, owner, aliases)
+      aliases.add(alias)
+    }
     for (const field of ['announced', 'shutdown', 'date_precision', 'replacement']) delete target[field]
-    Object.assign(target, clone(record))
+    Object.assign(target, clone(record), { id: canonicalId })
+    if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
+    else delete target.aliases
     confirmed.add(target.id)
     deprecationConfirmed.add(target.id)
     index = identityIndex(models)
@@ -546,8 +688,10 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
   // This is deliberately an assertion rather than a filter. A future change
   // that accidentally removes an old entry must fail before any output write.
   const finalIndex = identityIndex(models)
-  for (const old of committed.models) {
-    if (!finalIndex.get(old.id)) throw new Error(`merge would drop committed model ${old.id}`)
+  for (const old of committedEntries) {
+    if (finalIndex.get(old.id) !== old.model) {
+      throw new Error(`merge would detach committed canonical model ${old.id}`)
+    }
   }
 
   const feed = {
@@ -641,10 +785,12 @@ export async function loadProviderSources(config, options = {}) {
       if (config.publisher === 'openai') headers.Authorization = `Bearer ${key}`
       if (config.publisher === 'anthropic') headers['x-api-key'] = key
       if (config.keyHeader) headers[config.keyHeader] = key
-      const body = await fetchBody(config.modelsUrl, headers, config.publisher, fetchImpl)
-      currentIds = config.publisher === 'google'
-        ? parseGoogleModelsResponse(body)
-        : parseModelsResponse(body, config.publisher)
+      if (config.publisher === 'google') {
+        const body = await fetchBody(config.modelsUrl, headers, config.publisher, fetchImpl)
+        currentIds = parseGoogleModelsResponse(body)
+      } else {
+        currentIds = await fetchPaginatedModels(config, headers, fetchImpl)
+      }
       endpointAvailable = true
     }
   }

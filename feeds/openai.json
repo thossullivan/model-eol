@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-08-01T21:59:09.709Z",
+  "generated": "2026-08-02T14:06:58.245Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -38,12 +38,18 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
+      "aliases": [
+        "gpt-4",
+        "gpt-4-0613-completions",
+        "gpt-4-completions"
+      ],
       "replacement": "gpt-5.6-sol"
     },
     {
       "id": "gpt-4-turbo-2024-04-09",
       "aliases": [
-        "gpt-4-turbo"
+        "gpt-4-turbo",
+        "gpt-4-turbo-completions"
       ],
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
@@ -53,7 +59,8 @@
     {
       "id": "gpt-3.5-turbo-0125",
       "aliases": [
-        "gpt-3.5-turbo"
+        "gpt-3.5-turbo",
+        "gpt-3.5-turbo-completions"
       ],
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
@@ -247,6 +254,9 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
+      "aliases": [
+        "gpt-4.1-nano"
+      ],
       "replacement": "gpt-5.6-luna"
     },
     {
@@ -268,6 +278,9 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
+      "aliases": [
+        "o1-pro"
+      ],
       "replacement": "gpt-5.6-sol ( reasoning.mode: pro )"
     },
     {
@@ -282,6 +295,9 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
+      "aliases": [
+        "o4-mini"
+      ],
       "replacement": "gpt-5.6-terra"
     },
     {
@@ -382,6 +398,9 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-07-23",
+      "aliases": [
+        "computer-use-preview"
+      ],
       "replacement": "gpt-5.6-terra"
     },
     {
@@ -508,6 +527,10 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2025-09-26",
       "shutdown": "2026-03-26",
+      "aliases": [
+        "gpt-4-turbo-preview",
+        "gpt-4-turbo-preview-completions"
+      ],
       "replacement": "gpt-5 or gpt-4.1*"
     },
     {
@@ -952,9 +975,6 @@
       "id": "gpt-4o-mini-tts"
     },
     {
-      "id": "o4-mini"
-    },
-    {
       "id": "gpt-4.1-2025-04-14"
     },
     {
@@ -965,9 +985,6 @@
     },
     {
       "id": "gpt-4.1-mini"
-    },
-    {
-      "id": "gpt-4.1-nano"
     },
     {
       "id": "gpt-4o-transcribe-diarize"
