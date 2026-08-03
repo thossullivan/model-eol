@@ -617,6 +617,59 @@ const passEnvConfigFile = path.join(tempRoot, 'pass-env-config.json')
 write(passEnvConfigFile, JSON.stringify({ eval: { pass_env: ['CUSTOM_EVAL_KEY'] } }))
 assert(loadConfig(passEnvConfigFile).eval.pass_env[0] === 'CUSTOM_EVAL_KEY', 'config accepts explicit eval pass_env names')
 
+const invalidConfigCases = [
+  ['unknown root config key', { day: 30 }, 'day'],
+  ['unknown ignore config key', { ignore: { ignores: {} } }, 'ignore.ignores'],
+  ['unknown issues config key', { issues: { enabled: true, notify: true } }, 'issues.notify'],
+  ['unknown eval config key', { eval: { command: null, shell: 'bash' } }, 'eval.shell'],
+  ['unknown feeds config key', { feeds: { allow_vendored_fallback: true, source: 'remote' } }, 'feeds.source'],
+]
+for (const [label, value, key] of invalidConfigCases) {
+  const invalidConfigFile = path.join(tempRoot, label.replaceAll(' ', '-') + '.json')
+  write(invalidConfigFile, JSON.stringify(value))
+  let error = null
+  try {
+    loadConfig(invalidConfigFile)
+  } catch (caught) {
+    error = caught
+  }
+  assert(error?.message.includes(key), label + ' is rejected with the offending key named')
+}
+
+const completeConfigFile = path.join(tempRoot, 'complete-config.json')
+write(completeConfigFile, JSON.stringify({
+  days: 30,
+  scope: 'all',
+  via: 'aws-bedrock',
+  feeds: { allow_vendored_fallback: true },
+  ignore: { models: ['old-model'], paths: ['src/generated.py'] },
+  issues: { enabled: false },
+  eval: { command: 'npm run verify', timeout_ms: 5000, max_report_bytes: 1024, pass_env: ['CI'] },
+}))
+const completeConfig = loadConfig(completeConfigFile)
+assert(completeConfig.feeds.allow_vendored_fallback === true && completeConfig.eval.pass_env[0] === 'CI', 'fully specified config loads through one normalized validation path')
+
+const actionSource = fs.readFileSync(path.join(root, 'action.yml'), 'utf8')
+const splitterStart = actionSource.indexOf('        split_model_eol_paths() {\n')
+const splitterEnd = actionSource.indexOf('        split_model_eol_paths\n', splitterStart)
+const splitterSource = splitterStart >= 0 && splitterEnd > splitterStart
+  ? actionSource.slice(splitterStart, splitterEnd).split('\n').map(line => line.startsWith('        ') ? line.slice(8) : line).join('\n')
+  : null
+const splitActionPaths = value => {
+  if (!splitterSource) return null
+  const script = splitterSource
+    + '\nsplit_model_eol_paths\nprintf \'%s\\0\' "$' + '{PATH_ARGS[@]}"\n'
+  const result = spawnSync('bash', ['-c', script], {
+    env: { ...process.env, MODEL_EOL_PATHS: value },
+    encoding: 'utf8',
+  })
+  if (result.status !== 0) return null
+  return result.stdout ? result.stdout.split('\0').slice(0, -1) : []
+}
+assert(splitterSource !== null, 'action exposes its path splitter as a testable shell fragment')
+assert(JSON.stringify(splitActionPaths('src\npath with spaces\n\nlib')) === JSON.stringify(['src', 'path with spaces', 'lib']), 'newline-separated action paths preserve spaces and skip empty lines')
+assert(JSON.stringify(splitActionPaths('src lib')) === JSON.stringify(['src', 'lib']), 'single-line action paths retain whitespace-split compatibility')
+
 const leaseRepo = makeRepo({
   name: 'identity-lease',
   files: { 'direct.py': fs.readFileSync(path.join(import.meta.dirname, 'fixture/direct.py'), 'utf8') },

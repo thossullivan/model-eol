@@ -9,7 +9,7 @@ inputs:
     required: false
     default: 'check'
   paths:
-    description: 'Space-separated paths to scan'
+    description: 'Paths to scan. Newline-separated paths are recommended for paths containing spaces; single-line whitespace-separated paths remain supported for legacy compatibility.'
     required: false
     default: '.'
   days:
@@ -51,7 +51,17 @@ runs:
         MODEL_EOL_FORMAT: ${{ inputs.format }}
         MODEL_EOL_FEEDS: ${{ inputs.feeds }}
       run: |
-        read -r -a PATH_ARGS <<< "$MODEL_EOL_PATHS"
+        split_model_eol_paths() {
+          PATH_ARGS=()
+          if [[ "$MODEL_EOL_PATHS" == *$'\n'* ]]; then
+            while IFS= read -r path || [[ -n "$path" ]]; do
+              if [[ -n "$path" ]]; then PATH_ARGS+=("$path"); fi
+            done <<< "$MODEL_EOL_PATHS"
+          else
+            read -r -a PATH_ARGS <<< "$MODEL_EOL_PATHS"
+          fi
+        }
+        split_model_eol_paths
         ARGS=("$MODEL_EOL_COMMAND" "${PATH_ARGS[@]}" --days "$MODEL_EOL_DAYS")
         if [ -n "$MODEL_EOL_VIA" ]; then ARGS+=(--via "$MODEL_EOL_VIA"); fi
         if [ -n "$MODEL_EOL_CHANGED" ]; then ARGS+=(--changed "$MODEL_EOL_CHANGED"); fi

@@ -130,6 +130,12 @@ Use `--scope direct` to fail CI only on what static analysis can prove. Model-li
 strings absent from the feeds surface as non-failing **candidates**, so feed gaps
 stay visible without generating false alarms.
 
+The scanner covers code and configuration files with [`CODE_EXT`](lib/scanner.mjs)
+as the source of truth - Python, TypeScript/JavaScript, JSON/YAML/TOML, shell,
+Ruby, Go, Java, C#, Rust, C/C++, PHP, Swift, Kotlin, Terraform, SQL, Scala, and
+Objective-C. Terraform files (`.tf`, `.tfvars`) are scanned while `.terraform`
+directories stay excluded.
+
 ## The bot
 
 Copy `bot.yml.example` to `.github/workflows/model-eol-bot.yml` for a weekly run

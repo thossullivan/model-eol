@@ -183,6 +183,30 @@ assert(badge.color === 'red' && badge.message.includes('retired') && badge.messa
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
 
+const extensionCoverageDir = path.join(tempRoot, 'extension-coverage')
+const extensionCoverageFeeds = path.join(tempRoot, 'extension-coverage-feeds')
+fs.mkdirSync(extensionCoverageDir)
+fs.mkdirSync(extensionCoverageFeeds)
+fs.writeFileSync(path.join(extensionCoverageFeeds, 'coverage.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'test',
+  generated: '2026-08-01T00:00:00Z',
+  source: 'https://example.invalid/extension-coverage',
+  models: [{ id: 'retired-extension-model', shutdown: '2026-07-01' }],
+}))
+fs.writeFileSync(path.join(extensionCoverageDir, 'main.rs'), 'const MODEL: &str = "retired-extension-model";\n')
+fs.writeFileSync(path.join(extensionCoverageDir, 'variables.tf'), 'model_id = "retired-extension-model"\n')
+fs.writeFileSync(path.join(extensionCoverageDir, 'queries.sql'), "SELECT 'retired-extension-model' AS model_id;\n")
+fs.writeFileSync(path.join(extensionCoverageDir, 'notes.xyz'), 'model_id = "retired-extension-model"\n')
+const extensionCoverageInventory = JSON.parse(run([
+  'inventory', extensionCoverageDir, '--feeds', extensionCoverageFeeds, '--json',
+]).out)
+const extensionCoverageRef = file => extensionCoverageInventory.model_references.find(ref => ref.file.endsWith(file))
+assert(extensionCoverageRef('main.rs')?.status === 'retired', 'retired model in Rust source is found')
+assert(extensionCoverageRef('variables.tf')?.status === 'retired', 'retired model in Terraform source is found')
+assert(extensionCoverageRef('queries.sql')?.status === 'retired', 'retired model in SQL source is found')
+assert(!extensionCoverageRef('notes.xyz'), 'unsupported extension produces no finding')
+
 const incompleteDir = path.join(tempRoot, 'incomplete-scan')
 fs.mkdirSync(incompleteDir)
 fs.writeFileSync(path.join(incompleteDir, 'oversized.py'), Buffer.alloc(2 * 1024 * 1024 + 1))

@@ -174,28 +174,6 @@ const readEvalArtifact = (file, maxBytes, statusFile = null) => {
   return { status: exitCode === 0 ? 'pass' : 'fail', exit_code: exitCode, report: artifact.report || null }
 }
 
-const loadBotConfig = file => {
-  const config = loadConfig(file)
-  if (!fs.existsSync(file)) return { ...config, feeds: { allow_vendored_fallback: false } }
-  let raw
-  try {
-    raw = JSON.parse(fs.readFileSync(file, 'utf8'))
-  } catch (error) {
-    throw new Error(`could not read config ${file}: ${error.message}`)
-  }
-  const feeds = raw.feeds ?? {}
-  if (!feeds || typeof feeds !== 'object' || Array.isArray(feeds)) {
-    throw new Error('invalid .model-eol.json: feeds must be an object')
-  }
-  if (feeds.allow_vendored_fallback !== undefined && typeof feeds.allow_vendored_fallback !== 'boolean') {
-    throw new Error('invalid .model-eol.json: feeds.allow_vendored_fallback must be boolean')
-  }
-  return {
-    ...config,
-    feeds: { allow_vendored_fallback: feeds.allow_vendored_fallback ?? false },
-  }
-}
-
 const feedContext = feedsDir => {
   const records = new Map()
   let files = []
@@ -749,7 +727,7 @@ export const runBot = async ({
       scan = prepareScan({ targetDir: targetPath, source, dryRun })
       const configFile = configFileFor({ targetDir, configPath, scanPath: scan.path })
       if (configPath && !fs.existsSync(configFile)) throw new Error(`config file not found: ${configFile}`)
-      const config = loadBotConfig(configFile)
+      const config = loadConfig(configFile)
       feedSet = await downloadFeeds({
         urls: feedsUrls,
         fetchImpl,
@@ -773,7 +751,7 @@ export const runBot = async ({
     const base = defaultBranch(baseClone)
     const configFile = configFileFor({ targetDir, configPath, scanPath: baseClone })
     if (configPath && !fs.existsSync(configFile)) throw new Error(`config file not found: ${configFile}`)
-    const config = loadBotConfig(configFile)
+    const config = loadConfig(configFile)
     feedSet = await downloadFeeds({
       urls: feedsUrls,
       fetchImpl,
