@@ -1,5 +1,6 @@
 # model-eol
 
+![CI](https://github.com/thossullivan/model-eol/actions/workflows/ci.yml/badge.svg)
 ![spec](https://img.shields.io/badge/spec-model--eol%2F0.1-blue)
 ![deps](https://img.shields.io/badge/runtime%20deps-zero-brightgreen)
 ![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
