@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-08-03T14:35:06.964Z",
+  "generated": "2026-08-03T21:43:59.800Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -124,10 +124,7 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ],
-      "shutdown": "2026-10-16",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.1-pro-preview"
+      ]
     },
     {
       "id": "gemini-2.5-pro-preview-03-25",
@@ -160,10 +157,7 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ],
-      "shutdown": "2026-10-16",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.6-flash"
+      ]
     },
     {
       "id": "gemini-2.5-flash-image",
@@ -190,10 +184,7 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ],
-      "shutdown": "2026-10-16",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.1-flash-lite"
+      ]
     },
     {
       "id": "gemini-2.5-flash-lite-preview-09-2025",
