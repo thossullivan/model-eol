@@ -1,5 +1,6 @@
 # model-eol
 
+![npm](https://img.shields.io/npm/v/model-eol)
 ![CI](https://github.com/thossullivan/model-eol/actions/workflows/ci.yml/badge.svg)
 ![spec](https://img.shields.io/badge/spec-model--eol%2F0.1-blue)
 ![deps](https://img.shields.io/badge/runtime%20deps-zero-brightgreen)
@@ -7,7 +8,7 @@
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 **A machine-readable deprecation feed format for AI models, plus the reference
-tooling that turns it into a Dependabot for models.** v0.2.1.
+tooling that turns it into a Dependabot for models.** v0.2.2.
 
 ![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
 
@@ -42,14 +43,19 @@ second, so the existing trackers can converge instead of each scraping alone.
 
 ## Try it
 
-Two commands, no install, no dependencies:
+One command, no install, no API keys:
+
+```sh
+npx model-eol path/to/your/repo --days 90
+```
+
+That is the whole CI gate. Prefer not to touch npm? Clone and run - it is
+identical, because there are no dependencies to install either way:
 
 ```sh
 git clone https://github.com/thossullivan/model-eol && cd model-eol
 node check.mjs path/to/your/repo --days 90
 ```
-
-That is the whole CI gate. (`npx model-eol` lands with the npm publish.)
 
 <details>
 <summary><b>Every command</b> - PR gate, distributor clocks, SBOM, badges, migration plans</summary>
