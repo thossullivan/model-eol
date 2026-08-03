@@ -201,7 +201,10 @@ move any of us can make here.
 - Fetchers: OpenAI, Anthropic, Google, aws-bedrock, and vertex-ai are live. Azure
   clocks are carried where OpenAI's own page publishes them; a standalone Azure
   lifecycle fetcher is not built yet.
-- Not yet: feed signing, gateway route resolvers, npm publish (prepped, pending).
+- On npm as [`model-eol`](https://www.npmjs.com/package/model-eol). Material feed
+  changes republish automatically as patch versions (trusted publishing with
+  provenance), so `npx model-eol` always checks against current dates.
+- Not yet: feed signing, gateway route resolvers.
 
 ## Contributing
 

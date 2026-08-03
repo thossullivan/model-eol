@@ -1,0 +1,82 @@
+# Automated feed-data patch releases - the caniuse-lite pattern. When a merged
+# feed-refresh PR lands on main, the npm package's bundled feeds are stale until
+# republished, so this bumps a patch version and publishes automatically.
+#
+# Publishing uses npm trusted publishing (OIDC) - no token secret exists to
+# leak. One-time setup on npmjs.com: package Settings -> Trusted publisher ->
+# GitHub Actions, repository thossullivan/model-eol, workflow npm-release.yml.
+# Provenance attestations come with it.
+#
+# No loop: the version-bump commit touches package.json only, which never
+# matches the feeds/** path filter.
+
+name: npm-release
+
+on:
+  push:
+    branches: [main]
+    paths: ['feeds/**']
+  workflow_dispatch:
+
+concurrency: npm-release
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: npm >= 11.5 for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Guard - only release when feeds changed since the last tag
+        id: guard
+        run: |
+          last=$(git describe --tags --abbrev=0 --match 'v*.*.*')
+          echo "last tag: $last"
+          if git diff --quiet "$last"..HEAD -- feeds/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "feeds unchanged since $last - no release"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test
+        if: steps.guard.outputs.changed == 'true'
+        run: npm test
+
+      - name: Bump patch version, tag, push
+        if: steps.guard.outputs.changed == 'true'
+        id: bump
+        run: |
+          git config user.name "model-eol release"
+          git config user.email "actions@users.noreply.github.com"
+          version=$(npm version patch -m "model-eol v%s - automated feed-data release")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          git tag -f v0 "$version"
+          git push origin main "$version"
+          git push -f origin v0
+
+      - name: Publish to npm
+        if: steps.guard.outputs.changed == 'true'
+        run: npm publish
+
+      - name: GitHub release
+        if: steps.guard.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.bump.outputs.version }}" \
+            --title "${{ steps.bump.outputs.version }} - feed data" \
+            --notes "Automated feed-data release: the weekly refresh landed material feed changes, republished so \`npx model-eol\` always checks against current retirement dates. The semantic diff is in the merged feed-refresh PR. No code changes."

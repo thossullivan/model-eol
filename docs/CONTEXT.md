@@ -146,10 +146,12 @@ config; a sweep across the maintainer's local repos found ~230 retired refs
 feed drift caught within one week of hand compilation; a hand-compiled Bedrock
 date corrected by three months.
 
-Remaining, maintainer-side: npm publish (then the auto patch-release workflow -
-caniuse-lite pattern), activating ci/bot workflows from their .example files,
-provider API key secrets for models-endpoint coverage (this is what populates
-current-model entries and policy-floor horizons), the essay, the public flip.
+DONE since: npm publish (v0.2.2 live; npm-release.yml auto-publishes patch
+versions on material feed changes - caniuse-lite pattern, trusted publishing),
+CI workflow activated, provider API key secrets set, the public flip.
+Remaining, maintainer-side: configure the npm trusted publisher (package
+Settings -> Trusted publisher -> GitHub Actions, workflow npm-release.yml),
+activating the bot workflow from bot.yml.example, the essay/post.
 Remaining, backlog: Google/Vertex/Azure fetchers, gateway resolvers, monorepo
 ownership groups, feed signing, feeds-dir self-scan exclusion.
 
