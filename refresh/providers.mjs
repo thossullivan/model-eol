@@ -214,6 +214,21 @@ const copyReplacementPayload = (target, source) => {
   }
 }
 
+// Same model, same dates, different guidance (base vs fine-tuned tables): keep the union, not the first row.
+const mergeReplacementPayloads = (target, source) => {
+  const tokens = []
+  for (const record of [target, source]) {
+    if (record.replacement) tokens.push(record.replacement)
+    for (const option of record.replacement_options ?? []) tokens.push(option)
+  }
+  const union = [...new Set(tokens)]
+  const notes = [...new Set([target.replacement_note, source.replacement_note].filter(Boolean))]
+  for (const key of ['replacement', 'replacement_options', 'replacement_note']) delete target[key]
+  if (union.length === 1) target.replacement = union[0]
+  else if (union.length) target.replacement_options = union
+  if (notes.length) target.replacement_note = notes.join('; ')
+}
+
 const endpointLikeLabel = label =>
   /\b(?:endpoint|product|service|operation|capability)\b/i.test(label) ||
   (/\bapi\b/i.test(label) && !/\bmodel\b/i.test(label))
@@ -459,7 +474,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     }
     const sameLifecycle = previous.announced === record.announced && previous.shutdown === record.shutdown
     if (sameLifecycle && !sameReplacementPayload(previous, record)) {
-      throw new Error(`openai deprecations page has conflicting rows for ${record.id}`)
+      mergeReplacementPayloads(previous, record)
     }
     if (sameLifecycle) {
       previous.aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]

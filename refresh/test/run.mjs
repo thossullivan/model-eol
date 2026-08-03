@@ -227,13 +227,13 @@ assert(openaiById.get('o4-mini-deep-research-2025-06-26')?.replacement === 'gpt-
 assert(openaiById.get('gpt-4-turbo-2024-04-09')?.replacement === 'gpt-5.6-sol', 'OpenAI selects the dated snapshot from an alias cell')
 assert(openaiById.get('sora-2')?.replacement === undefined, 'OpenAI preserves a missing replacement from ---')
 const duplicateConflictHtml = '<h2>2026-01-01: Duplicate rows</h2><table><tr><th>Shutdown date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>duplicate-model</code></td><td><code>target-a</code></td></tr><tr><td>2027-01-01</td><td><code>duplicate-model</code></td><td><code>target-b</code></td></tr></table>'
-let duplicateConflictReason = ''
-try {
-  parseOpenAIDeprecations(duplicateConflictHtml)
-} catch (error) {
-  duplicateConflictReason = error.message
-}
-assert(duplicateConflictReason.includes('conflicting rows for duplicate-model'), 'OpenAI duplicate lifecycle rows with different replacement payloads fail loudly')
+const duplicateConflict = parseOpenAIDeprecations(duplicateConflictHtml)
+assert(
+  duplicateConflict.length === 1
+    && duplicateConflict[0].replacement === undefined
+    && duplicateConflict[0].replacement_options?.join(',') === 'target-a,target-b',
+  'OpenAI duplicate lifecycle rows with different replacement payloads merge to the union as options, never first-wins',
+)
 const duplicateIdenticalHtml = '<h2>2026-01-01: Duplicate rows</h2><table><tr><th>Shutdown date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>duplicate-model</code><code>first-alias</code></td><td><code>target-a</code></td></tr><tr><td>2027-01-01</td><td><code>duplicate-model</code><code>second-alias</code></td><td><code>target-a</code></td></tr></table>'
 const duplicateIdentical = parseOpenAIDeprecations(duplicateIdenticalHtml)
 assert(duplicateIdentical.length === 1 && duplicateIdentical[0].aliases?.includes('first-alias') && duplicateIdentical[0].aliases?.includes('second-alias'), 'OpenAI identical replacement duplicates still merge aliases')
