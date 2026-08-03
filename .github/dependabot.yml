@@ -1,0 +1,10 @@
+# The package has zero runtime and zero dev dependencies - the only
+# dependency surface in this repository is the actions pinned in workflows.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
