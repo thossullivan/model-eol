@@ -1,6 +1,6 @@
 {
   "name": "model-eol",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A machine-readable deprecation feed format for AI models, plus a zero-dependency checker and inventory CLI.",
   "type": "module",
   "bin": {
