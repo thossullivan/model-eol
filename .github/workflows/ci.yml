@@ -18,7 +18,7 @@ jobs:
         run: npm test
       - name: Write model inventory artifact
         run: node check.mjs inventory test/fixture --json > model-inventory.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: model-inventory
           path: model-inventory.json
