@@ -22,6 +22,18 @@
       "default": null,
       "description": "Optional distributor lifecycle clock, such as azure-ai-foundry."
     },
+    "feeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow_vendored_fallback": {
+          "type": "boolean",
+          "default": false,
+          "description": "Continue with vendored feeds after a remote feed failure in degraded report-only mode."
+        }
+      },
+      "default": { "allow_vendored_fallback": false }
+    },
     "ignore": {
       "type": "object",
       "additionalProperties": false,
@@ -86,6 +98,7 @@
     "days": 90,
     "scope": "direct",
     "via": null,
+    "feeds": { "allow_vendored_fallback": false },
     "ignore": { "models": [], "paths": [] },
     "issues": { "enabled": true },
     "eval": { "command": null, "timeout_ms": 600000, "max_report_bytes": 65536, "pass_env": [] }

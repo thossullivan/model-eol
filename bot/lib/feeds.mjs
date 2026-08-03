@@ -15,7 +15,13 @@ const validateFeed = (value, url) => {
   if (!Array.isArray(value.models)) throw new Error(`${url} has no models array`)
 }
 
-export const downloadFeeds = async ({ urls = [], fetchImpl = globalThis.fetch, vendoredDir, warn = console.error }) => {
+export const downloadFeeds = async ({
+  urls = [],
+  fetchImpl = globalThis.fetch,
+  vendoredDir,
+  allowVendoredFallback = false,
+  warn = console.error,
+}) => {
   if (!urls.length) return { dir: vendoredDir, cleanup: () => {} }
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-feeds-'))
   try {
@@ -39,7 +45,8 @@ export const downloadFeeds = async ({ urls = [], fetchImpl = globalThis.fetch, v
     }
   } catch (error) {
     fs.rmSync(tempDir, { recursive: true, force: true })
-    warn(`model-eol: warning: feed download failed (${error.message}); using vendored feeds`)
-    return { dir: vendoredDir, cleanup: () => {} }
+    if (!allowVendoredFallback) throw new Error(`feed download failed: ${error.message}`)
+    warn(`model-eol: warning: feed download failed (${error.message}); using vendored feeds in degraded report-only mode`)
+    return { dir: vendoredDir, cleanup: () => {}, degraded: true }
   }
 }

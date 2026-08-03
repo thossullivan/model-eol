@@ -9,7 +9,11 @@ import { fileURLToPath } from 'node:url'
 import {
   branchFor,
   daysRemaining,
+  hasMetadataMarker,
   itemDigest,
+  markdownCode,
+  markdownLink,
+  markdownText,
   matchesAnyGlob,
   metadataLine,
   parseMetadata,
@@ -19,7 +23,7 @@ import { validatePlanItems } from '../lib/apply.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
 import { loadConfig } from './lib/config.mjs'
 import { downloadFeeds } from './lib/feeds.mjs'
-import { runEvalHook, reportForBody } from './lib/eval.mjs'
+import { readReportCapped, runEvalHook, reportForBody } from './lib/eval.mjs'
 import { GitHubClient, hasModelEolLabel } from './lib/github.mjs'
 import {
   cloneRepository,
@@ -143,18 +147,53 @@ const readPlanFile = file => {
 }
 
 const readEvalArtifact = (file, maxBytes, statusFile = null) => {
-  if (!file || !fs.existsSync(file)) return null
-  const bytes = fs.readFileSync(file)
+  if (!file) return null
   let exitCode = 0
   if (statusFile && fs.existsSync(statusFile)) {
     const parsed = Number.parseInt(fs.readFileSync(statusFile, 'utf8').trim(), 10)
     if (Number.isInteger(parsed)) exitCode = parsed
   }
-  if (bytes.length === 0 && exitCode === 0) return null
-  const report = bytes.length === 0 ? null : bytes.length > maxBytes
-    ? Buffer.concat([bytes.subarray(0, Math.max(0, maxBytes - 31)), Buffer.from('\n[model-eol: report truncated]')]).subarray(0, maxBytes).toString('utf8')
-    : bytes.toString('utf8')
-  return { status: exitCode === 0 ? 'pass' : 'fail', exit_code: exitCode, report }
+  let artifact
+  try {
+    artifact = readReportCapped(file, maxBytes)
+  } catch (error) {
+    return {
+      status: 'fail',
+      exit_code: exitCode,
+      report: `eval report artifact is unreadable: ${error.message}`,
+    }
+  }
+  if (artifact.missing) {
+    return {
+      status: 'fail',
+      exit_code: exitCode,
+      report: exitCode === 0 ? 'eval report artifact is missing' : null,
+    }
+  }
+  if (artifact.report === '' && exitCode === 0) return null
+  return { status: exitCode === 0 ? 'pass' : 'fail', exit_code: exitCode, report: artifact.report || null }
+}
+
+const loadBotConfig = file => {
+  const config = loadConfig(file)
+  if (!fs.existsSync(file)) return { ...config, feeds: { allow_vendored_fallback: false } }
+  let raw
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch (error) {
+    throw new Error(`could not read config ${file}: ${error.message}`)
+  }
+  const feeds = raw.feeds ?? {}
+  if (!feeds || typeof feeds !== 'object' || Array.isArray(feeds)) {
+    throw new Error('invalid .model-eol.json: feeds must be an object')
+  }
+  if (feeds.allow_vendored_fallback !== undefined && typeof feeds.allow_vendored_fallback !== 'boolean') {
+    throw new Error('invalid .model-eol.json: feeds.allow_vendored_fallback must be boolean')
+  }
+  return {
+    ...config,
+    feeds: { allow_vendored_fallback: feeds.allow_vendored_fallback ?? false },
+  }
 }
 
 const feedContext = feedsDir => {
@@ -182,12 +221,12 @@ const feedContext = feedsDir => {
   return records
 }
 
-const contextFor = (records, publisher, id, via) => {
+export const contextFor = (records, publisher, id, via) => {
   const record = records.get(`${publisher}\0${id}`)
   if (!record) return { announced: null, notes: [], entry: null }
   const distribution = via ? (record.entry.distributions ?? []).find(item => item.via === via) : null
   return {
-    announced: distribution?.announced ?? record.entry.announced ?? null,
+    announced: distribution ? distribution.announced ?? null : record.entry.announced ?? null,
     notes: [record.feed.note, record.entry.notes].filter(Boolean),
     entry: record.entry,
   }
@@ -222,7 +261,7 @@ const buildModelGroups = (plan, config, root, records) => {
         publisher: item.publisher,
         items: [],
         via: plan.via,
-        branch: branchFor(item.publisher, item.id),
+        branch: branchFor(item.publisher, item.id, plan.via),
         context: contextFor(records, item.publisher, item.id, plan.via),
       })
     }
@@ -286,13 +325,13 @@ const notesFor = group => {
 const sourceSection = group => {
   const sources = sourcesFor(group)
   return sources.length
-    ? sources.map(source => `- [${source}](${source})`).join('\n')
+    ? sources.map(source => `- ${markdownLink(source, source)}`).join('\n')
     : '- No source URL was included in the plan.'
 }
 
 const notesSection = group => {
   const notes = notesFor(group)
-  return notes.length ? notes.map(note => `- ${note}`).join('\n') : '- No additional feed notes.'
+  return notes.length ? notes.map(note => `- ${markdownText(note)}`).join('\n') : '- No additional feed notes.'
 }
 
 const evalSection = result => {
@@ -309,7 +348,7 @@ const tokenWarning = tokenKind => tokenKind === 'github-token'
 
 export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = null, evalResult = null }) => {
   const item = group.items[0]
-  const announced = group.context?.announced ?? 'not specified'
+  const announced = markdownText(group.context?.announced ?? 'not specified')
   const days = daysRemaining(item.shutdown, now)
   const metadata = {
     schema: BOT_SCHEMA,
@@ -317,6 +356,7 @@ export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = nu
     publisher: group.publisher,
     shutdown: item.shutdown,
     via: group.via ?? null,
+    replacement: item.replacement,
     head_sha: headSha,
     feed_digest: group.feedDigest,
   }
@@ -325,11 +365,11 @@ export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = nu
     '',
     '## What / when',
     `- Announced: ${announced}`,
-    `- Shutdown: ${item.shutdown}`,
+    `- Shutdown: ${markdownText(item.shutdown)}`,
     `- Days remaining: ${days}`,
     '',
     '## Replacement',
-    `replacement per feed as of ${now.toISOString().slice(0, 10)}: \`${item.replacement}\`. Treat as a snapshot in time, not a constant.`,
+    `replacement per feed as of ${now.toISOString().slice(0, 10)}: ${markdownCode(item.replacement)}. Treat as a snapshot in time, not a constant.`,
     '',
     '## Sources',
     sourceSection(group),
@@ -338,7 +378,7 @@ export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = nu
     notesSection(group),
   ]
   if (group.via) {
-    sections.push('', '## Distributor clock', `This migration uses the \`${group.via}\` distributor clock; the shutdown date above is the date for that channel.`)
+    sections.push('', '## Distributor clock', `This migration uses the ${markdownCode(group.via)} distributor clock; the shutdown date above is the date for that channel.`)
   }
   const evaluation = evalSection(evalResult)
   if (evaluation) sections.push('', evaluation)
@@ -359,23 +399,24 @@ export const buildIssueBody = ({ group, now = new Date() }) => {
     publisher: group.publisher,
     shutdown: group.shutdown,
     via: group.via ?? null,
+    replacement: group.issues[0].replacement ?? null,
     head_sha: null,
     feed_digest: group.feedDigest,
     ...(group.channel ? { channel: group.channel } : {}),
   }
   const evidence = group.issues
-    .map(issue => `- ${repoPath(issue.file, group.root || '.')}:${issue.line} - ${issue.reason}${issue.matched ? ` (${issue.matched})` : ''}`)
+    .map(issue => `- ${markdownText(`${repoPath(issue.file, group.root || '.')}:${issue.line} - ${issue.reason}${issue.matched ? ` (${issue.matched})` : ''}`)}`)
     .join('\n')
   return [
     metadataLine(metadata),
     '',
     '## Finding',
-    `- Subject: \`${group.subject}\``,
-    `- Reason: ${group.issues[0].reason}`,
-    `- Status: ${group.issues[0].status ?? 'unresolved'}`,
-    `- Shutdown: ${group.shutdown ?? 'not scheduled'}`,
+    `- Subject: ${markdownCode(group.subject)}`,
+    `- Reason: ${markdownText(group.issues[0].reason)}`,
+    `- Status: ${markdownText(group.issues[0].status ?? 'unresolved')}`,
+    `- Shutdown: ${markdownText(group.shutdown ?? 'not scheduled')}`,
     ...(group.issues[0].replacement
-      ? [`- Replacement per feed as of ${now.toISOString().slice(0, 10)}: \`${group.issues[0].replacement}\`. Treat as a snapshot in time, not a constant.`]
+      ? [`- Replacement per feed as of ${now.toISOString().slice(0, 10)}: ${markdownCode(group.issues[0].replacement)}. Treat as a snapshot in time, not a constant.`]
       : []),
     `- Recorded on: ${now.toISOString().slice(0, 10)}`,
     '',
@@ -397,17 +438,29 @@ const isOpen = item => item.state === 'open'
 const isMerged = item => Boolean(item.merged_at || item.pull_request?.merged_at || item.merged === true)
 
 const matchingPulls = (pulls, group) => pulls
-  .filter(item => !item.labels || hasModelEolLabel(item))
-  .map(item => ({ item, metadata: parseMetadata(item.body) }))
-  .filter(record => record.metadata?.id === group.id && record.metadata?.publisher === group.publisher)
+  .filter(item => !item.labels || hasModelEolLabel(item) || item.head?.ref === group.branch || hasMetadataMarker(item.body))
+  .map(item => {
+    const metadata = parseMetadata(item.body)
+    return { item, metadata, conflict: hasMetadataMarker(item.body) && !metadata }
+  })
+  .filter(record => record.conflict || (
+    record.metadata?.id === group.id
+    && record.metadata?.publisher === group.publisher
+    && (record.metadata.via ?? null) === (group.via ?? null)
+  ))
 
 const matchingIssues = (issues, group) => issues
-  .filter(item => !item.labels || hasModelEolLabel(item))
-  .map(item => ({ item, metadata: parseMetadata(item.body) }))
+  .filter(item => !item.labels || hasModelEolLabel(item) || hasMetadataMarker(item.body))
+  .map(item => {
+    const metadata = parseMetadata(item.body)
+    return { item, metadata, conflict: hasMetadataMarker(item.body) && !metadata }
+  })
   .filter(record => {
+    if (record.conflict) return true
     if (!record.metadata) return false
     if (record.metadata.id !== (group.id || group.subject)) return false
     if (record.metadata.publisher !== group.publisher) return false
+    if ((record.metadata.via ?? null) !== (group.via ?? null)) return false
     return !group.channel || record.metadata.channel === group.channel || (record.metadata.id === group.channel && !record.metadata.channel)
   })
 
@@ -420,7 +473,7 @@ const currentHeadFor = async (api, pull, group) => {
 }
 
 const standingDownComment = (group, metadata, currentHead) =>
-  `model-eol is standing down for this branch. The branch head (${currentHead || 'unknown'}) no longer satisfies the bot lease checks for metadata head (${metadata?.head_sha || 'unknown'}), so a human change will not be overwritten. Please update or close this PR manually. An actor with push access can forge the configured identity.`
+  `model-eol is standing down for this branch. The branch head (${markdownCode(currentHead || 'unknown')}) no longer satisfies the bot lease checks for metadata head (${markdownCode(metadata?.head_sha || 'unknown')}), so a human change will not be overwritten. Please update or close this PR manually. An actor with push access can forge the configured identity.`
 
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2))
 
@@ -464,6 +517,12 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
         evalResult = { status: 'fail', exit_code: null, report: `eval runner error: ${error.message}` }
       }
     }
+    if (evalResult && evalResult.status !== 'pass') {
+      const error = new Error(`eval hook did not pass: ${evalResult.status}`)
+      error.code = 'MODEL_EOL_EVAL_FAILED'
+      error.evalResult = evalResult
+      throw error
+    }
 
     configureIdentity(clone)
     const files = group.items.map(item => repoPath(item.file, clone))
@@ -480,7 +539,12 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
 const decision = (group, action, extra = {}) => ({ group, action, ...extra })
 
 const processModel = async ({ api, pulls, group, source, base, plan, config, checkerPath, evalEnabled, externalEval, root, now, tokenKind, warn }) => {
+  if (externalEval && externalEval.status !== 'pass') {
+    return decision(group, 'eval-failed', { evalResult: externalEval })
+  }
   const matches = matchingPulls(pulls, group)
+  const conflict = matches.find(record => record.conflict)
+  if (conflict) return decision(group, 'conflict', { number: conflict.item.number })
   const open = matches.find(record => isOpen(record.item))
   const currentDigest = group.feedDigest
   if (open) {
@@ -506,9 +570,15 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
         warn,
       })
     } catch (error) {
+      if (error.code === 'MODEL_EOL_EVAL_FAILED') {
+        return decision(group, 'eval-failed', { number: open.item.number, evalResult: error.evalResult })
+      }
       if (error.code !== 'MODEL_EOL_BRANCH_STAND_DOWN') throw error
       await api.comment(open.item.number, standingDownComment(group, open.metadata, error.currentHead))
       return decision(group, 'stand-down', { number: open.item.number })
+    }
+    if (patch.evalResult && patch.evalResult.status !== 'pass') {
+      return decision(group, 'eval-failed', { number: open.item.number, evalResult: patch.evalResult })
     }
     if (!patch.evalResult && externalEval) patch.evalResult = externalEval
     const body = buildPullBody({ group, headSha: patch.headSha, now, tokenKind, evalResult: patch.evalResult })
@@ -516,9 +586,11 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
     return decision(group, 'update', { number: open.item.number, body, headSha: patch.headSha })
   }
 
-  const merged = matches.find(record => !isOpen(record.item) && isMerged(record.item) && record.metadata.shutdown === group.items[0].shutdown)
+  const replacement = group.items[0].replacement
+  // Legacy metadata without replacement keeps shutdown-only suppression.
+  const merged = matches.find(record => !isOpen(record.item) && isMerged(record.item) && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (merged) return decision(group, 'skip-merged', { number: merged.item.number })
-  const dismissed = matches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.shutdown === group.items[0].shutdown)
+  const dismissed = matches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (dismissed) return decision(group, 'skip-dismissed', { number: dismissed.item.number })
 
   const previousBotHead = matches.find(record => record.metadata?.head_sha)?.metadata.head_sha ?? null
@@ -538,13 +610,29 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
       warn,
     })
   } catch (error) {
+    if (error.code === 'MODEL_EOL_EVAL_FAILED') {
+      return decision(group, 'eval-failed', { evalResult: error.evalResult })
+    }
     if (error.code !== 'MODEL_EOL_BRANCH_STAND_DOWN') throw error
     const prior = matches.find(record => record.metadata?.head_sha === previousBotHead)
     if (prior) await api.comment(prior.item.number, standingDownComment(group, prior.metadata, error.currentHead))
     return decision(group, 'stand-down', { number: prior?.item.number })
   }
+  if (patch.evalResult && patch.evalResult.status !== 'pass') {
+    return decision(group, 'eval-failed', { evalResult: patch.evalResult })
+  }
   if (!patch.evalResult && externalEval) patch.evalResult = externalEval
   const body = buildPullBody({ group, headSha: patch.headSha, now, tokenKind, evalResult: patch.evalResult })
+  const latestMatches = matchingPulls(await api.listPullsByHead(group.branch), group)
+  const latestConflict = latestMatches.find(record => record.conflict)
+  if (latestConflict) return decision(group, 'conflict', { number: latestConflict.item.number })
+  const latestOpen = latestMatches.find(record => isOpen(record.item))
+  if (latestOpen) {
+    await api.updatePull(latestOpen.item.number, { title: pullTitle(group), body })
+    return decision(group, 'update', { number: latestOpen.item.number, body, headSha: patch.headSha })
+  }
+  const latestSuppressed = latestMatches.find(record => !isOpen(record.item) && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  if (latestSuppressed) return decision(group, isMerged(latestSuppressed.item) ? 'skip-merged' : 'skip-dismissed', { number: latestSuppressed.item.number })
   const created = await api.createPull({
     title: pullTitle(group),
     head: group.branch,
@@ -556,6 +644,8 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
 
 const processIssue = async ({ api, issues, group, now }) => {
   const matches = matchingIssues(issues, group)
+  const conflict = matches.find(record => record.conflict)
+  if (conflict) return decision(group, 'conflict', { number: conflict.item.number })
   const open = matches.find(record => isOpen(record.item))
   const body = buildIssueBody({ group, now })
   if (open) {
@@ -563,8 +653,19 @@ const processIssue = async ({ api, issues, group, now }) => {
     await api.updateIssue(open.item.number, { title: issueTitle(group), body })
     return decision(group, 'update', { number: open.item.number, body })
   }
-  const dismissed = matches.find(record => !isOpen(record.item) && record.metadata.shutdown === group.shutdown)
+  const replacement = group.issues[0].replacement ?? null
+  const dismissed = matches.find(record => !isOpen(record.item) && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (dismissed) return decision(group, 'skip-dismissed', { number: dismissed.item.number })
+  const latestMatches = matchingIssues(await api.listIssues(), group)
+  const latestConflict = latestMatches.find(record => record.conflict)
+  if (latestConflict) return decision(group, 'conflict', { number: latestConflict.item.number })
+  const latestOpen = latestMatches.find(record => isOpen(record.item))
+  if (latestOpen) {
+    await api.updateIssue(latestOpen.item.number, { title: issueTitle(group), body })
+    return decision(group, 'update', { number: latestOpen.item.number, body })
+  }
+  const latestDismissed = latestMatches.find(record => !isOpen(record.item) && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  if (latestDismissed) return decision(group, 'skip-dismissed', { number: latestDismissed.item.number })
   const created = await api.createIssue({ title: issueTitle(group), body, labels: ['model-eol'] })
   return decision(group, 'create', { number: created.number, body })
 }
@@ -575,6 +676,11 @@ const dryDecision = (group, now, tokenKind) => group.kind === 'model'
     branch: group.branch,
   })
   : decision(group, 'create', { body: buildIssueBody({ group, now }) })
+
+const reportOnlyDecision = (group, now, tokenKind) => {
+  const result = dryDecision(group, now, tokenKind)
+  return { ...result, action: 'report-only' }
+}
 
 const prepareScan = ({ targetDir, source, dryRun }) => {
   if (!dryRun || !String(targetDir).startsWith('file://')) return { path: targetDir, cleanup: () => {} }
@@ -594,8 +700,9 @@ const configFileFor = ({ targetDir, configPath, scanPath }) => {
   return candidate
 }
 
-export const formatDecisions = decisions => {
+export const formatDecisions = (decisions, { degraded = false } = {}) => {
   const lines = ['model-eol decision table']
+  if (degraded) lines.push('model-eol status: degraded - vendored feed fallback enabled; no GitHub writes')
   for (const record of decisions) {
     const group = record.group
     const label = group.kind === 'model' ? `${group.publisher}/${group.id}` : `${group.publisher}/${group.subject}`
@@ -633,23 +740,31 @@ export const runBot = async ({
   const targetIsUrl = String(targetDir).startsWith('file://')
   const targetPath = targetIsUrl ? targetDir : path.resolve(targetDir)
   const source = targetIsUrl ? targetDir : originFor(targetPath)
-  const feedSet = await downloadFeeds({ urls: feedsUrls, fetchImpl, vendoredDir: vendoredFeeds, warn })
   let scan = null
   let baseClone = null
   let ownedBaseRoot = null
+  let feedSet = null
   try {
     if (dryRun) {
       scan = prepareScan({ targetDir: targetPath, source, dryRun })
       const configFile = configFileFor({ targetDir, configPath, scanPath: scan.path })
       if (configPath && !fs.existsSync(configFile)) throw new Error(`config file not found: ${configFile}`)
-      const config = loadConfig(configFile)
+      const config = loadBotConfig(configFile)
+      feedSet = await downloadFeeds({
+        urls: feedsUrls,
+        fetchImpl,
+        vendoredDir: vendoredFeeds,
+        allowVendoredFallback: config.feeds.allow_vendored_fallback,
+        warn,
+      })
       const generatedPlan = runPlan({ workDir: scan.path, config, feedsDir: feedSet.dir, checkerPath, warn })
       const plan = planFile ? readPlanFile(asAbsolute(planFile)) : generatedPlan
       const records = feedContext(feedSet.dir)
       const models = buildModelGroups(plan, config, scan.path, records)
       const issues = config.issues.enabled ? buildIssueGroups(plan, config, scan.path, records) : []
-      const decisions = [...models.map(group => dryDecision(group, now, tokenKind)), ...issues.map(group => dryDecision(group, now, tokenKind))]
-      return { plan, config, decisions, feedsDir: feedSet.dir }
+      const report = group => feedSet.degraded ? reportOnlyDecision(group, now, tokenKind) : dryDecision(group, now, tokenKind)
+      const decisions = [...models.map(report), ...issues.map(report)]
+      return { plan, config, decisions, feedsDir: feedSet.dir, degraded: Boolean(feedSet.degraded) }
     }
 
     ownedBaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-base-'))
@@ -658,12 +773,24 @@ export const runBot = async ({
     const base = defaultBranch(baseClone)
     const configFile = configFileFor({ targetDir, configPath, scanPath: baseClone })
     if (configPath && !fs.existsSync(configFile)) throw new Error(`config file not found: ${configFile}`)
-    const config = loadConfig(configFile)
+    const config = loadBotConfig(configFile)
+    feedSet = await downloadFeeds({
+      urls: feedsUrls,
+      fetchImpl,
+      vendoredDir: vendoredFeeds,
+      allowVendoredFallback: config.feeds.allow_vendored_fallback,
+      warn,
+    })
     const generatedPlan = runPlan({ workDir: baseClone, config, feedsDir: feedSet.dir, checkerPath, warn })
     const plan = planFile ? readPlanFile(asAbsolute(planFile)) : generatedPlan
     const records = feedContext(feedSet.dir)
     const models = buildModelGroups(plan, config, baseClone, records)
     const issues = config.issues.enabled ? buildIssueGroups(plan, config, baseClone, records) : []
+    if (feedSet.degraded) {
+      const report = group => reportOnlyDecision(group, now, tokenKind)
+      const decisions = [...models.map(report), ...issues.map(report)]
+      return { plan, config, decisions, feedsDir: feedSet.dir, degraded: true }
+    }
     const externalEval = readEvalArtifact(
       evalReportFile ? asAbsolute(evalReportFile) : null,
       config.eval.max_report_bytes,
@@ -692,11 +819,11 @@ export const runBot = async ({
       }))
     }
     for (const group of issues) decisions.push(await processIssue({ api, issues: issueRecords, group, now }))
-    return { plan, config, decisions, feedsDir: feedSet.dir }
+    return { plan, config, decisions, feedsDir: feedSet.dir, degraded: false }
   } finally {
     scan?.cleanup()
     if (ownedBaseRoot) fs.rmSync(ownedBaseRoot, { recursive: true, force: true })
-    feedSet.cleanup()
+    feedSet?.cleanup()
   }
 }
 
@@ -720,8 +847,11 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
     apiUrl: env.GITHUB_API_URL || 'https://api.github.com',
     tokenKind: env.MODEL_EOL_TOKEN_KIND || null,
   })
-  if (options.dryRun) console.log(formatDecisions(result.decisions))
-  else for (const item of result.decisions) console.log(`${item.action} ${item.group.publisher}/${item.group.kind === 'model' ? item.group.id : item.group.subject}`)
+  if (options.dryRun) console.log(formatDecisions(result.decisions, { degraded: result.degraded }))
+  else {
+    if (result.degraded) console.log('model-eol status: degraded - vendored feed fallback enabled; no GitHub writes')
+    for (const item of result.decisions) console.log(`${item.action} ${item.group.publisher}/${item.group.kind === 'model' ? item.group.id : item.group.subject}`)
+  }
   return 0
 }
 

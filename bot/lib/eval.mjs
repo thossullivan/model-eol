@@ -1,12 +1,33 @@
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { markdownFenceText } from './common.mjs'
 
-const truncateReport = (value, limit) => {
-  const bytes = Buffer.from(value, 'utf8')
-  if (bytes.length <= limit) return value
+const truncateReport = (bytes, limit, truncated) => {
+  if (!truncated) return bytes.toString('utf8')
   const marker = Buffer.from('\n[model-eol: report truncated]', 'utf8')
   if (limit <= marker.length) return marker.subarray(0, limit).toString('utf8')
-  return Buffer.concat([bytes.subarray(0, limit - marker.length), marker]).toString('utf8')
+  return Buffer.concat([bytes.subarray(0, limit - marker.length), marker]).subarray(0, limit).toString('utf8')
+}
+
+export const readReportCapped = (file, limit) => {
+  const cap = Math.max(0, limit)
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+  } catch (error) {
+    if (error.code === 'ENOENT') return { missing: true, report: null }
+    throw error
+  }
+  try {
+    const buffer = Buffer.alloc(cap + 1)
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0)
+    return {
+      missing: false,
+      report: truncateReport(buffer.subarray(0, Math.min(bytesRead, cap)), cap, bytesRead > cap),
+    }
+  } finally {
+    fs.closeSync(fd)
+  }
 }
 
 export const runEvalHook = ({ command, timeoutMs, maxReportBytes, passEnv = [], cwd, oldId, newId, planPath, reportPath }) => {
@@ -30,16 +51,33 @@ export const runEvalHook = ({ command, timeoutMs, maxReportBytes, passEnv = [], 
     timeout: timeoutMs,
     encoding: 'utf8',
     stdio: ['ignore', 'ignore', 'ignore'],
+    detached: true,
   })
   const timedOut = result.error?.code === 'ETIMEDOUT'
     || result.error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+  if (timedOut && Number.isInteger(result.pid)) {
+    try {
+      process.kill(-result.pid, 'SIGKILL')
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw new Error(`could not kill eval process group: ${error.message}`)
+    }
+  }
   const exitCode = Number.isInteger(result.status) ? result.status : null
-  const status = timedOut ? 'timeout' : exitCode === 0 ? 'pass' : 'fail'
+  let status = timedOut ? 'timeout' : exitCode === 0 ? 'pass' : 'fail'
   let report = null
-  if (fs.existsSync(reportPath)) {
-    report = truncateReport(fs.readFileSync(reportPath, 'utf8'), maxReportBytes)
+  try {
+    const artifact = readReportCapped(reportPath, maxReportBytes)
+    if (artifact.missing && status === 'pass') {
+      status = 'fail'
+      report = 'eval report artifact is missing'
+    } else {
+      report = artifact.report
+    }
+  } catch (error) {
+    if (status === 'pass') status = 'fail'
+    report = `eval report artifact is unreadable: ${error.message}`
   }
   return { status, exit_code: exitCode, report }
 }
 
-export const reportForBody = report => String(report ?? '').replaceAll('`', '')
+export const reportForBody = report => markdownFenceText(report)

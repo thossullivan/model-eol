@@ -63,7 +63,7 @@ export class GitHubClient {
 
   async listAll(resource) {
     const result = []
-    let endpoint = `${resource}?state=all&labels=model-eol&per_page=100&page=1`
+    let endpoint = `${resource}?state=all&per_page=100&page=1`
     for (let page = 0; page < 1000; page++) {
       const { data, response } = await this.request('GET', endpoint)
       if (!Array.isArray(data)) throw new Error(`GitHub ${resource} response was not an array`)
@@ -75,13 +75,21 @@ export class GitHubClient {
       }
       if (data.length < 100) break
       const nextPage = page + 2
-      endpoint = `${resource}?state=all&labels=model-eol&per_page=100&page=${nextPage}`
+      endpoint = `${resource}?state=all&per_page=100&page=${nextPage}`
     }
     return result
   }
 
   async listPulls() {
     return this.listAll(`/repos/${this.repo}/pulls`)
+  }
+
+  async listPullsByHead(branch) {
+    const owner = this.repo.split('/')[0]
+    const head = encodeURIComponent(`${owner}:${branch}`)
+    const { data } = await this.request('GET', `/repos/${this.repo}/pulls?state=all&head=${head}&per_page=100&page=1`)
+    if (!Array.isArray(data)) throw new Error(`GitHub pull request head query response was not an array`)
+    return data
   }
 
   async listIssues() {

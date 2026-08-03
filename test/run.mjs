@@ -455,6 +455,32 @@ assert(applied.code === 0 && fs.readFileSync(applyFile, 'utf8') === `${newLine}\
 const rerun = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
 assert(rerun.code === 0 && rerun.out.includes('already-applied'), 'apply is idempotent')
 
+const sharedOldLine = 'FIRST = "old-one"; SECOND = "old-two"'
+const sharedNewLine = 'FIRST = "new-one"; SECOND = "new-two"'
+const sharedItems = [
+  { ...applyItem, matched: 'old-one', replacement: 'new-one', expected_line_sha256: hash(sharedOldLine) },
+  { ...applyItem, matched: 'old-two', replacement: 'new-two', expected_line_sha256: hash(sharedOldLine) },
+]
+fs.writeFileSync(applyFile, `${sharedOldLine}\n`)
+writeApplyPlan(sharedItems)
+const sharedApplied = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(sharedApplied.code === 0 && fs.readFileSync(applyFile, 'utf8') === `${sharedNewLine}\n` && (sharedApplied.out.match(/applied /g) ?? []).length === 2, 'apply groups multiple replacements on one line')
+const sharedRerun = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(sharedRerun.code === 0 && sharedRerun.err === '' && (sharedRerun.out.match(/already-applied /g) ?? []).length === 2 && !sharedRerun.out.includes('failed'), 'grouped apply is idempotent for every item')
+
+const mixedLine = 'FIRST = "new-one"; SECOND = "old-two"'
+fs.writeFileSync(applyFile, `${mixedLine}\n`)
+writeApplyPlan(sharedItems)
+const mixedApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(mixedApply.code === 1 && (mixedApply.err.match(/line hash does not match expected_line_sha256/g) ?? []).length === 2 && fs.readFileSync(applyFile, 'utf8') === `${mixedLine}\n`, 'mixed grouped apply fails every item without half-applying')
+
+fs.writeFileSync(applyFile, `${sharedOldLine}\n`)
+writeApplyPlan(sharedItems)
+const atomicApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+const temporaryApplyFiles = fs.readdirSync(applyDir).filter(name => name.startsWith('.model-eol-'))
+assert(atomicApply.code === 0 && fs.readFileSync(applyFile, 'utf8') === `${sharedNewLine}\n`, 'atomic apply writes the complete final content')
+assert(temporaryApplyFiles.length === 0, 'atomic apply leaves no temporary file')
+
 const mismatchItem = { ...applyItem, expected_line_sha256: hash('MODEL = "different-model"') }
 fs.writeFileSync(applyFile, `${oldLine}\n`)
 writeApplyPlan(mismatchItem)

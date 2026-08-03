@@ -8,9 +8,11 @@ import { spawnSync } from 'node:child_process'
 
 import {
   buildPullBody,
+  contextFor,
+  formatDecisions,
   runBot,
 } from '../bot.mjs'
-import { branchFor, parseMetadata, slugFor } from '../lib/common.mjs'
+import { branchFor, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
@@ -74,6 +76,10 @@ class FakeGitHub {
     this.pulls = []
     this.issues = []
     this.nextNumber = 1
+    this.listPullCount = 0
+    this.listIssueCount = 0
+    this.beforeListPulls = null
+    this.beforeListIssues = null
   }
 
   response(data, status = 200) {
@@ -85,8 +91,16 @@ class FakeGitHub {
     const body = options.body ? JSON.parse(options.body) : null
     this.calls.push({ method: options.method, path: parsed.pathname, query: parsed.search, body })
     const pathName = parsed.pathname
-    if (options.method === 'GET' && pathName.endsWith('/pulls')) return this.response(this.pulls)
-    if (options.method === 'GET' && pathName.endsWith('/issues')) return this.response(this.issues)
+    if (options.method === 'GET' && pathName.endsWith('/pulls')) {
+      this.listPullCount++
+      this.beforeListPulls?.(this, this.listPullCount)
+      return this.response(this.pulls)
+    }
+    if (options.method === 'GET' && pathName.endsWith('/issues')) {
+      this.listIssueCount++
+      this.beforeListIssues?.(this, this.listIssueCount)
+      return this.response(this.issues)
+    }
     if (options.method === 'GET' && pathName.includes('/git/ref/heads/')) {
       const branch = decodeURIComponent(pathName.split('/git/ref/heads/')[1])
       const pull = this.pulls.find(item => item.head?.ref === branch)
@@ -172,7 +186,7 @@ assert(firstDecision?.action === 'create', 'create-PR flow returns create decisi
 assert(createCall?.body?.labels === undefined, 'pull create payload leaves label assignment to the label endpoint')
 assert(github.callsFor('POST', '/labels').length === 1, 'created PR receives the model-eol label')
 assert(createCall?.body?.title === 'model-eol: migrate o3-deep-research-2025-06-26 before 2026-07-23', 'PR title includes canonical ID and shutdown')
-assert(metadata?.schema === 'model-eol.bot/0.1' && metadata.publisher === 'openai', 'PR has the machine-readable metadata block')
+assert(metadata?.schema === 'model-eol.bot/0.1' && metadata.publisher === 'openai' && metadata.replacement === 'gpt-5.6-sol', 'PR has the machine-readable metadata block including replacement')
 assert(firstDecision.body.includes('## What / when') && firstDecision.body.includes('## Replacement') && firstDecision.body.includes('## Sources') && firstDecision.body.includes('## Feed notes'), 'PR body has lifecycle, replacement, source, and note sections')
 assert(firstDecision.body.includes('Treat as a snapshot in time, not a constant.'), 'PR body renders the snapshot caveat verbatim')
 assert(firstDecision.body.includes('## Checklist') && firstDecision.body.includes('Review the diff'), 'PR body has the review checklist')
@@ -182,6 +196,36 @@ assert(!fs.readFileSync(path.join(repo.work, 'direct.py'), 'utf8').includes('gpt
 assert(firstDecision.body.includes('eval report with fence') && !firstDecision.body.includes('```fence```'), 'eval report is embedded fenced with backticks stripped')
 assert(firstDecision.body.includes('Result: pass') && firstDecision.body.includes('exit code 0'), 'passing eval result is recorded')
 assert(Array.isArray(first.config.eval.pass_env) && first.config.eval.pass_env.length === 0, 'eval config defaults to an empty pass_env allowlist')
+assert(!github.calls.find(call => call.method === 'GET' && call.path.endsWith('/pulls'))?.query.includes('labels='), 'pull discovery is not label-filtered')
+const contextRecords = new Map([
+  ['openai\0clocked-model', {
+    feed: { note: null },
+    entry: { announced: '2026-01-01', distributions: [{ via: 'azure-ai-foundry' }] },
+  }],
+])
+assert(contextFor(contextRecords, 'openai', 'clocked-model', 'azure-ai-foundry').announced === null, 'explicit distribution without announced date does not use publisher announcement')
+
+const clockRepo = makeRepo({ name: 'clock-matching', files: baseFiles, config })
+const clockGithub = new FakeGitHub()
+const clockRun = options => runBot({
+  repo: 'example/clock-matching',
+  targetDir: clockRepo.work,
+  token: 'test-token',
+  transport: clockGithub.transport.bind(clockGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const clockPublisher = await clockRun()
+const clockPublisherDecision = clockPublisher.decisions.find(item => item.group.kind === 'model')
+const clockPublisherPull = clockGithub.pulls.find(item => item.number === clockPublisherDecision?.number)
+if (clockPublisherPull) clockPublisherPull.head.sha = parseMetadata(clockPublisherDecision?.body)?.head_sha
+const distributorConfig = path.join(tempRoot, 'distributor-clock.json')
+write(distributorConfig, JSON.stringify({ days: 200, via: 'azure-ai-foundry', issues: { enabled: false } }))
+const clockDistributor = await clockRun({ configPath: distributorConfig })
+const clockDistributorDecision = clockDistributor.decisions.find(item => item.group.kind === 'model')
+assert(clockPublisherDecision?.action === 'create' && clockDistributorDecision?.action === 'create', 'publisher and distributor clocks create separate PR decisions')
+assert(clockGithub.callsFor('POST', '/pulls').length === 2 && clockGithub.pulls[0].head.ref !== clockGithub.pulls[1].head.ref, 'clock-specific PR matching does not reuse the publisher-clock PR')
 
 const callsAfterCreate = github.calls.length
 const unchanged = await run({ evalEnabled: true })
@@ -193,6 +237,40 @@ fs.cpSync(path.join(root, 'feeds'), changedFeeds, { recursive: true })
 const changedOpenai = JSON.parse(fs.readFileSync(path.join(changedFeeds, 'openai.json'), 'utf8'))
 changedOpenai.note = 'Changed feed note for lifecycle update'
 fs.writeFileSync(path.join(changedFeeds, 'openai.json'), JSON.stringify(changedOpenai, null, 2))
+
+const replacementRepo = makeRepo({ name: 'replacement-suppression', files: baseFiles, config })
+const replacementGithub = new FakeGitHub()
+const replacementRun = options => runBot({
+  repo: 'example/replacement-suppression',
+  targetDir: replacementRepo.work,
+  token: 'test-token',
+  transport: replacementGithub.transport.bind(replacementGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const replacementFirst = await replacementRun({ vendoredFeeds: changedFeeds })
+const replacementPull = replacementGithub.pulls.find(item => item.number === replacementFirst.decisions.find(item => item.group.kind === 'model')?.number)
+if (replacementPull) {
+  replacementPull.state = 'closed'
+  replacementPull.head.sha = parseMetadata(replacementFirst.decisions.find(item => item.group.kind === 'model')?.body)?.head_sha
+}
+const sameReplacement = await replacementRun({ vendoredFeeds: changedFeeds })
+assert(sameReplacement.decisions.find(item => item.group.kind === 'model')?.action === 'skip-dismissed', 'dismissed PR stays suppressed when shutdown and replacement still match')
+const legacyMetadata = parseMetadata(replacementFirst.decisions.find(item => item.group.kind === 'model')?.body)
+const legacyBody = `${metadataLine(Object.fromEntries(Object.entries(legacyMetadata).filter(([key]) => key !== 'replacement')))}${replacementFirst.decisions.find(item => item.group.kind === 'model')?.body.split('\n').slice(1).join('\n')}`
+if (replacementPull) replacementPull.body = legacyBody
+const legacyReplacement = await replacementRun({ vendoredFeeds: changedFeeds })
+assert(legacyReplacement.decisions.find(item => item.group.kind === 'model')?.action === 'skip-dismissed', 'pre-upgrade metadata without replacement keeps shutdown suppression')
+if (replacementPull) replacementPull.body = replacementFirst.decisions.find(item => item.group.kind === 'model')?.body
+const replacementYFeeds = path.join(tempRoot, 'replacement-y-feeds')
+fs.cpSync(changedFeeds, replacementYFeeds, { recursive: true })
+const replacementYOpenai = JSON.parse(fs.readFileSync(path.join(replacementYFeeds, 'openai.json'), 'utf8'))
+replacementYOpenai.models.find(item => item.id === 'o3-deep-research-2025-06-26').replacement = 'gpt-5.6-terra'
+fs.writeFileSync(path.join(replacementYFeeds, 'openai.json'), JSON.stringify(replacementYOpenai, null, 2))
+const replacementChanged = await replacementRun({ vendoredFeeds: replacementYFeeds })
+assert(replacementChanged.decisions.find(item => item.group.kind === 'model')?.action === 'create' && replacementGithub.callsFor('POST', '/pulls').length === 2, 'changed replacement creates a fresh PR instead of reusing dismissal')
+
 const beforeUpdateHead = headOf(repo, branch)
 const updated = await run({ evalEnabled: true, vendoredFeeds: changedFeeds })
 const updateDecision = updated.decisions.find(item => item.group.kind === 'model')
@@ -290,18 +368,41 @@ assert(ignoreRun.decisions.length === 0, 'canonical model and path ignores suppr
 assert(slugFor('A very/unsafe ID!!! with a long tail that should be trimmed') .length <= 40, 'slug generation trims unsafe long IDs to 40 characters')
 assert(branchFor('openai', 'model/with?unsafe') !== branchFor('openai', 'model-with-unsafe'), 'hash suffix keeps collision-prone slugs distinct')
 
+const feedFailureGithub = new FakeGitHub()
+let feedFailure
+try {
+  await runBot({
+    repo: 'example/app',
+    targetDir: repo.work,
+    token: 'test-token',
+    transport: feedFailureGithub.transport.bind(feedFailureGithub),
+    feedsUrls: ['https://feeds.invalid/a.json', 'https://feeds.invalid/b.json'],
+    fetchImpl: async url => url.endsWith('b.json') ? { status: 500, ok: false } : { status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', models: [] }) },
+    vendoredFeeds: path.join(root, 'feeds'),
+  })
+} catch (error) {
+  feedFailure = error
+}
+assert(feedFailure?.message.includes('feed download failed') && feedFailureGithub.calls.length === 0, 'remote feed failure fails the run before GitHub mutation')
+
+const fallbackConfig = path.join(tempRoot, 'fallback-config.json')
+write(fallbackConfig, JSON.stringify({ feeds: { allow_vendored_fallback: true }, issues: { enabled: false } }))
 const warnings = []
 const fallback = await runBot({
   repo: 'example/app',
   targetDir: repo.work,
-  dryRun: true,
+  token: 'test-token',
+  transport: feedFailureGithub.transport.bind(feedFailureGithub),
+  configPath: fallbackConfig,
   feedsUrls: ['https://feeds.invalid/a.json', 'https://feeds.invalid/b.json'],
   fetchImpl: async url => url.endsWith('b.json') ? { status: 500, ok: false } : { status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', models: [] }) },
   vendoredFeeds: path.join(root, 'feeds'),
   warn: message => warnings.push(message),
 })
-assert(fallback.decisions.some(item => item.group.kind === 'model'), 'failed feed download falls back to vendored feeds')
-assert(warnings.some(message => message.includes('using vendored feeds')), 'feed fallback emits a warning')
+assert(fallback.degraded === true && fallback.decisions.some(item => item.group.kind === 'model' && item.action === 'report-only'), 'opt-in feed fallback returns degraded report-only decisions')
+assert(feedFailureGithub.calls.length === 0, 'degraded vendored fallback makes zero GitHub calls')
+assert(warnings.some(message => message.includes('using vendored feeds') && message.includes('degraded')), 'feed fallback emits a degraded warning')
+assert(formatDecisions(fallback.decisions, { degraded: fallback.degraded }).includes('status: degraded'), 'degraded fallback state is visible in formatted output')
 
 let feedTemp
 const feedDownload = await downloadFeeds({
@@ -331,10 +432,147 @@ const passEval = runEval('node -e \'require("fs").writeFileSync(process.env.MODE
 assert(passEval.status === 'pass' && passEval.exit_code === 0 && passEval.report === 'pass', 'passing eval command reports pass and exit code')
 const failEval = runEval('node -e "process.exit(7)"')
 assert(failEval.status === 'fail' && failEval.exit_code === 7, 'failing eval command is recorded without throwing')
+const missingEval = runEval('node -e "process.exit(0)"')
+assert(missingEval.status === 'fail' && missingEval.report.includes('missing'), 'exit-zero eval with missing report fails closed')
 const timeoutEval = runEval('node -e "setTimeout(() => {}, 5000)"')
 assert(timeoutEval.status === 'timeout', 'timed out eval is killed and reported')
-const largeEval = runEval('node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "x".repeat(200))\'', { maxReportBytes: 100 })
-assert(largeEval.report.length <= 1000 && largeEval.report.includes('truncated'), 'oversized eval report is capped with a marker')
+const largeEval = runEval('node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "x".repeat(5 * 1024 * 1024))\'', { maxReportBytes: 128 })
+assert(Buffer.byteLength(largeEval.report) <= 128 && largeEval.report.includes('truncated'), 'multi-megabyte eval report is read through the configured byte cap')
+const childPidFile = path.join(evalDir, 'eval-child.pid')
+const childScript = path.join(evalDir, 'spawn-child.mjs')
+write(childScript, `import fs from 'node:fs'
+import { spawn } from 'node:child_process'
+const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { stdio: 'ignore' })
+fs.writeFileSync(${JSON.stringify(childPidFile)}, String(child.pid))
+setTimeout(() => {}, 10000)
+`)
+const timeoutWithChild = runEval(`node ${childScript}`, { timeoutMs: 200 })
+await new Promise(resolve => setTimeout(resolve, 100))
+let childGone = true
+if (fs.existsSync(childPidFile)) {
+  const childPid = Number.parseInt(fs.readFileSync(childPidFile, 'utf8'), 10)
+  try {
+    process.kill(childPid, 0)
+    childGone = false
+  } catch (error) {
+    childGone = error.code === 'ESRCH'
+  }
+}
+assert(timeoutWithChild.status === 'timeout' && childGone, 'eval timeout kills the detached process group and its child')
+
+const evalMissingRepo = makeRepo({
+  name: 'eval-missing-report',
+  files: baseFiles,
+  config: {
+    issues: { enabled: false },
+    eval: { command: 'node -e "process.exit(0)"', timeout_ms: 1000, max_report_bytes: 128, pass_env: [] },
+  },
+})
+const evalMissingGithub = new FakeGitHub()
+const evalMissingResult = await runBot({
+  repo: 'example/eval-missing-report',
+  targetDir: evalMissingRepo.work,
+  token: 'test-token',
+  transport: evalMissingGithub.transport.bind(evalMissingGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  evalEnabled: true,
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const evalMissingDecision = evalMissingResult.decisions.find(item => item.group.kind === 'model')
+assert(evalMissingDecision?.action === 'eval-failed' && evalMissingGithub.callsFor('POST', '/pulls').length === 0, 'missing eval artifact blocks patch PR creation')
+assert(!gitTry(evalMissingRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'failed eval does not push a patch branch')
+
+const maliciousFeeds = path.join(tempRoot, 'malicious-feeds')
+fs.cpSync(path.join(root, 'feeds'), maliciousFeeds, { recursive: true })
+const maliciousOpenai = JSON.parse(fs.readFileSync(path.join(maliciousFeeds, 'openai.json'), 'utf8'))
+maliciousOpenai.note = '```\n# injected heading\n[x](javascript:alert(1))'
+fs.writeFileSync(path.join(maliciousFeeds, 'openai.json'), JSON.stringify(maliciousOpenai, null, 2))
+const markdownRepo = makeRepo({ name: 'markdown-sanitization', files: baseFiles, config: { issues: { enabled: false } } })
+const markdownGithub = new FakeGitHub()
+const markdownResult = await runBot({
+  repo: 'example/markdown-sanitization',
+  targetDir: markdownRepo.work,
+  token: 'test-token',
+  transport: markdownGithub.transport.bind(markdownGithub),
+  vendoredFeeds: maliciousFeeds,
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const markdownBody = markdownResult.decisions.find(item => item.group.kind === 'model')?.body || ''
+assert(!markdownBody.includes('```') && !markdownBody.includes('# injected heading') && !markdownBody.includes('](javascript:'), 'feed notes cannot break Markdown fences, headings, or links')
+assert(markdownBody.includes('[https://developers.openai.com/api/docs/deprecations](https://developers.openai.com/api/docs/deprecations)'), 'HTTPS source URLs remain real Markdown links')
+
+const unlabeledRepo = makeRepo({ name: 'unlabeled-branch', files: baseFiles, config })
+const unlabeledGithub = new FakeGitHub()
+const unlabeledRun = options => runBot({
+  repo: 'example/unlabeled-branch',
+  targetDir: unlabeledRepo.work,
+  token: 'test-token',
+  transport: unlabeledGithub.transport.bind(unlabeledGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const unlabeledFirst = await unlabeledRun()
+const unlabeledDecision = unlabeledFirst.decisions.find(item => item.group.kind === 'model')
+const unlabeledPull = unlabeledGithub.pulls.find(item => item.number === unlabeledDecision?.number)
+if (unlabeledPull) {
+  unlabeledPull.labels = []
+  unlabeledPull.head.sha = parseMetadata(unlabeledDecision?.body)?.head_sha
+}
+const unlabeledSecond = await unlabeledRun({ vendoredFeeds: changedFeeds })
+assert(unlabeledSecond.decisions.find(item => item.group.kind === 'model')?.action === 'update' && unlabeledGithub.callsFor('POST', '/pulls').length === 1, 'unlabeled bot PR on the expected branch is reused without duplicate creation')
+
+const conflictRepo = makeRepo({ name: 'metadata-conflict', files: baseFiles, config: { issues: { enabled: false } } })
+const conflictGithub = new FakeGitHub()
+const conflictBranch = branchFor('openai', 'o3-deep-research-2025-06-26')
+conflictGithub.pulls.push({
+  number: 90,
+  state: 'open',
+  labels: [],
+  body: '<!-- model-eol {"schema":"model-eol.bot/0.1","id":"o3-deep-research-2025-06-26"} -->',
+  head: { ref: conflictBranch, sha: null },
+})
+const conflictResult = await runBot({
+  repo: 'example/metadata-conflict',
+  targetDir: conflictRepo.work,
+  token: 'test-token',
+  transport: conflictGithub.transport.bind(conflictGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+assert(conflictResult.decisions.find(item => item.group.kind === 'model')?.action === 'conflict' && conflictGithub.callsFor('POST', '/pulls').length === 0, 'marked malformed metadata produces a visible conflict instead of a duplicate PR')
+
+const raceRepo = makeRepo({ name: 'precreate-race', files: baseFiles, config: { issues: { enabled: false } } })
+const raceGithub = new FakeGitHub()
+const raceBranch = branchFor('openai', 'o3-deep-research-2025-06-26')
+raceGithub.beforeListPulls = (client, count) => {
+  if (count !== 2) return
+  client.pulls.push({
+    number: 91,
+    state: 'open',
+    labels: [],
+    body: metadataLine({
+      schema: 'model-eol.bot/0.1',
+      id: 'o3-deep-research-2025-06-26',
+      publisher: 'openai',
+      shutdown: '2026-07-23',
+      via: null,
+      replacement: 'gpt-5.6-sol',
+      head_sha: null,
+      feed_digest: 'race',
+    }),
+    head: { ref: raceBranch, sha: null },
+  })
+}
+const raceResult = await runBot({
+  repo: 'example/precreate-race',
+  targetDir: raceRepo.work,
+  token: 'test-token',
+  transport: raceGithub.transport.bind(raceGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+assert(raceResult.decisions.find(item => item.group.kind === 'model')?.action === 'update' && raceGithub.callsFor('POST', '/pulls').length === 0 && raceGithub.calls.some(call => call.method === 'GET' && call.path.endsWith('/pulls') && call.query.includes('head=')), 'pre-create branch check catches an injected PR and avoids a race duplicate')
 
 const probeEnv = 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, JSON.stringify({ path: process.env.PATH, implicitToken: process.env.GITHUB_TOKEN, providerKey: process.env.OPENAI_API_KEY, modelSecret: process.env.MODEL_EOL_SECRET, explicit: process.env.MODEL_EOL_EXPLICIT }))\''
 const envNames = ['GITHUB_TOKEN', 'OPENAI_API_KEY', 'MODEL_EOL_SECRET', 'MODEL_EOL_EXPLICIT']

@@ -87,3 +87,5 @@ jobs:
 # a narrowly scoped fine-grained PAT or a GitHub App installation token instead.
 # Keep provider API keys only in the read-only plan/eval job and never pass them to
 # the publish job.
+# Set feeds.allow_vendored_fallback: true in .model-eol.json only for degraded report-only runs; the default is false.
+# Independent concurrent invocations need external mutual exclusion; this tool does not lock.
