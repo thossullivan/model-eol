@@ -4,14 +4,14 @@
   "description": "A machine-readable deprecation feed format for AI models, plus a zero-dependency checker and inventory CLI.",
   "type": "module",
   "bin": {
-    "model-eol": "./check.mjs"
+    "model-eol": "check.mjs"
   },
   "scripts": {
     "test": "node test/run.mjs && node refresh/test/run.mjs && node bot/test/run.mjs && node scripts/test-feed-changelog.mjs"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/thossullivan/model-eol.git"
+    "url": "git+https://github.com/thossullivan/model-eol.git"
   },
   "bugs": {
     "url": "https://github.com/thossullivan/model-eol/issues"
