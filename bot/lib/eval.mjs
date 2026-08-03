@@ -11,11 +11,25 @@ const truncateReport = (bytes, limit, truncated) => {
 
 export const readReportCapped = (file, limit) => {
   const cap = Math.max(0, limit)
-  let fd
+  let lstat
   try {
-    fd = fs.openSync(file, 'r')
+    lstat = fs.lstatSync(file)
   } catch (error) {
     if (error.code === 'ENOENT') return { missing: true, report: null }
+    throw error
+  }
+  if (!lstat.isFile() || lstat.isSymbolicLink()) throw new Error(`${file} is not a regular non-symlink file`)
+  let fd
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+  } catch (error) {
+    if (error.code === 'ENOENT') return { missing: true, report: null }
+    throw error
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`${file} is not a regular non-symlink file`)
+  } catch (error) {
+    fs.closeSync(fd)
     throw error
   }
   try {

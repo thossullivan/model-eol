@@ -18,6 +18,7 @@ import {
   metadataLine,
   parseMetadata,
   repoPath,
+  sha256,
 } from './lib/common.mjs'
 import { validatePlanItems } from '../lib/apply.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
@@ -148,20 +149,43 @@ const readPlanFile = file => {
 }
 
 const readEvalArtifact = (file, maxBytes, statusFile = null) => {
-  if (!file) return null
-  let exitCode = 0
-  if (statusFile && fs.existsSync(statusFile)) {
-    const parsed = Number.parseInt(fs.readFileSync(statusFile, 'utf8').trim(), 10)
-    if (Number.isInteger(parsed)) exitCode = parsed
+  if (!file && !statusFile) return null
+  let exitCode = null
+  let statusError = null
+  if (!statusFile) {
+    statusError = 'eval status artifact is missing'
+  } else {
+    try {
+      const statusArtifact = readReportCapped(statusFile, 1024)
+      if (statusArtifact.missing) statusError = 'eval status artifact is missing'
+      else {
+        const statusText = statusArtifact.report.trim()
+        if (!/^-?\d+$/.test(statusText)) statusError = 'eval status artifact is malformed'
+        else {
+          const parsed = Number(statusText)
+          if (!Number.isSafeInteger(parsed)) statusError = 'eval status artifact is outside the safe integer range'
+          else exitCode = parsed
+        }
+      }
+    } catch (error) {
+      statusError = `eval status artifact is unreadable: ${error.message}`
+    }
   }
   let artifact
   try {
-    artifact = readReportCapped(file, maxBytes)
+    artifact = file ? readReportCapped(file, maxBytes) : { missing: true, report: null }
   } catch (error) {
     return {
       status: 'fail',
       exit_code: exitCode,
       report: `eval report artifact is unreadable: ${error.message}`,
+    }
+  }
+  if (statusError) {
+    return {
+      status: 'fail',
+      exit_code: exitCode,
+      report: artifact.report ? `${statusError}; report: ${artifact.report}` : statusError,
     }
   }
   if (artifact.missing) {
@@ -481,6 +505,50 @@ const standingDownComment = (group, metadata, currentHead) =>
 
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2))
 
+const gitStatusPaths = cwd => {
+  const result = spawnSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (result.error || result.status !== 0) {
+    throw new Error(`could not inspect eval workspace: ${result.error?.message || result.stderr?.trim() || `exit ${result.status}`}`)
+  }
+  return result.stdout
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map(line => line.slice(3).trim())
+    .filter(Boolean)
+}
+
+const gitHead = cwd => {
+  const result = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (result.error || result.status !== 0) throw new Error(`could not inspect eval commit: ${result.error?.message || result.stderr?.trim() || `exit ${result.status}`}`)
+  return result.stdout.trim()
+}
+
+const hashFiles = (root, files) => new Map(files.map(file => [file, sha256(fs.readFileSync(path.join(root, file)))]))
+
+const evalWorkspaceDrift = (root, planFiles, expectedHashes, expectedHead) => {
+  if (gitHead(root) !== expectedHead) return 'eval changed repository history'
+  for (const file of planFiles) {
+    let actual
+    try {
+      actual = sha256(fs.readFileSync(path.join(root, file)))
+    } catch (error) {
+      return `eval changed planned file ${file}: it is unreadable after evaluation (${error.message})`
+    }
+    if (actual !== expectedHashes.get(file)) return `eval changed planned file ${file}`
+  }
+  const unexpected = gitStatusPaths(root).filter(file => !planFiles.includes(file))
+  if (unexpected.length) return `eval changed unexpected repository file ${unexpected[0]}`
+  return null
+}
+
 const makePatch = ({ source, base, branch, expectedHead, group, plan, config, checkerPath, evalEnabled, root, warn }) => {
   const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-work-'))
   const planRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-plan-'))
@@ -501,6 +569,9 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
     if (applied.status !== 0 || applied.error) {
       throw new Error(`apply subprocess failed: ${applied.error?.message || applied.stderr?.trim() || `exit ${applied.status}`}`)
     }
+    const planFiles = [...new Set(group.items.map(item => repoPath(item.file, clone)))]
+    const postApplyHashes = hashFiles(clone, planFiles)
+    const postApplyHead = gitHead(clone)
 
     let evalResult = null
     if (evalEnabled && config.eval.command) {
@@ -521,6 +592,16 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
         evalResult = { status: 'fail', exit_code: null, report: `eval runner error: ${error.message}` }
       }
     }
+    if (evalResult) {
+      const drift = evalWorkspaceDrift(clone, planFiles, postApplyHashes, postApplyHead)
+      if (drift) {
+        evalResult = {
+          ...evalResult,
+          status: 'fail',
+          report: [evalResult.report, drift].filter(Boolean).join('\n'),
+        }
+      }
+    }
     if (evalResult && evalResult.status !== 'pass') {
       const error = new Error(`eval hook did not pass: ${evalResult.status}`)
       error.code = 'MODEL_EOL_EVAL_FAILED'
@@ -529,7 +610,7 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
     }
 
     configureIdentity(clone)
-    const files = group.items.map(item => repoPath(item.file, clone))
+    const files = planFiles
     const message = `model-eol: migrate ${group.id} to ${group.items[0].replacement} (${group.feedDigest.slice(0, 8)})`
     const headSha = commitAll(clone, files, message)
     pushBranch(clone, branch, expectedHead)

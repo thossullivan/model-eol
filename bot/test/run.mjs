@@ -407,7 +407,7 @@ try {
     token: 'test-token',
     transport: feedFailureGithub.transport.bind(feedFailureGithub),
     feedsUrls: ['https://feeds.invalid/a.json', 'https://feeds.invalid/b.json'],
-    fetchImpl: async url => url.endsWith('b.json') ? { status: 500, ok: false } : { status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', models: [] }) },
+    fetchImpl: async url => url.endsWith('b.json') ? { status: 500, ok: false } : { status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', publisher: 'remote', generated: '2026-08-01T00:00:00Z', source: url, models: [] }) },
     vendoredFeeds: path.join(root, 'feeds'),
   })
 } catch (error) {
@@ -425,7 +425,7 @@ const fallback = await runBot({
   transport: feedFailureGithub.transport.bind(feedFailureGithub),
   configPath: fallbackConfig,
   feedsUrls: ['https://feeds.invalid/a.json', 'https://feeds.invalid/b.json'],
-  fetchImpl: async url => url.endsWith('b.json') ? { status: 500, ok: false } : { status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', models: [] }) },
+  fetchImpl: async url => url.endsWith('b.json') ? { status: 500, ok: false } : { status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', publisher: 'remote', generated: '2026-08-01T00:00:00Z', source: url, models: [] }) },
   vendoredFeeds: path.join(root, 'feeds'),
   warn: message => warnings.push(message),
 })
@@ -438,11 +438,32 @@ let feedTemp
 const feedDownload = await downloadFeeds({
   urls: ['https://feeds.invalid/one.json', 'https://feeds.invalid/two.json'],
   vendoredDir: path.join(root, 'feeds'),
-  fetchImpl: async url => ({ status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', models: [{ id: url }] }) }),
+  fetchImpl: async url => ({ status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', publisher: 'remote', generated: '2026-08-01T00:00:00Z', source: url, models: [{ id: url.endsWith('one.json') ? 'remote-one' : 'remote-two' }] }) }),
 })
 feedTemp = feedDownload.dir
 assert(fs.readdirSync(feedTemp).length === 2, 'all feed URLs download before the temporary feed directory is used')
 feedDownload.cleanup()
+let controlFeedDownloadError = null
+try {
+  await downloadFeeds({
+    urls: ['https://feeds.invalid/control.json'],
+    vendoredDir: path.join(root, 'feeds'),
+    fetchImpl: async url => ({
+      status: 200,
+      ok: true,
+      text: async () => JSON.stringify({
+        spec: 'model-eol/0.1',
+        publisher: 'remote',
+        generated: '2026-08-01T00:00:00Z',
+        source: url,
+        models: [{ id: 'old-model', replacement: 'new-model\n' }, { id: 'new-model' }],
+      }),
+    }),
+  })
+} catch (error) {
+  controlFeedDownloadError = error
+}
+assert(controlFeedDownloadError?.message.includes('replacement') && controlFeedDownloadError.message.includes('control characters'), 'downloadFeeds rejects control characters and names the feed field')
 
 const evalDir = fs.mkdtempSync(path.join(tempRoot, 'eval-'))
 const evalPlan = path.join(evalDir, 'plan.json')
@@ -456,7 +477,7 @@ const runEval = (command, overrides = {}) => runEvalHook({
   oldId: 'old-model',
   newId: 'new-model',
   planPath: evalPlan,
-  reportPath: path.join(evalDir, 'report.md'),
+  reportPath: overrides.reportPath ?? path.join(evalDir, 'report.md'),
 })
 const passEval = runEval('node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "pass")\'')
 assert(passEval.status === 'pass' && passEval.exit_code === 0 && passEval.report === 'pass', 'passing eval command reports pass and exit code')
@@ -490,6 +511,43 @@ if (fs.existsSync(childPidFile)) {
 }
 assert(timeoutWithChild.status === 'timeout' && childGone, 'eval timeout kills the detached process group and its child')
 
+const fifoPath = path.join(evalDir, 'report.fifo')
+const fifoProbe = spawnSync('mkfifo', [path.join(evalDir, 'probe.fifo')], { encoding: 'utf8' })
+const fifoAvailable = fifoProbe.status === 0
+if (fifoAvailable) {
+  fs.rmSync(path.join(evalDir, 'probe.fifo'), { force: true })
+  const fifoEval = runEval('node -e \'require("child_process").spawnSync("mkfifo", [process.env.MODEL_EOL_REPORT])\'', { reportPath: fifoPath })
+  assert(fifoEval.status === 'fail' && fifoEval.report.includes('regular non-symlink'), 'FIFO eval reports an unreadable artifact without blocking')
+  fs.rmSync(fifoPath, { force: true })
+} else {
+  assert(true, 'FIFO eval test skipped because mkfifo is unavailable')
+}
+
+const externalEvalRepo = makeRepo({ name: 'external-eval-status', files: baseFiles, config: { issues: { enabled: false } } })
+const externalEvalGithub = new FakeGitHub()
+const externalReport = path.join(tempRoot, 'external-eval-report.md')
+const externalStatus = path.join(tempRoot, 'external-eval-status.txt')
+const externalRun = () => runBot({
+  repo: 'example/external-eval-status',
+  targetDir: externalEvalRepo.work,
+  token: 'test-token',
+  transport: externalEvalGithub.transport.bind(externalEvalGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  evalReportFile: externalReport,
+  evalStatusFile: externalStatus,
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+write(externalReport, 'external report')
+write(externalStatus, '0garbage')
+const malformedExternal = await externalRun()
+assert(malformedExternal.decisions.find(item => item.group.kind === 'model')?.action === 'eval-failed', 'malformed external eval status fails closed')
+fs.rmSync(externalStatus, { force: true })
+const missingExternal = await externalRun()
+assert(missingExternal.decisions.find(item => item.group.kind === 'model')?.action === 'eval-failed', 'missing external eval status fails even with a report')
+write(externalStatus, '0')
+const cleanExternal = await externalRun()
+assert(cleanExternal.decisions.find(item => item.group.kind === 'model')?.action === 'create' && externalEvalGithub.callsFor('POST', '/pulls').length === 1, 'strict zero external eval status permits the patch')
+
 const evalMissingRepo = makeRepo({
   name: 'eval-missing-report',
   files: baseFiles,
@@ -512,10 +570,73 @@ const evalMissingDecision = evalMissingResult.decisions.find(item => item.group.
 assert(evalMissingDecision?.action === 'eval-failed' && evalMissingGithub.callsFor('POST', '/pulls').length === 0, 'missing eval artifact blocks patch PR creation')
 assert(!gitTry(evalMissingRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'failed eval does not push a patch branch')
 
+const extraEvalRepo = makeRepo({
+  name: 'eval-extra-file',
+  files: baseFiles,
+  config: {
+    issues: { enabled: false },
+    eval: { command: 'node -e \'require("fs").writeFileSync("eval-extra.txt", "extra"); require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "pass")\'', timeout_ms: 1000, max_report_bytes: 128, pass_env: [] },
+  },
+})
+const extraEvalGithub = new FakeGitHub()
+const extraEvalResult = await runBot({
+  repo: 'example/eval-extra-file',
+  targetDir: extraEvalRepo.work,
+  token: 'test-token',
+  transport: extraEvalGithub.transport.bind(extraEvalGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  evalEnabled: true,
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const extraEvalDecision = extraEvalResult.decisions.find(item => item.group.kind === 'model')
+assert(extraEvalDecision?.action === 'eval-failed' && extraEvalDecision.evalResult?.report.includes('unexpected repository file') && extraEvalGithub.callsFor('POST', '/pulls').length === 0, 'eval-created extra files fail the group before commit')
+assert(!gitTry(extraEvalRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'extra-file eval failure makes zero commits')
+
+const mutatedEvalRepo = makeRepo({
+  name: 'eval-mutated-plan-file',
+  files: baseFiles,
+  config: {
+    issues: { enabled: false },
+    eval: { command: 'node -e \'require("fs").appendFileSync("direct.py", "drift"); require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "pass")\'', timeout_ms: 1000, max_report_bytes: 128, pass_env: [] },
+  },
+})
+const mutatedEvalGithub = new FakeGitHub()
+const mutatedEvalResult = await runBot({
+  repo: 'example/eval-mutated-plan-file',
+  targetDir: mutatedEvalRepo.work,
+  token: 'test-token',
+  transport: mutatedEvalGithub.transport.bind(mutatedEvalGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  evalEnabled: true,
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const mutatedEvalDecision = mutatedEvalResult.decisions.find(item => item.group.kind === 'model')
+assert(mutatedEvalDecision?.action === 'eval-failed' && mutatedEvalDecision.evalResult?.report.includes('changed planned file') && mutatedEvalGithub.callsFor('POST', '/pulls').length === 0, 'eval-mutated plan files fail the group before commit')
+
+const cleanRideRepo = makeRepo({
+  name: 'eval-clean-ride',
+  files: baseFiles,
+  config: {
+    issues: { enabled: false },
+    eval: { command: 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "pass")\'', timeout_ms: 1000, max_report_bytes: 128, pass_env: [] },
+  },
+})
+const cleanRideGithub = new FakeGitHub()
+const cleanRideResult = await runBot({
+  repo: 'example/eval-clean-ride',
+  targetDir: cleanRideRepo.work,
+  token: 'test-token',
+  transport: cleanRideGithub.transport.bind(cleanRideGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  evalEnabled: true,
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+assert(cleanRideResult.decisions.find(item => item.group.kind === 'model')?.action === 'create', 'clean eval ride-along still commits the patch')
+
 const maliciousFeeds = path.join(tempRoot, 'malicious-feeds')
 fs.cpSync(path.join(root, 'feeds'), maliciousFeeds, { recursive: true })
 const maliciousOpenai = JSON.parse(fs.readFileSync(path.join(maliciousFeeds, 'openai.json'), 'utf8'))
-maliciousOpenai.note = '```\n# injected heading\n[x](javascript:alert(1))'
+maliciousOpenai.note = '``` # injected heading [x](javascript:alert(1))'
 fs.writeFileSync(path.join(maliciousFeeds, 'openai.json'), JSON.stringify(maliciousOpenai, null, 2))
 const markdownRepo = makeRepo({ name: 'markdown-sanitization', files: baseFiles, config: { issues: { enabled: false } } })
 const markdownGithub = new FakeGitHub()
@@ -646,6 +767,18 @@ assert(mismatchRefused, 'plan schema mismatch is refused before decisions')
 const passEnvConfigFile = path.join(tempRoot, 'pass-env-config.json')
 write(passEnvConfigFile, JSON.stringify({ eval: { pass_env: ['CUSTOM_EVAL_KEY'] } }))
 assert(loadConfig(passEnvConfigFile).eval.pass_env[0] === 'CUSTOM_EVAL_KEY', 'config accepts explicit eval pass_env names')
+const providerPassEnvConfigFile = path.join(tempRoot, 'provider-pass-env-config.json')
+write(providerPassEnvConfigFile, JSON.stringify({ eval: { pass_env: ['OPENAI_API_KEY'] } }))
+assert(loadConfig(providerPassEnvConfigFile).eval.pass_env[0] === 'OPENAI_API_KEY', 'config permits provider API key pass-through')
+const credentialPassEnvConfigFile = path.join(tempRoot, 'credential-pass-env-config.json')
+write(credentialPassEnvConfigFile, JSON.stringify({ eval: { pass_env: ['GITHUB_TOKEN'] } }))
+let credentialPassEnvError = null
+try {
+  loadConfig(credentialPassEnvConfigFile)
+} catch (error) {
+  credentialPassEnvError = error
+}
+assert(credentialPassEnvError?.message.includes('GITHUB_TOKEN'), 'config rejects credential-like eval pass_env variables by name')
 
 const invalidConfigCases = [
   ['unknown root config key', { day: 30 }, 'day'],
@@ -664,6 +797,24 @@ for (const [label, value, key] of invalidConfigCases) {
     error = caught
   }
   assert(error?.message.includes(key), label + ' is rejected with the offending key named')
+}
+
+const boundedConfigCases = [
+  [{ eval: { max_report_bytes: 0 } }, 'eval.max_report_bytes', 'positive'],
+  [{ eval: { max_report_bytes: 8 * 1024 * 1024 + 1 } }, 'eval.max_report_bytes', '8388608'],
+  [{ eval: { timeout_ms: 999 } }, 'eval.timeout_ms', '1000'],
+  [{ eval: { timeout_ms: 3600001 } }, 'eval.timeout_ms', '3600000'],
+]
+for (const [value, key, bound] of boundedConfigCases) {
+  const boundedFile = path.join(tempRoot, `bounded-${key.replaceAll('.', '-')}-${bound}.json`)
+  write(boundedFile, JSON.stringify(value))
+  let error = null
+  try {
+    loadConfig(boundedFile)
+  } catch (caught) {
+    error = caught
+  }
+  assert(error?.message.includes(key) && error.message.includes(bound), `${key} rejects values outside its safe bound ${bound}`)
 }
 
 const completeConfigFile = path.join(tempRoot, 'complete-config.json')

@@ -10,6 +10,7 @@ import path from 'node:path'
 
 import { color, colorEnabled } from '../lib/color.mjs'
 import { assertIsoDate, buildModelPattern, findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
+import { buildPlan } from '../lib/plan.mjs'
 import { formatCheck, formatSchedule } from '../lib/reports.mjs'
 
 const root = path.join(import.meta.dirname, '..')
@@ -280,6 +281,52 @@ try {
   invalidPolicyMessage = error.message
 }
 assert(invalidPolicyMessage.includes('invalid-policy.json') && invalidPolicyMessage.includes('policy-model') && invalidPolicyMessage.includes('min_notice_days'), 'loadFeeds rejects invalid policy thresholds')
+const invalidControlFeeds = path.join(tempRoot, 'invalid-control-feeds')
+fs.mkdirSync(invalidControlFeeds)
+fs.writeFileSync(path.join(invalidControlFeeds, 'invalid-control.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'test',
+  generated: '2026-08-01T00:00:00Z',
+  source: 'https://example.invalid/control',
+  models: [{ id: 'old-model', replacement: 'new-model\n' }, { id: 'new-model' }],
+}))
+let invalidControlMessage = ''
+try {
+  loadFeeds(invalidControlFeeds)
+} catch (error) {
+  invalidControlMessage = error.message
+}
+assert(invalidControlMessage.includes('invalid-control.json') && invalidControlMessage.includes('replacement') && invalidControlMessage.includes('control characters'), 'loadFeeds rejects control characters in replacement fields')
+
+const federationDir = path.join(tempRoot, 'federation')
+const federationFeeds = path.join(federationDir, 'feeds')
+fs.mkdirSync(federationFeeds, { recursive: true })
+const federationSource = 'https://example.invalid/federation'
+fs.writeFileSync(path.join(federationDir, 'app.py'), 'from openai import OpenAI\nclient = OpenAI()\nmodel = "old-openai"\n')
+fs.writeFileSync(path.join(federationFeeds, 'openai.json'), JSON.stringify({
+  spec: 'model-eol/0.1', publisher: 'openai', generated: '2026-08-01T00:00:00Z', source: federationSource,
+  models: [{ id: 'old-openai', shutdown: '2026-07-01' }, { id: 'same-target' }],
+}))
+fs.writeFileSync(path.join(federationFeeds, 'anthropic.json'), JSON.stringify({
+  spec: 'model-eol/0.1', publisher: 'anthropic', generated: '2026-08-01T00:00:00Z', source: federationSource,
+  models: [{ id: 'claude-x' }],
+}))
+const federation = loadFeeds(federationFeeds)
+const federationScan = {
+  modelRefs: [{
+    file: path.join(federationDir, 'app.py'), line: 3, matched: 'old-openai', id: 'old-openai', publisher: 'openai',
+    entry: { id: 'old-openai' }, usage: 'direct-api', confidence: 'high', source: federationSource, feedNote: null, policy: null, generated: '2026-08-01T00:00:00Z',
+  }],
+  candidateRefs: [], integrationHints: [], notes: [],
+}
+const federationFinding = replacement => ({
+  status: 'retired', shutdown: '2026-07-01', days: -31, via: 'publisher', publisher: 'openai', replacement,
+  replacement_options: null, replacement_note: null,
+})
+const crossFeedPlan = buildPlan({ scan: federationScan, findings: [federationFinding('claude-x')], entries: federation.entries, days: 90, via: null, scope: 'all' })
+const sameFeedPlan = buildPlan({ scan: federationScan, findings: [federationFinding('same-target')], entries: federation.entries, days: 90, via: null, scope: 'all' })
+assert(crossFeedPlan.items.length === 0 && crossFeedPlan.issues[0]?.reason === 'replacement-unresolved', 'cross-publisher replacement matches remain issue-only')
+assert(sameFeedPlan.items.length === 1 && sameFeedPlan.issues.length === 0, 'same-publisher replacement resolution remains patchable')
 const cleanAnthropic = findingFromRef({
   entry: { id: 'clean-anthropic-model' },
   matched: 'clean-anthropic-model',
@@ -545,6 +592,36 @@ writeApplyPlan({ ...applyItem, file: '../escape.py' })
 const escapedPlan = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
 assert(escapedPlan.code === 1 && escapedPlan.err.includes('file path contains .. traversal'), 'apply refuses plan paths that escape rootDir')
 assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'escaped plan does not write the in-root file')
+
+const manyRestoreOriginal = Array.from({ length: 17 }, (_, index) => `old-${index}`).join(' ')
+const manyRestorePost = Array.from({ length: 17 }, (_, index) => `new-${index}`).join(' ')
+const manyRestoreItems = Array.from({ length: 17 }, (_, index) => ({
+  ...applyItem,
+  matched: `old-${index}`,
+  replacement: `new-${index}`,
+  expected_line_sha256: hash(manyRestoreOriginal),
+}))
+fs.writeFileSync(applyFile, `${manyRestorePost}\n`)
+writeApplyPlan(manyRestoreItems)
+const manyRestore = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(manyRestore.code === 1 && (manyRestore.err.match(/line hash does not match expected_line_sha256/g) ?? []).length === 17, 'restore groups over sixteen items fail as bounded hash mismatches')
+assert(fs.readFileSync(applyFile, 'utf8') === `${manyRestorePost}\n`, 'oversized restore groups do not write')
+
+const boundedRestoreOriginal = Array.from({ length: 16 }, (_, index) => `old-${15 - index}`).join(' ')
+const boundedRestorePost = Array.from({ length: 16 }, () => 'new').join(' ')
+const boundedRestoreItems = Array.from({ length: 16 }, (_, index) => ({
+  ...applyItem,
+  matched: `old-${index}`,
+  replacement: 'new',
+  expected_line_sha256: hash(boundedRestoreOriginal),
+}))
+fs.writeFileSync(applyFile, `${boundedRestorePost}\n`)
+writeApplyPlan(boundedRestoreItems)
+const restoreStarted = Date.now()
+const boundedRestore = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+const restoreElapsed = Date.now() - restoreStarted
+assert(boundedRestore.code === 1 && restoreElapsed < 5000 && (boundedRestore.err.match(/line hash does not match expected_line_sha256/g) ?? []).length === 16, 'restore search stops at its visited-state cap')
+assert(fs.readFileSync(applyFile, 'utf8') === `${boundedRestorePost}\n`, 'visited-state cap leaves the post-image unchanged')
 
 for (const schemaFile of [
   'schema/model-eol.schema.json',

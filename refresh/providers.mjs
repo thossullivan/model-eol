@@ -185,8 +185,12 @@ export function extractReplacementFields(fragment) {
   if (!text || /^[-]+$/.test(text) || /^(?:n\/?a|none)$/i.test(text)) return {}
   const codes = codeText(fragment)
   const tokens = codes.length ? replacementCodeTokens(codes) : replacementTextTokens(text)
+  const canPromote = codes.length > 0 || MODEL_ID_PATTERN.test(text)
   const fields = {}
-  if (tokens.length === 1) fields.replacement = tokens[0]
+  if (tokens.length === 1) {
+    if (canPromote) fields.replacement = tokens[0]
+    else fields.replacement_options = tokens
+  }
   if (tokens.length > 1) fields.replacement_options = tokens
   const note = replacementNote(text, tokens)
   if (note) fields.replacement_note = note
@@ -210,6 +214,12 @@ const copyReplacementPayload = (target, source) => {
   }
 }
 
+const endpointLikeLabel = label =>
+  /\b(?:endpoint|product|service|operation|capability)\b/i.test(label) ||
+  (/\bapi\b/i.test(label) && !/\bmodel\b/i.test(label))
+
+const endpointLikeLabels = labels => labels.some(endpointLikeLabel)
+
 function tableRows(table) {
   return [...table.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map(row => {
     const cells = [...row[1].matchAll(/<(th|td)\b[^>]*>([\s\S]*?)<\/\1>/gi)]
@@ -229,7 +239,7 @@ function headerIndexes(rows) {
     const labels = row.cells.map(cell => cell.text.toLowerCase())
     const date = labels.findIndex(label => /(shutdown|retirement|sunset|removal).*date|date.*(shutdown|retirement|sunset|removal)/i.test(label))
     const model = labels.findIndex(label => /\bmodel\b|\bsystem\b/i.test(label))
-    const endpointLike = labels.some(label => /\b(?:endpoint|product|api|service|operation|capability)\b/i.test(label) && !/\bmodel\b/i.test(label))
+    const endpointLike = endpointLikeLabels(labels)
     const recommended = labels.findIndex(label => /recommended\s+replacement|replacement|successor/i.test(label))
     if (date >= 0 && endpointLike) {
       return { rejectedReason: 'endpoint-or-product-deprecation-table' }
@@ -332,8 +342,9 @@ function openAIHeaderIndexes(rows) {
   for (const [index, row] of rows.entries()) {
     const labels = row.cells.map(cell => cell.text.toLowerCase())
     const date = labels.findIndex(label => /(shutdown|retirement|sunset|removal).*date|date.*(shutdown|retirement|sunset|removal)/i.test(label))
-    const model = labels.findIndex(label => /\b(model|system|endpoint)\b/i.test(label) && !/replacement|substitute/i.test(label))
+    const model = labels.findIndex(label => /\b(model|system)\b/i.test(label) && !/replacement|substitute/i.test(label))
     const replacement = labels.findIndex(label => /recommended\s+replacement|replacement|substitute\s+model|successor/i.test(label))
+    if (date >= 0 && endpointLikeLabels(labels)) return { rejectedReason: 'endpoint-or-product-deprecation-table' }
     if (date >= 0 && model >= 0 && replacement >= 0) return { row: index, date, model, replacement }
   }
   return undefined
@@ -394,6 +405,10 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     const rows = tableRows(table[1])
     const headers = openAIHeaderIndexes(rows)
     if (!headers) continue
+    if (headers.rejectedReason) {
+      skippedReasons.add(headers.rejectedReason)
+      continue
+    }
     recognisedTables++
 
     const announced = openAIAnnouncementDate(headings, table.index)
@@ -426,7 +441,10 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     }
   }
 
-  if (!recognisedTables) throw new Error('openai deprecations page has no recognisable deprecations content')
+  if (!recognisedTables) {
+    const reason = skippedReasons.size ? `: ${[...skippedReasons].join(', ')}` : ''
+    throw new Error(`openai deprecations page has no recognisable deprecations content${reason}`)
+  }
   if (!records.length) {
     const reason = skippedReasons.size ? `: ${[...skippedReasons].join(', ')}` : ''
     throw new Error(`openai deprecations page has no model entries${reason}`)
@@ -439,10 +457,11 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       unique.set(record.id, record)
       continue
     }
-    const same = previous.announced === record.announced &&
-      previous.shutdown === record.shutdown &&
-      sameReplacementPayload(previous, record)
-    if (same) {
+    const sameLifecycle = previous.announced === record.announced && previous.shutdown === record.shutdown
+    if (sameLifecycle && !sameReplacementPayload(previous, record)) {
+      throw new Error(`openai deprecations page has conflicting rows for ${record.id}`)
+    }
+    if (sameLifecycle) {
       previous.aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
         .filter(alias => alias !== previous.id)
       if (!previous.aliases.length) delete previous.aliases
@@ -523,6 +542,10 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
       if (!modelCell || !shutdownCell || !modelCell.text) continue
       const id = googleModelId(modelCell.html)
       if (!id) continue
+      if (!MODEL_ID_PATTERN.test(id)) {
+        const reason = /[\s/]/.test(id) ? 'endpoint-or-product-row' : 'invalid-model-id'
+        throw new Error(`google deprecations table refused row: ${reason}: ${id}`)
+      }
       const shutdownText = shutdownCell.text
       const shutdown = googleShutdown(shutdownText, id)
       const item = { id, source: sourceUrl }
@@ -683,7 +706,7 @@ function identityIndex(models) {
 
 function replacementInput(model) {
   if (Array.isArray(model.replacement_options)) {
-    return { tokens: [...model.replacement_options], note: model.replacement_note }
+    return { tokens: [...model.replacement_options], note: model.replacement_note, mayPromote: false }
   }
   if (typeof model.replacement === 'string' && model.replacement.trim()) {
     const raw = model.replacement.trim()
@@ -693,9 +716,10 @@ function replacementInput(model) {
     return {
       tokens: parsed.replacement ? [parsed.replacement] : [...(parsed.replacement_options ?? [])],
       note: model.replacement_note ?? parsed.replacement_note,
+      mayPromote: true,
     }
   }
-  if (model.replacement_note !== undefined) return { tokens: [], note: model.replacement_note }
+  if (model.replacement_note !== undefined) return { tokens: [], note: model.replacement_note, mayPromote: false }
   return undefined
 }
 
@@ -708,7 +732,7 @@ function routeReplacementFields(models) {
     delete model.replacement_options
     delete model.replacement_note
     const tokens = [...new Set(input.tokens)]
-    if (tokens.length === 1 && index.has(tokens[0])) model.replacement = tokens[0]
+    if (tokens.length === 1 && input.mayPromote && index.has(tokens[0])) model.replacement = tokens[0]
     else if (tokens.length) model.replacement_options = tokens
     if (input.note) model.replacement_note = input.note
   }

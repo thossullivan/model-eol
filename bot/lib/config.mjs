@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 
+import { MAX_REPORT_BYTES, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS } from '../../lib/validate-feed.mjs'
+
 export const DEFAULT_CONFIG = Object.freeze({
   days: 90,
   scope: 'direct',
@@ -41,6 +43,8 @@ const stringArray = (value, label) => {
   assert(value.every(item => typeof item === 'string' && item.length > 0), `${label} must contain non-empty strings`)
   return value.slice()
 }
+
+const CREDENTIAL_ENV_PATTERN = /^(?:GITHUB_|GH_|ACTIONS_|SSH_|AWS_SECRET)|(?:TOKEN|SECRET|PASSWORD|CREDENTIAL)/i
 
 export const normalizeConfig = raw => {
   assert(raw && typeof raw === 'object' && !Array.isArray(raw), 'root must be an object')
@@ -87,14 +91,18 @@ export const normalizeConfig = raw => {
       config.eval.command = raw.eval.command
     }
     if (raw.eval.timeout_ms !== undefined) {
-      assert(Number.isInteger(raw.eval.timeout_ms) && raw.eval.timeout_ms > 0, 'eval.timeout_ms must be a positive integer')
+      assert(Number.isSafeInteger(raw.eval.timeout_ms) && raw.eval.timeout_ms >= MIN_TIMEOUT_MS && raw.eval.timeout_ms <= MAX_TIMEOUT_MS, `eval.timeout_ms must be a safe integer between ${MIN_TIMEOUT_MS} and ${MAX_TIMEOUT_MS}`)
       config.eval.timeout_ms = raw.eval.timeout_ms
     }
     if (raw.eval.max_report_bytes !== undefined) {
-      assert(Number.isInteger(raw.eval.max_report_bytes) && raw.eval.max_report_bytes >= 0, 'eval.max_report_bytes must be a non-negative integer')
+      assert(Number.isSafeInteger(raw.eval.max_report_bytes) && raw.eval.max_report_bytes > 0 && raw.eval.max_report_bytes <= MAX_REPORT_BYTES, `eval.max_report_bytes must be a safe positive integer <= ${MAX_REPORT_BYTES}`)
       config.eval.max_report_bytes = raw.eval.max_report_bytes
     }
-    if (raw.eval.pass_env !== undefined) config.eval.pass_env = stringArray(raw.eval.pass_env, 'eval.pass_env')
+    if (raw.eval.pass_env !== undefined) {
+      const passEnv = stringArray(raw.eval.pass_env, 'eval.pass_env')
+      for (const name of passEnv) assert(!CREDENTIAL_ENV_PATTERN.test(name), `eval.pass_env variable "${name}" is not allowed`)
+      config.eval.pass_env = passEnv
+    }
   }
 
   return config

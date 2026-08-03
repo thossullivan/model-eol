@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseCliArgs } from '../lib/cli.mjs'
@@ -17,11 +15,11 @@ import {
   loadProviderSources,
   mergeFeed,
 } from './providers.mjs'
+import { validateFeed } from '../lib/validate-feed.mjs'
 
 const THIS_FILE = fileURLToPath(import.meta.url)
 const ROOT = path.join(path.dirname(THIS_FILE), '..')
 const COMMITTED_FEEDS = path.join(ROOT, 'feeds')
-const VALIDATOR = path.join(ROOT, 'scripts', 'validate-feeds.mjs')
 const AMAZON_PROVIDER = { publisher: 'amazon', feedFile: 'amazon.json' }
 
 export function parseRefreshArgs(argv = process.argv.slice(2)) {
@@ -93,39 +91,9 @@ function readCommitted(provider) {
   return feed
 }
 
-/**
- * The repository validator resolves ../feeds relative to its own file and has
- * no directory argument. Copying that unchanged validator into an isolated
- * temporary tree lets it validate generated files without touching feeds/.
- */
 export function validateGeneratedFeeds(generated) {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-'))
-  const temporaryFeeds = path.join(temporary, 'feeds')
-  const temporaryScripts = path.join(temporary, 'scripts')
-  fs.mkdirSync(temporaryFeeds)
-  fs.mkdirSync(temporaryScripts)
-  try {
-    fs.copyFileSync(VALIDATOR, path.join(temporaryScripts, 'validate-feeds.mjs'))
-    for (const item of generated) {
-      fs.writeFileSync(
-        path.join(temporaryFeeds, item.provider.feedFile),
-        `${JSON.stringify(item.feed, null, 2)}\n`,
-        'utf8',
-      )
-    }
-    try {
-      execFileSync(process.execPath, [path.join(temporaryScripts, 'validate-feeds.mjs')], {
-        cwd: temporary,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-    } catch (error) {
-      const output = [error.stdout, error.stderr].filter(Boolean).join('\n').trim()
-      throw new Error(`generated feed validation failed${output ? `:\n${output}` : ''}`)
-    }
-  } finally {
-    fs.rmSync(temporary, { recursive: true, force: true })
-  }
+  const failures = generated.flatMap(item => validateFeed(item.feed).map(error => `${item.provider.feedFile}: ${error.path}: ${error.message}`))
+  if (failures.length) throw new Error(`generated feed validation failed:\n${failures.join('\n')}`)
 }
 
 export async function generateProviderFeed(providerName, options = {}) {

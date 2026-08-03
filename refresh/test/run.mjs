@@ -169,6 +169,37 @@ try {
 }
 assert(googleEndpointLookalikeReason.includes('no recognised model tables') && googleEndpointLookalikeReason.includes('endpoint-or-product-deprecation-table'), 'Google deprecation parser reports skipped endpoint reasons')
 
+const openaiEndpointHtml = '<h2>2026-01-01: Endpoint notice</h2><table><tr><th>Shutdown date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>responses</code></td><td><code>chat</code></td></tr></table>'
+let openaiEndpointReason = ''
+try {
+  parseOpenAIDeprecations(openaiEndpointHtml)
+} catch (error) {
+  openaiEndpointReason = error.message
+}
+assert(openaiEndpointReason.includes('endpoint-or-product-deprecation-table') && !openaiEndpointReason.includes('responses'), 'OpenAI endpoint tables reject grammar-valid endpoint names')
+
+const googleCombinedEndpointHtml = '<table><tr><th>Shutdown date</th><th>Model / endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table>'
+let googleCombinedEndpointReason = ''
+try {
+  parseGoogleDeprecations(googleCombinedEndpointHtml)
+} catch (error) {
+  googleCombinedEndpointReason = error.message
+}
+assert(googleCombinedEndpointReason.includes('endpoint-or-product-deprecation-table') && !googleCombinedEndpointReason.includes('/v1/old'), 'Google combined model and endpoint headers are refused without ingesting the row')
+
+const googleInvalidRowHtml = '<table><tr><th>Shutdown date</th><th>Model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table>'
+let googleInvalidRowReason = ''
+try {
+  parseGoogleDeprecations(googleInvalidRowHtml)
+} catch (error) {
+  googleInvalidRowReason = error.message
+}
+assert(googleInvalidRowReason.includes('refused row') && googleInvalidRowReason.includes('endpoint-or-product-row'), 'Google model rows enforce the model identifier grammar')
+
+const anthropicApiModelHtml = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>API model name</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-api-model</code></td><td><code>claude-next</code></td></tr></table>'
+const anthropicApiModel = parseAnthropicDeprecations(anthropicApiModelHtml)
+assert(anthropicApiModel.length === 1 && anthropicApiModel[0].id === 'claude-api-model', 'Anthropic API model name headers remain model tables')
+
 const ambiguousAnnouncementHtml = '<h1>Model deprecations</h1><h2>Announcement context</h2><p>Notified 2025-01-01; retirement 2026-01-01.</p><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-ambiguous</code></td><td><code>claude-next</code></td></tr></table>'
 let ambiguousAnnouncementReason = ''
 try {
@@ -195,12 +226,27 @@ assert(openaiById.get('o3-deep-research-2025-06-26')?.shutdown === '2026-07-23',
 assert(openaiById.get('o4-mini-deep-research-2025-06-26')?.replacement === 'gpt-5.6-sol', 'OpenAI parses multiple models under one announcement')
 assert(openaiById.get('gpt-4-turbo-2024-04-09')?.replacement === 'gpt-5.6-sol', 'OpenAI selects the dated snapshot from an alias cell')
 assert(openaiById.get('sora-2')?.replacement === undefined, 'OpenAI preserves a missing replacement from ---')
+const duplicateConflictHtml = '<h2>2026-01-01: Duplicate rows</h2><table><tr><th>Shutdown date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>duplicate-model</code></td><td><code>target-a</code></td></tr><tr><td>2027-01-01</td><td><code>duplicate-model</code></td><td><code>target-b</code></td></tr></table>'
+let duplicateConflictReason = ''
+try {
+  parseOpenAIDeprecations(duplicateConflictHtml)
+} catch (error) {
+  duplicateConflictReason = error.message
+}
+assert(duplicateConflictReason.includes('conflicting rows for duplicate-model'), 'OpenAI duplicate lifecycle rows with different replacement payloads fail loudly')
+const duplicateIdenticalHtml = '<h2>2026-01-01: Duplicate rows</h2><table><tr><th>Shutdown date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>duplicate-model</code><code>first-alias</code></td><td><code>target-a</code></td></tr><tr><td>2027-01-01</td><td><code>duplicate-model</code><code>second-alias</code></td><td><code>target-a</code></td></tr></table>'
+const duplicateIdentical = parseOpenAIDeprecations(duplicateIdenticalHtml)
+assert(duplicateIdentical.length === 1 && duplicateIdentical[0].aliases?.includes('first-alias') && duplicateIdentical[0].aliases?.includes('second-alias'), 'OpenAI identical replacement duplicates still merge aliases')
 const parameterFields = extractReplacementFields('<code>target-model</code> (<code>reasoning.mode: pro</code>)')
 const optionFields = extractReplacementFields('<code>first-model</code> or <code>second-model</code>')
 const wildcardFields = extractReplacementFields('first-model or second-model*')
+const proseFields = extractReplacementFields('Use API v1')
+const wholeCellFields = extractReplacementFields('gemini-2.0-flash')
 assert(parameterFields.replacement === 'target-model' && parameterFields.replacement_note === 'reasoning.mode: pro', 'replacement extraction keeps one ID and parameter guidance')
 assert(JSON.stringify(optionFields.replacement_options) === JSON.stringify(['first-model', 'second-model']), 'replacement extraction preserves ordered options')
-assert(wildcardFields.replacement === 'first-model' && wildcardFields.replacement_note === 'second-model*', 'replacement extraction keeps wildcard text out of IDs')
+assert(!wildcardFields.replacement && JSON.stringify(wildcardFields.replacement_options) === JSON.stringify(['first-model']) && wildcardFields.replacement_note === 'second-model*', 'prose replacement tokens remain issue-only when wildcard text is present')
+assert(!proseFields.replacement && JSON.stringify(proseFields.replacement_options) === JSON.stringify(['v1']), 'prose-derived replacement tokens never become patch targets')
+assert(wholeCellFields.replacement === 'gemini-2.0-flash', 'whole-cell model IDs remain patchable replacements')
 assert(dateFromText('2026‑08‑26') === '2026-08-26', 'OpenAI parses nonbreaking-hyphen dates')
 assert(openaiEntries.every(entry => entry.source.startsWith('https://')), 'OpenAI dated entries carry a source URL')
 const feedById = new Map(openaiFeed.models.map(model => [model.id, model]))
@@ -223,7 +269,7 @@ const googleStructuredHtml = '<table><tr><th>Model</th><th>Shutdown date</th><th
 const genericStructured = parseAnthropicDeprecations(genericStructuredHtml)[0]
 const googleStructured = parseGoogleDeprecations(googleStructuredHtml)[0]
 assert(JSON.stringify(genericStructured.replacement_options) === JSON.stringify(['first-model', 'second-model']), 'generic parser uses structured replacement routing')
-assert(googleStructured.replacement === 'first-model' && googleStructured.replacement_note === 'second-model*', 'Google parser uses structured replacement routing')
+assert(!googleStructured.replacement && JSON.stringify(googleStructured.replacement_options) === JSON.stringify(['first-model']) && googleStructured.replacement_note === 'second-model*', 'Google parser keeps prose replacement tokens issue-only')
 assert(vertexEntries.length === 41, 'Vertex model-versions fixture parses model rows')
 assert(vertexEntries.find(entry => entry.vertexId === 'gemini-2.5-pro')?.date_precision === 'earliest', 'Vertex marks dates that cannot move earlier')
 assert(vertexEntries.find(entry => entry.vertexId === 'claude-sonnet-4-20250514')?.shutdown === '2026-10-14', 'Vertex parses an Anthropic model row')
@@ -261,6 +307,18 @@ assert(JSON.stringify(structuredById.get('multi-option')?.replacement_options) =
 assert(structuredById.get('parameterized')?.replacement === 'resolved-target' && structuredById.get('parameterized')?.replacement_note === 'reasoning.mode: pro', 'merge preserves a parameterized replacement note')
 assert(JSON.stringify(structuredById.get('single-unresolvable')?.replacement_options) === JSON.stringify(['not-carried-yet']) && !structuredById.get('single-unresolvable')?.replacement, 'merge routes an unresolved token to issue-only options')
 assert(structuredById.get('wildcard')?.replacement === 'resolved-target' && structuredById.get('wildcard')?.replacement_note === 'second-target*' && !structuredById.get('wildcard')?.replacement_options, 'merge keeps wildcard guidance out of replacement IDs')
+const provenanceMerge = mergeFeed(minimalCommitted, {
+  currentIds: ['v1', 'gemini-2.0-flash'],
+  deprecations: [
+    { id: 'prose-replacement', shutdown: '2026-12-01', ...proseFields },
+    { id: 'whole-cell-replacement', shutdown: '2026-12-01', ...wholeCellFields },
+  ],
+  generated: '2026-08-01T00:00:00Z',
+  provider: PROVIDERS.openai,
+})
+const provenanceById = new Map(provenanceMerge.feed.models.map(model => [model.id, model]))
+assert(!provenanceById.get('prose-replacement')?.replacement && JSON.stringify(provenanceById.get('prose-replacement')?.replacement_options) === JSON.stringify(['v1']), 'resolvable prose tokens remain issue-only after feed routing')
+assert(provenanceById.get('whole-cell-replacement')?.replacement === 'gemini-2.0-flash', 'whole-cell exact IDs route to replacement after feed resolution')
 const staleCurrent = mergeFeed({
   ...minimalCommitted,
   models: [{ id: 'stale-current', announced: '2026-01-01', shutdown: '2026-12-01', replacement: 'new-current' }],
