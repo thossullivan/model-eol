@@ -185,11 +185,21 @@ move any of us can make here.
 ## Status / honesty
 
 - Feeds refresh automatically: the weekly feed-refresh workflow is live in this
-  repo (parse failures fail the run; material changes become a reviewed PR). The
-  CI and bot workflows still ship as `.example` files.
+  repo (parse failures fail the run; material changes become a reviewed PR), and
+  CI runs the full suite on every push and PR. The bot workflow still ships as
+  `bot.yml.example`.
 - Current-model entries (and therefore policy-floor horizons) populate only when
   refresh runs with provider API keys for the models endpoints.
 - The checker matches known IDs only - it will not discover models absent from the
   feeds. Deliberate: precision over discovery for a CI gate.
-- Not yet: feed signing, Google/Vertex/Azure fetchers (aws-bedrock is done; entries
-  for the others welcome), gateway route resolvers, npm publish (prepped, pending).
+- Fetchers: OpenAI, Anthropic, Google, aws-bedrock, and vertex-ai are live. Azure
+  clocks are carried where OpenAI's own page publishes them; a standalone Azure
+  lifecycle fetcher is not built yet.
+- Not yet: feed signing, gateway route resolvers, npm publish (prepped, pending).
+
+## Contributing
+
+The most valuable contribution is a feed correction with a source URL - and the
+one rule is that `feeds/*.json` are generated, never hand-edited. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for that workflow, the zero-dependency
+doctrine, and what a new publisher parser needs.
