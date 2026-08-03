@@ -126,7 +126,7 @@ competition - see the outreach issue.
    workflow keeps them verified.
 3. ~~Name decision~~ RESOLVED 2026-08-01: keep "model-eol". npm name verified free,
    no GitHub collisions, and endoflife.date entering LLM tracking strengthens the
-   lineage argument. package.json is publish-ready; npm publish is Tom's call.
+   lineage argument. package.json is publish-ready; npm publish is the maintainer's call.
 4. Sweep this repo for anything non-public-safe (should be nothing; keep it that way
    - write every commit as if the repo were already public).
 
@@ -140,13 +140,13 @@ gate, CycloneDX export, badge + Atom changelog outputs, strict parseArgs CLIs
 with TTY colors, VHS demo, weekly feed-refresh workflow LIVE in this repo
 (verified green on GitHub runners).
 
-Field-test receipts: found claude-sonnet-4-20250514 dead 47 days in
-hybrid-coach's promptfoo config; fleet sweep found ~230 retired refs across
-Tom's repos (most are kew pricing-key noise - ignore-config material);
+Field-test receipts: found a model dead 47 days in a private repo's promptfoo
+config; a sweep across the maintainer's local repos found ~230 retired refs
+(most are pricing-table noise in one project - ignore-config material);
 feed drift caught within one week of hand compilation; a hand-compiled Bedrock
 date corrected by three months.
 
-Remaining, Tom-side: npm publish (then the auto patch-release workflow -
+Remaining, maintainer-side: npm publish (then the auto patch-release workflow -
 caniuse-lite pattern), activating ci/bot workflows from their .example files,
 provider API key secrets for models-endpoint coverage (this is what populates
 current-model entries and policy-floor horizons), the essay, the public flip.
