@@ -8,17 +8,18 @@
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 **A machine-readable deprecation feed format for AI models, plus the reference
-tooling that turns it into a Dependabot for models.** v0.2.2.
+tooling that turns it into a Dependabot for models.** v0.2.3.
 
 ![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
 
 ## The problem
 
-On July 23, 2026, OpenAI shut down 18 models on schedule. Teams that pinned dated
-snapshots - the provider's own recommended practice - got production 404s, because a
-model ID is the one dependency your toolchain can't see. When an npm package is
-deprecated, the warning prints at install, Dependabot opens the PR, the advisory
-fails CI. A model's retirement date lives in an HTML docs page and an email.
+On July 23, 2026, OpenAI shut down 15 model snapshots on schedule. One of my
+tuned research workflows returned a model-not-found error that morning even though
+the retirement had been documented for months. A model ID is the one dependency
+my toolchain could not see. When an npm package is deprecated, the warning prints
+at install, Dependabot opens the PR, and an advisory can fail CI. A model's
+retirement date usually lives in an HTML docs page and an email.
 
 Ordinary software solved this layer: endoflife.date for EOL data, OSV for
 vulnerability feeds. This is the model version - a shared schema first, tooling
@@ -111,13 +112,13 @@ channel you actually call, and the bedrock distributor fetcher keeps the clocks
 current from AWS's own lifecycle page. Treat a distributor's later date as runway
 for the same migration, not as a destination.
 
-## Policy floors - a forward guarantee from absence
+## Policy floors - a planning floor from absence
 
 A feed entry with no `announced` and no `shutdown` is an affirmative "nothing
 scheduled as of `generated`" - something scraping HTML can never say. Publishers
-with a stated minimum notice period (Anthropic commits to >=60 days) carry a
-`policy` floor, so the schedule can say `guaranteed until <date> per anthropic
-stated policy`. Stated policy, not a contract - the wording says so. OpenAI
+with a stated minimum notice period (Anthropic states >=60 days) carry a
+`policy` floor, so the schedule can calculate a no-earlier-than planning date
+from the feed refresh. Stated policy, not a contract. OpenAI
 publishes no formal floor, so its feed makes no forward claim.
 
 ## Direct-first inventory
@@ -177,6 +178,14 @@ README freshness line - when anything material changed. The first live runs earn
 their keep: they caught the hand-compiled feeds drifting from Anthropic's
 recommendations within one week, and corrected a hand-compiled Bedrock date that
 was three months wrong.
+
+The refresh also travels in the other direction. On August 3, Google removed the
+previously listed October 16 earliest shutdown dates for the Gemini 2.5 Pro,
+Flash, and Flash-Lite GA models. The pipeline opened
+[a PR with the semantic retraction](https://github.com/thossullivan/model-eol/pull/60),
+and merging it published v0.2.3 so downstream checks stopped warning from dates
+Google no longer listed. A lifecycle tracker has to retract stale alarms as well
+as add new ones.
 
 ## The actual ask
 
