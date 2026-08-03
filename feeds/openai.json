@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-08-03T14:35:06.963Z",
+  "generated": "2026-08-03T21:43:59.800Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -781,7 +781,11 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2023-07-06",
       "shutdown": "2024-01-04",
-      "replacement": "davinci-002"
+      "replacement_options": [
+        "davinci-002",
+        "gpt-3.5-turbo",
+        "gpt-4o"
+      ]
     },
     {
       "id": "code-davinci-002",

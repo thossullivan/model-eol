@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-08-03T14:35:06.963Z",
+  "generated": "2026-08-03T21:43:59.800Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "policy": {
     "min_notice_days": 60,
