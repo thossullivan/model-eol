@@ -28,6 +28,9 @@ A feed is a JSON document: metadata + a list of model entries.
         { "via": "azure-ai-foundry", "shutdown": "2026-12-26",
           "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/model-retirements" }
       ]
+    },
+    {
+      "id": "gpt-5.6-sol"
     }
   ]
 }
@@ -41,7 +44,9 @@ A feed is a JSON document: metadata + a list of model entries.
 | `aliases` | no | Other strings that resolve to this model (undated aliases, marketing names) |
 | `announced` | no | Date the deprecation was announced (absent = not deprecated) |
 | `shutdown` | no | Date calls stop working on the publisher's own API (absent = none scheduled) |
-| `replacement` | no | The currently recommended migration target. **Treat as a snapshot in time, not a constant** - this field has changed mid-window in the wild |
+| `replacement` | no | A single exact model ID that resolves against an id or alias in this feed and is safe as a drop-in string substitution. This is the only field plan/apply may patch from |
+| `replacement_options` | no | An ordered array of exact model IDs for multiple or unresolved choices. These are issue-only and need not resolve in this feed |
+| `replacement_note` | no | Free-text guidance such as parameter requirements or provider platform alternatives |
 | `notes` | no | Human context: structural differences, migration gotchas |
 | `distributions` | no | Per-distributor lifecycles - the same weights on different clocks (Azure, Bedrock, Vertex). Each entry: `via`, optional `announced`/`shutdown`/`status`/`date_precision`, `source` |
 | `date_precision` | no | Qualifies `shutdown`: absent or `"exact"` means the stated day; `"earliest"` means the provider commits only that the event happens no sooner (Google's "earliest possible" dates). Consumers treat an earliest date as the scheduled date - it is the soonest legal death - and display it as a lower bound |
@@ -56,6 +61,23 @@ usage works; `extended-access` means availability continues past the stated
 `shutdown` under a paid or opt-in program (Bedrock offers this for some models) -
 the `shutdown` date stays the base retirement, and the status flags that a
 negotiated tail exists.
+
+### Structured replacement contract
+
+`replacement` is a single exact model ID that resolves against an id or alias in
+the same feed and is safe as a drop-in string substitution. This is the ONLY
+field plan/apply may patch from. Otherwise absent.
+
+`replacement_options` is an optional array of exact model IDs. Each option must
+pass the identifier grammar, but feed resolution is NOT required since a target
+may not be carried yet. Options are ordered as the provider lists them.
+
+`replacement_note` is optional free-text guidance. It can carry parameter
+requirements such as `reasoning.mode: pro` or prose alternatives such as Google's
+platform pointers.
+
+Replacement options and notes are issue-only. The planner never auto-patches
+from options; it patches `replacement` exclusively.
 
 ### Policy floors
 

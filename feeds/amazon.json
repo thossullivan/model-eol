@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "amazon",
-  "generated": "2026-08-01T00:00:00Z",
+  "generated": "2026-08-03T14:35:06.544Z",
   "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html",
   "models": [
     {

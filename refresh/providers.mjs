@@ -38,7 +38,8 @@ const MONTHS = new Map([
   ['jan', 1], ['feb', 2], ['mar', 3], ['apr', 4], ['may', 5], ['jun', 6],
   ['jul', 7], ['aug', 8], ['sep', 9], ['sept', 9], ['oct', 10], ['nov', 11], ['dec', 12],
 ])
-const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const REPLACEMENT_TOKEN_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]*(?:\*)?/g
 
 function pad(number) {
   return String(number).padStart(2, '0')
@@ -125,10 +126,88 @@ function modelId(fragment) {
   return text.replace(/\s+\(including\b[\s\S]*$/i, '').trim()
 }
 
-function replacement(fragment) {
+const likelyReplacementToken = token => /[-_]/.test(token) || /\d/.test(token)
+
+const addUnique = (values, value) => {
+  if (value && !values.includes(value)) values.push(value)
+}
+
+function replacementCodeTokens(codes) {
+  const valid = []
+  for (const code of codes) {
+    const exact = code.trim()
+    if (MODEL_ID_PATTERN.test(exact)) {
+      addUnique(valid, exact)
+      continue
+    }
+    const parts = exact
+      .split(/\s*(?:,|;|\||\bor\b|\band\b)\s*/i)
+      .map(part => part.replace(/^[()[\]{}]+|[()[\]{}]+$/g, '').trim())
+      .filter(Boolean)
+    if (parts.length > 1) {
+      for (const part of parts) {
+        if (MODEL_ID_PATTERN.test(part)) addUnique(valid, part)
+      }
+    }
+  }
+  return valid
+}
+
+function replacementTextTokens(text) {
+  if (MODEL_ID_PATTERN.test(text)) return [text]
+  const parts = text
+    .split(/\s*(?:,|;|\||\bor\b|\band\b)\s*/i)
+    .map(part => part.replace(/^[()[\]{}]+|[()[\]{}]+$/g, '').trim())
+    .filter(Boolean)
+  if (parts.length > 1 && parts.every(part => MODEL_ID_PATTERN.test(part))) return [...new Set(parts)]
+  const valid = []
+  for (const match of text.matchAll(REPLACEMENT_TOKEN_PATTERN)) {
+    const token = match[0]
+    if (likelyReplacementToken(token) && MODEL_ID_PATTERN.test(token)) addUnique(valid, token)
+  }
+  return valid
+}
+
+function replacementNote(text, tokens) {
+  let residual = text
+  for (const token of [...tokens].sort((a, b) => b.length - a.length)) {
+    residual = residual.replaceAll(token, ' ')
+  }
+  residual = residual
+    .replace(/[()[\]{}]/g, ' ')
+    .replace(/[;,|/]/g, ' ')
+  if (tokens.length) residual = residual.replace(/\b(?:or|and)\b/gi, ' ')
+  return residual.replace(/\s+/g, ' ').trim() || undefined
+}
+
+export function extractReplacementFields(fragment) {
   const text = plainText(fragment)
-  if (!text || /^[-–\u2014]$/.test(text)) return undefined
-  return text
+  if (!text || /^[-]+$/.test(text) || /^(?:n\/?a|none)$/i.test(text)) return {}
+  const codes = codeText(fragment)
+  const tokens = codes.length ? replacementCodeTokens(codes) : replacementTextTokens(text)
+  const fields = {}
+  if (tokens.length === 1) fields.replacement = tokens[0]
+  if (tokens.length > 1) fields.replacement_options = tokens
+  const note = replacementNote(text, tokens)
+  if (note) fields.replacement_note = note
+  return fields
+}
+
+const replacementPayload = record => ({
+  replacement: record.replacement,
+  replacement_options: record.replacement_options,
+  replacement_note: record.replacement_note,
+})
+
+const hasReplacementPayload = record => Object.keys(replacementPayload(record)).some(key => record[key] !== undefined)
+
+const sameReplacementPayload = (left, right) =>
+  JSON.stringify(replacementPayload(left)) === JSON.stringify(replacementPayload(right))
+
+const copyReplacementPayload = (target, source) => {
+  for (const key of ['replacement', 'replacement_options', 'replacement_note']) {
+    if (source[key] !== undefined) target[key] = source[key]
+  }
 }
 
 function tableRows(table) {
@@ -219,8 +298,7 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
       if (!shutdown) throw new Error(`${provider} deprecations entry ${id} has no valid shutdown date`)
       const replacementCell = headers.recommended >= 0 ? row.cells[headers.recommended] : undefined
       const item = { id, announced: tableAnnounced, shutdown, source: sourceUrl }
-      const nextReplacement = replacementCell ? replacement(replacementCell.html) : undefined
-      if (nextReplacement) item.replacement = nextReplacement
+      if (replacementCell) Object.assign(item, extractReplacementFields(replacementCell.html))
       if (item.announced && item.shutdown < item.announced) {
         throw new Error(`${provider} deprecations entry ${id} has shutdown before announcement`)
       }
@@ -242,10 +320,10 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
       continue
     }
     const sameLifecycle = previous.announced === record.announced && previous.shutdown === record.shutdown
-    if (!sameLifecycle || (previous.replacement && record.replacement && previous.replacement !== record.replacement)) {
+    if (!sameLifecycle || (hasReplacementPayload(previous) && hasReplacementPayload(record) && !sameReplacementPayload(previous, record))) {
       throw new Error(`${provider} deprecations page has conflicting rows for ${record.id}`)
     }
-    if (!previous.replacement && record.replacement) previous.replacement = record.replacement
+    if (!hasReplacementPayload(previous) && hasReplacementPayload(record)) copyReplacementPayload(previous, record)
   }
   return [...unique.values()]
 }
@@ -294,11 +372,7 @@ function openAIModelIds(fragment) {
   }
 }
 
-function openAIReplacement(fragment) {
-  const text = plainText(fragment)
-  if (!text || /^(?:-{1,3}|[–—]+|n\/?a|none)$/i.test(text)) return undefined
-  return text
-}
+const openAIReplacement = extractReplacementFields
 
 /** Parse the OpenAI docs page, whose announcement date is a section heading. */
 export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl) {
@@ -344,8 +418,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       const replacementCell = row.cells[headers.replacement]
       const item = { id: parsedModel.id, announced, shutdown, source: sourceUrl }
       if (parsedModel.aliases.length) item.aliases = parsedModel.aliases
-      const nextReplacement = replacementCell ? openAIReplacement(replacementCell.html) : undefined
-      if (nextReplacement) item.replacement = nextReplacement
+      if (replacementCell) Object.assign(item, openAIReplacement(replacementCell.html))
       if (item.shutdown < item.announced) {
         throw new Error(`openai deprecations entry ${parsedModel.id} has shutdown before announcement`)
       }
@@ -368,7 +441,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     }
     const same = previous.announced === record.announced &&
       previous.shutdown === record.shutdown &&
-      previous.replacement === record.replacement
+      sameReplacementPayload(previous, record)
     if (same) {
       previous.aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
         .filter(alias => alias !== previous.id)
@@ -459,8 +532,7 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
         if (precision) item.date_precision = precision
       }
       const replacementCell = row.cells[headers.recommended]
-      const nextReplacement = replacementCell ? replacement(replacementCell.html) : undefined
-      if (nextReplacement) item.replacement = nextReplacement
+      if (replacementCell) Object.assign(item, extractReplacementFields(replacementCell.html))
       records.push(item)
     }
   }
@@ -481,7 +553,7 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
     const same = previous.announced === record.announced &&
       previous.shutdown === record.shutdown &&
       previous.date_precision === record.date_precision &&
-      previous.replacement === record.replacement
+      sameReplacementPayload(previous, record)
     if (!same) throw new Error(`google deprecations page has conflicting rows for ${record.id}`)
   }
   return [...unique.values()]
@@ -609,6 +681,39 @@ function identityIndex(models) {
   return index
 }
 
+function replacementInput(model) {
+  if (Array.isArray(model.replacement_options)) {
+    return { tokens: [...model.replacement_options], note: model.replacement_note }
+  }
+  if (typeof model.replacement === 'string' && model.replacement.trim()) {
+    const raw = model.replacement.trim()
+    const parsed = MODEL_ID_PATTERN.test(raw)
+      ? { replacement: raw }
+      : extractReplacementFields(raw)
+    return {
+      tokens: parsed.replacement ? [parsed.replacement] : [...(parsed.replacement_options ?? [])],
+      note: model.replacement_note ?? parsed.replacement_note,
+    }
+  }
+  if (model.replacement_note !== undefined) return { tokens: [], note: model.replacement_note }
+  return undefined
+}
+
+function routeReplacementFields(models) {
+  const index = identityIndex(models)
+  for (const model of models) {
+    const input = replacementInput(model)
+    if (!input) continue
+    delete model.replacement
+    delete model.replacement_options
+    delete model.replacement_note
+    const tokens = [...new Set(input.tokens)]
+    if (tokens.length === 1 && index.has(tokens[0])) model.replacement = tokens[0]
+    else if (tokens.length) model.replacement_options = tokens
+    if (input.note) model.replacement_note = input.note
+  }
+}
+
 /**
  * Merge source records into a committed feed without deleting any committed
  * entry. The endpoint argument is null when credentials were unavailable and
@@ -632,7 +737,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
     if (target === other) return
     aliases.add(other.id)
     for (const alias of other.aliases ?? []) aliases.add(alias)
-    const metadata = new Set(['announced', 'shutdown', 'date_precision', 'replacement', 'source'])
+    const metadata = new Set(['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note', 'source'])
     for (const [field, value] of Object.entries(other)) {
       if (field === 'id' || field === 'aliases' || metadata.has(field)) continue
       if (target[field] === undefined) {
@@ -662,7 +767,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
       if (owner && owner !== target) absorb(target, owner, aliases)
       aliases.add(alias)
     }
-    for (const field of ['announced', 'shutdown', 'date_precision', 'replacement']) delete target[field]
+    for (const field of ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']) delete target[field]
     Object.assign(target, clone(record), { id: canonicalId })
     if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
     else delete target.aliases
@@ -679,7 +784,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
         // Presence in the endpoint is affirmative current-model data. A
         // lifecycle record from the old feed is stale unless the page still
         // confirms it in this refresh.
-        for (const field of ['announced', 'shutdown', 'date_precision', 'replacement']) delete target[field]
+        for (const field of ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']) delete target[field]
       }
       confirmed.add(target.id)
     }
@@ -693,6 +798,8 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
       throw new Error(`merge would detach committed canonical model ${old.id}`)
     }
   }
+
+  routeReplacementFields(models)
 
   const feed = {
     ...clone(committed),

@@ -43,6 +43,7 @@ const BOT_SCHEMA = 'model-eol.bot/0.1'
 const ISSUE_REASONS = new Set([
   'not-direct-api',
   'no-replacement',
+  'replacement-choice',
   'replacement-unresolved',
   'replacement-retiring',
   'publisher-fallback',
@@ -324,6 +325,20 @@ const tokenWarning = tokenKind => tokenKind === 'github-token'
   ? '\n\n> Warning: checks may be skipped because PRs created with `GITHUB_TOKEN` do not trigger `pull_request` workflows. Use a fine-grained PAT or GitHub App token when checks must run.'
   : ''
 
+const replacementOptionsText = options => options.map(markdownCode).join(' | ')
+
+const replacementSection = (item, now) => [
+  ...(item.replacement
+    ? [`replacement per feed as of ${now.toISOString().slice(0, 10)}: ${markdownCode(item.replacement)}. Treat as a snapshot in time, not a constant.`]
+    : []),
+  ...(item.replacement_options?.length
+    ? [`replacement options per feed as of ${now.toISOString().slice(0, 10)}: ${replacementOptionsText(item.replacement_options)}.`]
+    : []),
+  ...(item.replacement_note
+    ? [`replacement note: ${markdownText(item.replacement_note)}`]
+    : []),
+]
+
 export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = null, evalResult = null }) => {
   const item = group.items[0]
   const announced = markdownText(group.context?.announced ?? 'not specified')
@@ -335,6 +350,8 @@ export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = nu
     shutdown: item.shutdown,
     via: group.via ?? null,
     replacement: item.replacement,
+    replacement_options: item.replacement_options,
+    replacement_note: item.replacement_note,
     head_sha: headSha,
     feed_digest: group.feedDigest,
   }
@@ -347,7 +364,7 @@ export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = nu
     `- Days remaining: ${days}`,
     '',
     '## Replacement',
-    `replacement per feed as of ${now.toISOString().slice(0, 10)}: ${markdownCode(item.replacement)}. Treat as a snapshot in time, not a constant.`,
+    ...replacementSection(item, now),
     '',
     '## Sources',
     sourceSection(group),
@@ -371,13 +388,16 @@ export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = nu
 }
 
 export const buildIssueBody = ({ group, now = new Date() }) => {
+  const issue = group.issues[0]
   const metadata = {
     schema: BOT_SCHEMA,
     id: group.id || group.subject,
     publisher: group.publisher,
     shutdown: group.shutdown,
     via: group.via ?? null,
-    replacement: group.issues[0].replacement ?? null,
+    replacement: issue.replacement ?? null,
+    replacement_options: issue.replacement_options,
+    replacement_note: issue.replacement_note,
     head_sha: null,
     feed_digest: group.feedDigest,
     ...(group.channel ? { channel: group.channel } : {}),
@@ -393,8 +413,14 @@ export const buildIssueBody = ({ group, now = new Date() }) => {
     `- Reason: ${markdownText(group.issues[0].reason)}`,
     `- Status: ${markdownText(group.issues[0].status ?? 'unresolved')}`,
     `- Shutdown: ${markdownText(group.shutdown ?? 'not scheduled')}`,
-    ...(group.issues[0].replacement
-      ? [`- Replacement per feed as of ${now.toISOString().slice(0, 10)}: ${markdownCode(group.issues[0].replacement)}. Treat as a snapshot in time, not a constant.`]
+    ...(issue.replacement
+      ? [`- Replacement per feed as of ${now.toISOString().slice(0, 10)}: ${markdownCode(issue.replacement)}. Treat as a snapshot in time, not a constant.`]
+      : []),
+    ...(issue.replacement_options?.length
+      ? [`- Replacement options per feed as of ${now.toISOString().slice(0, 10)}: ${replacementOptionsText(issue.replacement_options)}.`]
+      : []),
+    ...(issue.replacement_note
+      ? [`- Replacement note: ${markdownText(issue.replacement_note)}`]
       : []),
     `- Recorded on: ${now.toISOString().slice(0, 10)}`,
     '',

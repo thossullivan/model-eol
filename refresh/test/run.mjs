@@ -20,6 +20,7 @@ import {
 import {
   PROVIDERS,
   assertIsoDate,
+  extractReplacementFields,
   loadProviderSources,
   mergeFeed,
   parseAnthropicDeprecations,
@@ -91,6 +92,35 @@ try {
   validatorRejectedDate = true
 }
 assert(validatorRejectedDate, 'validate-feeds rejects impossible generated dates')
+let validatorRejectedReplacement = false
+try {
+  validateGeneratedFeeds([{
+    provider: { feedFile: 'invalid-replacement.json' },
+    feed: {
+      spec: 'model-eol/0.1',
+      publisher: 'test',
+      generated: '2026-08-01T00:00:00Z',
+      models: [{ id: 'retired', replacement: 'not-carried-yet' }],
+    },
+  }])
+} catch {
+  validatorRejectedReplacement = true
+}
+let validatorRejectedOption = false
+try {
+  validateGeneratedFeeds([{
+    provider: { feedFile: 'invalid-option.json' },
+    feed: {
+      spec: 'model-eol/0.1',
+      publisher: 'test',
+      generated: '2026-08-01T00:00:00Z',
+      models: [{ id: 'retired', replacement_options: ['bad option'] }],
+    },
+  }])
+} catch {
+  validatorRejectedOption = true
+}
+assert(validatorRejectedReplacement && validatorRejectedOption, 'validate-feeds rejects unresolved replacements and invalid options')
 
 const unknownFlag = run(['--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown refresh flags exit 2 with the bad flag and help hint')
@@ -165,6 +195,12 @@ assert(openaiById.get('o3-deep-research-2025-06-26')?.shutdown === '2026-07-23',
 assert(openaiById.get('o4-mini-deep-research-2025-06-26')?.replacement === 'gpt-5.6-sol', 'OpenAI parses multiple models under one announcement')
 assert(openaiById.get('gpt-4-turbo-2024-04-09')?.replacement === 'gpt-5.6-sol', 'OpenAI selects the dated snapshot from an alias cell')
 assert(openaiById.get('sora-2')?.replacement === undefined, 'OpenAI preserves a missing replacement from ---')
+const parameterFields = extractReplacementFields('<code>target-model</code> (<code>reasoning.mode: pro</code>)')
+const optionFields = extractReplacementFields('<code>first-model</code> or <code>second-model</code>')
+const wildcardFields = extractReplacementFields('first-model or second-model*')
+assert(parameterFields.replacement === 'target-model' && parameterFields.replacement_note === 'reasoning.mode: pro', 'replacement extraction keeps one ID and parameter guidance')
+assert(JSON.stringify(optionFields.replacement_options) === JSON.stringify(['first-model', 'second-model']), 'replacement extraction preserves ordered options')
+assert(wildcardFields.replacement === 'first-model' && wildcardFields.replacement_note === 'second-model*', 'replacement extraction keeps wildcard text out of IDs')
 assert(dateFromText('2026‑08‑26') === '2026-08-26', 'OpenAI parses nonbreaking-hyphen dates')
 assert(openaiEntries.every(entry => entry.source.startsWith('https://')), 'OpenAI dated entries carry a source URL')
 const feedById = new Map(openaiFeed.models.map(model => [model.id, model]))
@@ -182,6 +218,12 @@ assert(googleEntries.find(entry => entry.id === 'gemini-2.5-pro')?.date_precisio
 assert(googleEntries.find(entry => entry.id === 'gemini-2.5-pro')?.shutdown === '2026-10-16', 'Google parses a human shutdown date')
 assert(googleEntries.find(entry => entry.id === 'gemini-3.6-flash')?.shutdown === undefined, 'Google preserves models without a shutdown date')
 assert(googleIds.length === 3 && googleIds.includes('gemini-2.5-pro'), 'Google models endpoint fixture strips the models/ prefix')
+const genericStructuredHtml = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>generic-structured</code></td><td><code>first-model</code> or <code>second-model</code></td></tr></table>'
+const googleStructuredHtml = '<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>google-structured</code></td><td>2027-01-01</td><td>first-model or second-model*</td></tr></table>'
+const genericStructured = parseAnthropicDeprecations(genericStructuredHtml)[0]
+const googleStructured = parseGoogleDeprecations(googleStructuredHtml)[0]
+assert(JSON.stringify(genericStructured.replacement_options) === JSON.stringify(['first-model', 'second-model']), 'generic parser uses structured replacement routing')
+assert(googleStructured.replacement === 'first-model' && googleStructured.replacement_note === 'second-model*', 'Google parser uses structured replacement routing')
 assert(vertexEntries.length === 41, 'Vertex model-versions fixture parses model rows')
 assert(vertexEntries.find(entry => entry.vertexId === 'gemini-2.5-pro')?.date_precision === 'earliest', 'Vertex marks dates that cannot move earlier')
 assert(vertexEntries.find(entry => entry.vertexId === 'claude-sonnet-4-20250514')?.shutdown === '2026-10-14', 'Vertex parses an Anthropic model row')
@@ -201,6 +243,24 @@ const currentMerge = mergeFeed(minimalCommitted, {
   provider: PROVIDERS.openai,
 })
 assert(currentMerge.feed.models.find(model => model.id === 'new-current' && !model.shutdown && !model.announced), 'current model entries have no lifecycle dates')
+const structuredMerge = mergeFeed(minimalCommitted, {
+  currentIds: ['resolved-target', 'second-target'],
+  deprecations: [
+    { id: 'single-resolvable', shutdown: '2026-12-01', replacement: 'resolved-target' },
+    { id: 'multi-option', shutdown: '2026-12-01', replacement_options: ['resolved-target', 'second-target'] },
+    { id: 'parameterized', shutdown: '2026-12-01', replacement: 'resolved-target', replacement_note: 'reasoning.mode: pro' },
+    { id: 'single-unresolvable', shutdown: '2026-12-01', replacement: 'not-carried-yet' },
+    { id: 'wildcard', shutdown: '2026-12-01', replacement: 'resolved-target', replacement_note: 'second-target*' },
+  ],
+  generated: '2026-08-01T00:00:00Z',
+  provider: PROVIDERS.openai,
+})
+const structuredById = new Map(structuredMerge.feed.models.map(model => [model.id, model]))
+assert(structuredById.get('single-resolvable')?.replacement === 'resolved-target', 'merge routes one resolvable token to replacement')
+assert(JSON.stringify(structuredById.get('multi-option')?.replacement_options) === JSON.stringify(['resolved-target', 'second-target']), 'merge preserves multiple replacement options')
+assert(structuredById.get('parameterized')?.replacement === 'resolved-target' && structuredById.get('parameterized')?.replacement_note === 'reasoning.mode: pro', 'merge preserves a parameterized replacement note')
+assert(JSON.stringify(structuredById.get('single-unresolvable')?.replacement_options) === JSON.stringify(['not-carried-yet']) && !structuredById.get('single-unresolvable')?.replacement, 'merge routes an unresolved token to issue-only options')
+assert(structuredById.get('wildcard')?.replacement === 'resolved-target' && structuredById.get('wildcard')?.replacement_note === 'second-target*' && !structuredById.get('wildcard')?.replacement_options, 'merge keeps wildcard guidance out of replacement IDs')
 const staleCurrent = mergeFeed({
   ...minimalCommitted,
   models: [{ id: 'stale-current', announced: '2026-01-01', shutdown: '2026-12-01', replacement: 'new-current' }],
@@ -391,6 +451,11 @@ for (const heading of [
 assert(!semanticMarkdown.includes('## Distribution changes'), 'semantic diff omits empty sections instead of rendering None')
 assert(semanticMarkdown.includes('2026-10-01') && semanticMarkdown.includes('2026-11-01'), 'semantic diff renders shutdown date movement')
 assert(semanticMarkdown.includes('old-target') && semanticMarkdown.includes('new-target'), 'semantic diff renders replacement movement')
+const optionsOld = { ...oldFeed, models: [{ id: 'options-model', replacement_options: ['first-target', 'second-target'], replacement_note: 'old guidance' }] }
+const optionsNew = { ...oldFeed, models: [{ id: 'options-model', replacement_options: ['first-target', 'third-target'], replacement_note: 'new guidance' }] }
+const optionsDiff = compareFeeds(optionsOld, optionsNew)
+const optionsMarkdown = renderSemanticDiff(optionsOld, optionsNew)
+assert(optionsDiff.changed && optionsDiff.replacementChanges.length === 1 && optionsMarkdown.includes('replacement_options') && optionsMarkdown.includes('new guidance'), 'semantic diff treats replacement options and notes as material')
 assert(!compareFeeds(oldFeed, oldFeed).changed, 'semantic diff ignores generated metadata and reports no-change feeds')
 const precisionFeed = { ...oldFeed, models: [{ id: 'precision', shutdown: '2026-10-01', date_precision: 'earliest' }] }
 const precisionDiff = renderSemanticDiff({ ...oldFeed, models: [{ id: 'precision', shutdown: '2026-10-01' }] }, precisionFeed)

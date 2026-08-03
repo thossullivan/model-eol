@@ -290,7 +290,8 @@ const cleanAnthropic = findingFromRef({
   policy: anthropicFeed.policy,
   generated: anthropicFeed.generated,
 }, { days: 90, today: new Date('2026-08-01T00:00:00Z') })
-assert(cleanAnthropic.status === 'ok' && cleanAnthropic.safe_until === '2026-09-30', 'clean Anthropic model gets policy-floor safe_until')
+const anthropicFloor = new Date(new Date(anthropicFeed.generated).getTime() + anthropicFeed.policy.min_notice_days * 86400000).toISOString().slice(0, 10)
+assert(cleanAnthropic.status === 'ok' && cleanAnthropic.safe_until === anthropicFloor, 'clean Anthropic model gets policy-floor safe_until')
 
 const policyDir = path.join(tempRoot, 'policy-fixture')
 const policyFeeds = path.join(policyDir, 'feeds')
@@ -360,6 +361,8 @@ const earliestFinding = findingFromRef({
 assert(earliestFinding.date_precision === 'earliest', 'findings carry date precision')
 const earliestCheck = formatCheck({ findings: [earliestFinding], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
 assert(earliestCheck.includes('no earlier than 2026-08-20'), 'human check output renders earliest shutdown as a lower bound')
+const optionsCheck = formatCheck({ findings: [{ ...earliestFinding, replacement: null, replacement_options: ['first-choice', 'second-choice'] }], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
+assert(optionsCheck.includes('options: first-choice | second-choice'), 'human check output renders replacement options compactly')
 const earliestSchedule = formatSchedule({
   items: [earliestFinding],
   candidate_model_references: [],
@@ -411,6 +414,19 @@ fs.writeFileSync(path.join(gateFeeds, 'gate.json'), JSON.stringify({
 const missingReplacementPlan = run(['plan', gateDir, '--feeds', gateFeeds, '--days', '90'])
 const missingReplacementJson = JSON.parse(missingReplacementPlan.out)
 assert(!missingReplacementJson.items.length && missingReplacementJson.issues.some(issue => issue.reason === 'no-replacement'), 'missing replacement is not patchable')
+fs.writeFileSync(path.join(gateDir, 'options.py'), 'from openai import OpenAI\nclient = OpenAI()\nmodel = "retired-with-options"\n')
+const gateFeedWithOptions = JSON.parse(fs.readFileSync(path.join(gateFeeds, 'gate.json'), 'utf8'))
+gateFeedWithOptions.models.push({
+  id: 'retired-with-options',
+  shutdown: '2026-07-01',
+  replacement_options: ['first-choice', 'second-choice'],
+  replacement_note: 'verify the parameter profile',
+})
+fs.writeFileSync(path.join(gateFeeds, 'gate.json'), JSON.stringify(gateFeedWithOptions))
+const choicePlanRun = run(['plan', gateDir, '--feeds', gateFeeds, '--days', '90'])
+const choicePlan = JSON.parse(choicePlanRun.out)
+const choiceIssue = choicePlan.issues.find(issue => issue.id === 'retired-with-options')
+assert(choiceIssue?.reason === 'replacement-choice' && JSON.stringify(choiceIssue.replacement_options) === JSON.stringify(['first-choice', 'second-choice']) && choiceIssue.replacement_note === 'verify the parameter profile', 'plan emits replacement-choice issues with options and notes')
 
 const ar6Dir = path.join(tempRoot, 'ar6-proximity')
 const ar6Feeds = path.join(tempRoot, 'ar6-feeds')

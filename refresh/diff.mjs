@@ -5,6 +5,16 @@ const value = item => item === undefined || item === null || item === '' ? 'not 
 
 const code = item => `\`${String(value(item))}\``
 
+const replacementSummary = model => {
+  const parts = []
+  if (model?.replacement !== undefined) parts.push(`replacement: ${code(model.replacement)}`)
+  if (model?.replacement_options?.length) {
+    parts.push(`replacement_options: ${model.replacement_options.map(code).join(' | ')}`)
+  }
+  if (model?.replacement_note) parts.push(`replacement_note: ${code(model.replacement_note)}`)
+  return parts.join('; ') || `replacement: ${code(undefined)}`
+}
+
 const keysFor = model => [model.id, ...(model.aliases ?? [])].filter(Boolean)
 
 function indexModels(feed) {
@@ -126,8 +136,17 @@ export function compareFeeds(committed, generated, options = {}) {
           nextPrecision: model.date_precision,
         })
       }
-      if (old.replacement !== model.replacement) {
-        replacementChanges.push({ id: model.id, old: old.replacement, next: model.replacement })
+      const replacementOptionsChanged = JSON.stringify(old.replacement_options ?? null) !== JSON.stringify(model.replacement_options ?? null)
+      if (old.replacement !== model.replacement || replacementOptionsChanged || old.replacement_note !== model.replacement_note) {
+        replacementChanges.push({
+          id: model.id,
+          old: old.replacement,
+          next: model.replacement,
+          oldOptions: old.replacement_options,
+          nextOptions: model.replacement_options,
+          oldNote: old.replacement_note,
+          nextNote: model.replacement_note,
+        })
       }
       if (old.announced !== model.announced && old.announced) {
         announcementChanges.push({ id: model.id, old: old.announced, next: model.announced })
@@ -244,7 +263,7 @@ function renderResult(result, publisher) {
   pushSection(section(
     'Models added',
     result.added.filter(model => model.announced || model.shutdown)
-      .map(model => `- ${code(model.id)} - ${dateLine(model)}; replacement: ${code(model.replacement)}`),
+      .map(model => `- ${code(model.id)} - ${dateLine(model)}; ${replacementSummary(model)}`),
   ))
   const currentAdded = result.added.filter(model => !model.announced && !model.shutdown)
   pushSection(section(
@@ -257,7 +276,7 @@ function renderResult(result, publisher) {
   ))
   pushSection(section(
     'Replacement changes',
-    result.replacementChanges.map(change => `- ${code(change.id)} - ${code(change.old)} -> ${code(change.next)}`),
+    result.replacementChanges.map(change => `- ${code(change.id)} - ${replacementSummary({ replacement: change.old, replacement_options: change.oldOptions, replacement_note: change.oldNote })} -> ${replacementSummary({ replacement: change.next, replacement_options: change.nextOptions, replacement_note: change.nextNote })}`),
   ))
   pushSection(section(
     'Alias changes',
@@ -274,7 +293,7 @@ function renderResult(result, publisher) {
   ))
   pushSection(section(
     'Newly announced deprecations',
-    result.newlyAnnounced.map(model => `- ${code(model.id)} - ${dateLine(model)}; replacement: ${code(model.replacement)}`),
+    result.newlyAnnounced.map(model => `- ${code(model.id)} - ${dateLine(model)}; ${replacementSummary(model)}`),
   ))
   pushSection(section('Distribution changes', renderDistributionChanges(result)))
   pushSection(section(

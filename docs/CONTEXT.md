@@ -108,6 +108,15 @@ competition - see the outreach issue.
    and Codex delegation; per-commit honesty lives in commit bodies ("Implemented by
    Codex (gpt-5.6-luna); reviewed by Claude"), never in Co-Authored-By trailers.
    History was rewritten 2026-08-01 to enforce this.
+15. **Structured replacement fields are settled.** `replacement` is a single exact
+   model ID that resolves against an id or alias in the same feed and is safe as a
+   drop-in string substitution. This is the ONLY field plan/apply may patch from.
+   Otherwise absent. `replacement_options` is an optional ordered array of exact
+   model IDs that must pass the identifier grammar, but feed resolution is NOT
+   required since a target may not be carried yet. `replacement_note` is optional
+   free-text guidance for parameter requirements or prose alternatives. Options and
+   notes are issue-only; the planner never auto-patches from options and patches
+   `replacement` exclusively.
 
 ## Publish gates (do not flip public before)
 

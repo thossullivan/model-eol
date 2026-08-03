@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-08-01T21:59:09.710Z",
+  "generated": "2026-08-03T14:35:06.964Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -65,9 +65,6 @@
     {
       "id": "gemini-3.1-flash-lite",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2027-05-07",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.5-flash-lite",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -75,7 +72,10 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2027-05-07",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.5-flash-lite"
     },
     {
       "id": "gemini-3.1-flash-image-preview",
@@ -117,9 +117,6 @@
     {
       "id": "gemini-2.5-pro",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-10-16",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.1-pro-preview",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -127,7 +124,10 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-10-16",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-pro-preview"
     },
     {
       "id": "gemini-2.5-pro-preview-03-25",
@@ -153,9 +153,6 @@
     {
       "id": "gemini-2.5-flash",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-10-16",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.6-flash",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -163,14 +160,14 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-10-16",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.6-flash"
     },
     {
       "id": "gemini-2.5-flash-image",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-10-02",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.1-flash-image-preview",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -178,14 +175,14 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-10-02",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-image-preview"
     },
     {
       "id": "gemini-2.5-flash-lite",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-10-16",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.1-flash-lite",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -193,7 +190,10 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-10-16",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-lite"
     },
     {
       "id": "gemini-2.5-flash-lite-preview-09-2025",
@@ -226,9 +226,6 @@
     {
       "id": "gemini-2.0-flash",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-06-01",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.6-flash",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -236,7 +233,10 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-06-01",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.6-flash"
     },
     {
       "id": "gemini-2.0-flash-001",
@@ -248,9 +248,6 @@
     {
       "id": "gemini-2.0-flash-lite",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-06-01",
-      "date_precision": "earliest",
-      "replacement": "gemini-3.1-flash-lite",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -258,7 +255,10 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-06-01",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.1-flash-lite"
     },
     {
       "id": "gemini-2.0-flash-lite-001",
@@ -332,9 +332,6 @@
     {
       "id": "gemini-embedding-001",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2028-05-14",
-      "date_precision": "earliest",
-      "replacement": "gemini-embedding-2",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -342,14 +339,14 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2028-05-14",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
     },
     {
       "id": "text-embedding-004",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-01-14",
-      "date_precision": "earliest",
-      "replacement": "gemini-embedding-2",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -357,7 +354,10 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-01-14",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2"
     },
     {
       "id": "embedding-2-preview",
@@ -439,9 +439,6 @@
     {
       "id": "veo-3.0-generate-001",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-06-30",
-      "date_precision": "earliest",
-      "replacement": "veo-3.1-generate-preview or the GA models on the Gemini Enterprise Agent Platform",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -449,14 +446,15 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-06-30",
+      "date_precision": "earliest",
+      "replacement": "veo-3.1-generate-preview",
+      "replacement_note": "the GA models on the Gemini Enterprise Agent Platform"
     },
     {
       "id": "veo-3.0-fast-generate-001",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-06-30",
-      "date_precision": "earliest",
-      "replacement": "veo-3.1-fast-generate-preview or the GA models on the Gemini Enterprise Agent Platform",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -464,14 +462,15 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-06-30",
+      "date_precision": "earliest",
+      "replacement": "veo-3.1-fast-generate-preview",
+      "replacement_note": "the GA models on the Gemini Enterprise Agent Platform"
     },
     {
       "id": "veo-2.0-generate-001",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-06-30",
-      "date_precision": "earliest",
-      "replacement": "veo-3.1-generate-preview or the GA models on the Gemini Enterprise Agent Platform",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -479,7 +478,11 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-06-30",
+      "date_precision": "earliest",
+      "replacement": "veo-3.1-generate-preview",
+      "replacement_note": "the GA models on the Gemini Enterprise Agent Platform"
     },
     {
       "id": "veo-3.1-lite-generate-preview",
@@ -524,7 +527,9 @@
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
       "shutdown": "2026-08-31",
       "date_precision": "earliest",
-      "replacement": "gemini-robotics-er-2-preview"
+      "replacement_options": [
+        "gemini-robotics-er-2-preview"
+      ]
     },
     {
       "id": "gemini-robotics-er-1.5-preview",

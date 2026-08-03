@@ -7,6 +7,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 import {
+  buildIssueBody,
   buildPullBody,
   contextFor,
   formatDecisions,
@@ -347,6 +348,35 @@ assert(referenceIssue, 'retired model-reference without a direct API signal crea
 assert(referenceIssue.body.includes('not-direct-api'), 'model-reference issue carries the not-direct-api reason')
 assert(referenceIssue.body.includes('`claude-sonnet-4-6`'), 'model-reference issue surfaces the feed replacement')
 assert(!referenceResult.decisions.some(item => item.group.kind === 'pr'), 'retired model-reference never creates a PR')
+const structuredIssueBody = buildIssueBody({
+  group: {
+    kind: 'issue',
+    id: 'structured-model',
+    subject: 'structured-model',
+    publisher: 'openai',
+    shutdown: '2026-07-01',
+    via: null,
+    feedDigest: 'structured-digest',
+    root: '.',
+    context: { announced: null, notes: [], entry: null },
+    issues: [{
+      file: 'app.py',
+      line: 1,
+      reason: 'replacement-choice',
+      status: 'retired',
+      matched: 'structured-model',
+      replacement: null,
+      replacement_options: ['first_choice', 'second-choice'],
+      replacement_note: 'Use `reasoning.mode: pro` <when needed>.',
+      sources: [],
+      notes: null,
+    }],
+  },
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+assert(structuredIssueBody.includes('Replacement options') && structuredIssueBody.includes('first&#95;choice') && structuredIssueBody.includes('second-choice'), 'issue body renders escaped replacement options')
+const structuredNoteLine = structuredIssueBody.split('\n').find(line => line.startsWith('- Replacement note:'))
+assert(structuredNoteLine?.includes('reasoning.mode: pro') && structuredNoteLine.includes('&lt;when needed&gt;') && structuredNoteLine.includes('&#96;'), 'issue body renders escaped replacement notes')
 
 const ignoreRepo = makeRepo({
   name: 'ignores',

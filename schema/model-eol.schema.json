@@ -37,7 +37,13 @@
         "announced": { "$ref": "#/definitions/isoDate" },
         "shutdown": { "$ref": "#/definitions/isoDate" },
         "date_precision": { "enum": ["exact", "earliest"] },
-        "replacement": { "type": "string" },
+        "replacement": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "replacement_options": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+        },
+        "replacement_note": { "type": "string" },
         "notes": { "type": "string" },
         "source": { "type": "string", "format": "uri" },
         "distributions": {

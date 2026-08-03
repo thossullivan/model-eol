@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const FEEDS = path.join(import.meta.dirname, '..', 'feeds')
+const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 let errors = 0
 const err = (file, msg) => {
   console.error(`✗ ${file}: ${msg}`)
@@ -49,6 +50,7 @@ for (const f of fs.readdirSync(FEEDS).filter(f => f.endsWith('.json'))) {
     continue
   }
   const seen = new Set()
+  const modelKeys = new Set(feed.models.flatMap(model => [model?.id, ...(model?.aliases ?? [])].filter(value => typeof value === 'string')))
   for (const [i, m] of feed.models.entries()) {
     const at = `models[${i}]`
     if (!m.id) err(f, `${at}: missing id`)
@@ -61,6 +63,28 @@ for (const f of fs.readdirSync(FEEDS).filter(f => f.endsWith('.json'))) {
     }
     if (m.announced && m.shutdown && m.shutdown < m.announced) err(f, `${at}: shutdown precedes announced`)
     if ((m.announced || m.shutdown) && !(m.source || feed.source)) err(f, `${at}: dated entry needs a source (entry- or feed-level)`)
+    if (m.replacement !== undefined) {
+      if (typeof m.replacement !== 'string' || !MODEL_ID_PATTERN.test(m.replacement)) {
+        err(f, `${at}: replacement must be a grammar-valid model ID`)
+      } else if (!modelKeys.has(m.replacement)) {
+        err(f, `${at}: replacement does not resolve to an id or alias in this feed: ${m.replacement}`)
+      }
+    }
+    if (m.replacement_options !== undefined) {
+      if (!Array.isArray(m.replacement_options) || m.replacement_options.length === 0) {
+        err(f, `${at}: replacement_options must be a non-empty array`)
+      } else {
+        for (const [j, option] of m.replacement_options.entries()) {
+          if (typeof option !== 'string' || !MODEL_ID_PATTERN.test(option)) {
+            err(f, `${at}.replacement_options[${j}]: must be a grammar-valid model ID`)
+          }
+        }
+      }
+      if (m.replacement !== undefined) err(f, `${at}: replacement and replacement_options are mutually exclusive`)
+    }
+    if (m.replacement_note !== undefined && typeof m.replacement_note !== 'string') {
+      err(f, `${at}: replacement_note must be a string`)
+    }
     for (const [j, d] of (m.distributions ?? []).entries()) {
       if (!d.via) err(f, `${at}.distributions[${j}]: missing via`)
       for (const field of ['announced', 'shutdown']) {
