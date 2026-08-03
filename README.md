@@ -6,7 +6,7 @@
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 **A machine-readable deprecation feed format for AI models, plus the reference
-tooling that turns it into a Dependabot for models.** v0.1.0.
+tooling that turns it into a Dependabot for models.** v0.2.0.
 
 ![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
 
