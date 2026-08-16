@@ -3,7 +3,7 @@
 // o3-deep-research's shutdown (2026-07-23) is in the past forever, and
 // claude-opus-4-1's (2026-08-05) is either retiring or retired - both flag.
 import crypto from 'node:crypto'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -18,6 +18,35 @@ const run = (args, options = {}) => {
   const result = spawnSync('node', [path.join(root, 'check.mjs'), ...args], { encoding: 'utf8', ...options })
   return { out: result.stdout ?? '', err: result.stderr ?? '', code: result.status }
 }
+const runPiped = (args, { closeStdoutAfterData = false, env = process.env, timeout = 5000 } = {}) => new Promise((resolve, reject) => {
+  const child = spawn('node', [path.join(root, 'check.mjs'), ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  let out = ''
+  let err = ''
+  let timedOut = false
+  let stdoutClosed = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    child.kill('SIGKILL')
+  }, timeout)
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', chunk => {
+    out += chunk
+    if (closeStdoutAfterData && !stdoutClosed) {
+      stdoutClosed = true
+      child.stdout.destroy()
+    }
+  })
+  child.stderr.on('data', chunk => { err += chunk })
+  child.once('error', error => {
+    clearTimeout(timer)
+    reject(error)
+  })
+  child.once('close', code => {
+    clearTimeout(timer)
+    resolve({ out, err, code, timedOut })
+  })
+})
 
 let failures = 0
 const assert = (cond, msg) => {
@@ -28,6 +57,9 @@ const assert = (cond, msg) => {
     console.log(`ok: ${msg}`)
   }
 }
+
+const help = run(['--help'])
+assert(help.code === 0 && help.out.includes('3  Output stream failure other than EPIPE.'), 'help documents exit 3 for non-EPIPE output failures')
 
 const unknownFlag = run([path.join(root, 'test/fixture'), '--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown check flags exit 2 with the bad flag and help hint')
@@ -176,13 +208,100 @@ assert(property(cyclonedxComponent, 'model-eol:status') === 'retired', 'CycloneD
 assert(cyclonedxComponent?.evidence?.occurrences.some(item => item.location.endsWith('direct.py#8')), 'CycloneDX carries model reference occurrences')
 assert(!cyclonedx.components.some(item => item.name === 'gpt-9-ultra-20990101'), 'CycloneDX omits candidate model references')
 
-const badgeRun = run(['alert', path.join(root, 'test/fixture'), '--days', '30', '--format', 'badge'])
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
+
+const badgeDir = path.join(tempRoot, 'badge')
+const badgeFeeds = path.join(badgeDir, 'feeds')
+fs.mkdirSync(badgeFeeds, { recursive: true })
+fs.writeFileSync(path.join(badgeDir, 'models.py'), 'RETIRED = "badge-retired-model"\nRETIRING = "badge-retiring-model"\n')
+fs.writeFileSync(path.join(badgeFeeds, 'badge.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'test',
+  generated: '2026-08-01T00:00:00Z',
+  source: 'https://example.invalid/badge',
+  models: [
+    { id: 'badge-retired-model', shutdown: '2000-01-01' },
+    { id: 'badge-retiring-model', shutdown: '9999-12-31' },
+  ],
+}))
+const badgeThresholdDays = '4000000'
+const badgeRun = run(['alert', badgeDir, '--feeds', badgeFeeds, '--days', badgeThresholdDays, '--format', 'badge'])
 const badge = JSON.parse(badgeRun.out)
 assert(badgeRun.code === 1, 'badge alert keeps existing alert exit semantics')
 assert(badge.schemaVersion === 1 && badge.label === 'model-eol', 'badge emits Shields endpoint keys')
 assert(badge.color === 'red' && badge.message.includes('retired') && badge.message.includes('retiring'), 'badge counts retired and retiring errors')
 
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
+const largePipeDir = path.join(tempRoot, 'large-pipe-output')
+fs.mkdirSync(largePipeDir)
+const largePipeFindingCount = 512
+fs.writeFileSync(path.join(largePipeDir, 'models.py'), Array.from(
+  { length: largePipeFindingCount },
+  (_, index) => `MODEL_${index} = "o3-deep-research"`,
+).join('\n'))
+const largePipeRun = await runPiped(['check', largePipeDir, '--days', '90', '--scope', 'all', '--json'])
+let largePipeJson = null
+try {
+  largePipeJson = JSON.parse(largePipeRun.out)
+} catch {}
+assert(largePipeRun.out.length > 64 * 1024 && largePipeJson?.findings.length === largePipeFindingCount, 'piped check JSON over 64KiB is complete and parseable')
+assert(largePipeRun.code === 1, 'large piped check keeps finding exit semantics')
+
+const preloadDir = path.join(tempRoot, 'preloads')
+fs.mkdirSync(preloadDir)
+const intervalPreload = path.join(preloadDir, 'interval.cjs')
+const beforeExitPreload = path.join(preloadDir, 'before-exit.cjs')
+const endedStderrPreload = path.join(preloadDir, 'ended-stderr.cjs')
+const badStdoutPreload = path.join(preloadDir, 'bad-stdout.cjs')
+fs.writeFileSync(intervalPreload, 'setInterval(() => {}, 1000)\n')
+fs.writeFileSync(beforeExitPreload, 'process.on("beforeExit", () => { process.exitCode = 7 })\n')
+fs.writeFileSync(endedStderrPreload, 'process.stderr.end()\n')
+fs.writeFileSync(badStdoutPreload, 'process.stdout.write = (_chunk, encoding, callback) => { const done = typeof encoding === "function" ? encoding : callback; process.nextTick(() => done?.(Object.assign(new Error("bad file descriptor"), { code: "EBADF" }))); return false }\n')
+const preloadEnv = preload => ({
+  ...process.env,
+  NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${preload}`].filter(Boolean).join(' '),
+})
+const intervalRun = await runPiped(
+  ['check', largePipeDir, '--days', '90', '--scope', 'all', '--json'],
+  { env: preloadEnv(intervalPreload) },
+)
+let intervalJson = null
+try {
+  intervalJson = JSON.parse(intervalRun.out)
+} catch {}
+assert(!intervalRun.timedOut && intervalJson?.findings.length === largePipeFindingCount, 'CLI drains complete output and exits despite a preloaded interval')
+assert(intervalRun.code === 1, 'preloaded interval does not change the check exit code')
+const beforeExitRun = await runPiped(['--help'], { env: preloadEnv(beforeExitPreload) })
+assert(!beforeExitRun.timedOut && beforeExitRun.code === 0, 'beforeExit hooks cannot rewrite the CLI exit code')
+const closedCheckRun = await runPiped(
+  ['check', largePipeDir, '--days', '90', '--scope', 'all', '--json'],
+  { closeStdoutAfterData: true },
+)
+assert(!closedCheckRun.timedOut && closedCheckRun.code === 1, 'early-closed stdout keeps the intended nonzero exit code')
+const closedInventoryRun = await runPiped(
+  ['inventory', largePipeDir, '--json'],
+  { closeStdoutAfterData: true },
+)
+assert(!closedInventoryRun.timedOut && closedInventoryRun.code === 0, 'EPIPE keeps a successful command exit code')
+const endedStderrRun = await runPiped(['--invalid-review-flag'], { env: preloadEnv(endedStderrPreload) })
+assert(!endedStderrRun.timedOut && endedStderrRun.code === 2 && !endedStderrRun.err.includes('Unhandled'), 'ended stderr cannot replace a usage exit with an unhandled error')
+const badStdoutRun = await runPiped(['--help'], { env: preloadEnv(badStdoutPreload) })
+assert(!badStdoutRun.timedOut && badStdoutRun.code === 3 && badStdoutRun.err.includes('model-eol: output failed: EBADF'), 'non-EPIPE output failure exits 3 with a best-effort diagnostic')
+
+const largeStderrFeeds = path.join(tempRoot, 'large-stderr-feeds')
+fs.mkdirSync(largeStderrFeeds)
+const largeStderrErrorCount = 512
+fs.writeFileSync(path.join(largeStderrFeeds, 'invalid.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'test',
+  generated: '2026-08-01T00:00:00Z',
+  models: Array.from({ length: largeStderrErrorCount }, (_, index) => ({
+    id: `invalid-stderr-model-${index}`,
+    shutdown: '2000-01-01',
+  })),
+}))
+const largeStderrRun = await runPiped(['check', largePipeDir, '--feeds', largeStderrFeeds, '--json'])
+assert(largeStderrRun.err.length > 64 * 1024 && largeStderrRun.err.includes(`model invalid-stderr-model-${largeStderrErrorCount - 1}`), 'piped stderr over 64KiB arrives complete')
+assert(largeStderrRun.code === 2, 'large piped feed errors keep usage/feed exit semantics')
 
 const extensionCoverageDir = path.join(tempRoot, 'extension-coverage')
 const extensionCoverageFeeds = path.join(tempRoot, 'extension-coverage-feeds')
@@ -226,8 +345,8 @@ assert(incompleteInventoryText.code === 0 && incompleteInventoryText.out.include
 
 const orangeBadgeDir = path.join(tempRoot, 'orange-badge')
 fs.mkdirSync(orangeBadgeDir)
-fs.writeFileSync(path.join(orangeBadgeDir, 'app.py'), 'MODEL = "claude-opus-4-1-20250805"\n')
-const orangeBadge = JSON.parse(run(['alert', orangeBadgeDir, '--format', 'badge']).out)
+fs.writeFileSync(path.join(orangeBadgeDir, 'app.py'), 'MODEL = "badge-retiring-model"\n')
+const orangeBadge = JSON.parse(run(['alert', orangeBadgeDir, '--feeds', badgeFeeds, '--days', badgeThresholdDays, '--format', 'badge']).out)
 assert(orangeBadge.color === 'orange' && orangeBadge.message === '1 retiring', 'badge is orange for only retiring errors')
 const greenBadgeDir = path.join(tempRoot, 'green-badge')
 fs.mkdirSync(greenBadgeDir)

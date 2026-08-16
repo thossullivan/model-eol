@@ -34,6 +34,7 @@ import {
 } from './lib/reports.mjs'
 import { addedLinesForTargets, filterFindingsToChanged, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
 
+const main = () => {
 const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'apply', 'help'])
 const args = process.argv.slice(2)
 
@@ -62,7 +63,7 @@ try {
   })
 } catch (error) {
   console.error(error.message)
-  process.exit(2)
+  return 2
 }
 
 const { values, positionals } = parsed
@@ -107,43 +108,49 @@ Commands:
 Scopes:
   all        Check every tracked model ID found. This preserves the original behavior.
   direct     Check direct API and generic model references; leave cloud/gateway refs in inventory.
+
+Exit codes:
+  0  Clean, or report generated successfully.
+  1  Findings, alert errors, or refused apply items.
+  2  Usage, feed, scan, or plan errors.
+  3  Output stream failure other than EPIPE.
 `)
-  process.exit(0)
+  return 0
 }
 
 if (command === 'apply') {
   if (!PLAN_FILE || positionals.length) {
     console.error('apply requires --plan plan.json and accepts no target paths')
-    process.exit(2)
+    return 2
   }
   try {
     const result = applyPlan({ planPath: PLAN_FILE, dryRun: DRY_RUN, rootDir: process.cwd() })
-    process.exit(result.failed ? 1 : 0)
+    return result.failed ? 1 : 0
   } catch (e) {
     console.error(`failed to apply plan ${PLAN_FILE}: ${e.message}`)
-    process.exit(2)
+    return 2
   }
 }
 
 if (!Number.isFinite(DAYS) || !Number.isInteger(DAYS) || DAYS < 0) {
   console.error('--days must be a finite non-negative integer')
-  process.exit(2)
+  return 2
 }
 if (!['all', 'direct'].includes(SCOPE)) {
   console.error('--scope must be all or direct')
-  process.exit(2)
+  return 2
 }
 if (CHANGED_BASE !== null && command !== 'check') {
   console.error('--changed is only supported by the check command')
-  process.exit(2)
+  return 2
 }
 if (command === 'alert' && FORMAT !== null && !['github', 'markdown', 'badge', 'json'].includes(FORMAT)) {
   console.error('--format must be github, markdown, badge, or json for alert')
-  process.exit(2)
+  return 2
 }
 if (command === 'inventory' && FORMAT !== null && !['json', 'cyclonedx', 'text'].includes(FORMAT)) {
   console.error('--format must be json, cyclonedx, or text for inventory')
-  process.exit(2)
+  return 2
 }
 
 let feedData
@@ -151,11 +158,11 @@ try {
   feedData = loadFeeds(FEEDS_DIR)
 } catch (e) {
   console.error(`failed to load feeds from ${FEEDS_DIR}: ${e.message}`)
-  process.exit(2)
+  return 2
 }
 if (feedData.entries.size === 0) {
   console.error(`no feed entries loaded from ${FEEDS_DIR}`)
-  process.exit(2)
+  return 2
 }
 
 let scan
@@ -168,7 +175,7 @@ try {
   })
 } catch (e) {
   console.error(`scan failed: ${e.message}`)
-  process.exit(2)
+  return 2
 }
 
 const incompleteNotes = incompleteScanNotes(scan.notes)
@@ -179,23 +186,22 @@ if (incompleteNotes.length && (command === 'check' || command === 'plan')) {
     const location = note.file ? ` (${note.file})` : ''
     console.error(`  ${note.reason}${location}${note.message ? `: ${note.message}` : ''}`)
   }
-  if (!ALLOW_INCOMPLETE) process.exit(2)
+  if (!ALLOW_INCOMPLETE) return 2
 }
 
 const findings = scan.modelRefs.map(ref => findingFromRef(ref, { days: DAYS, via: VIA }))
 const checkFindings = SCOPE === 'direct'
   ? findings.filter(f => f.usage === 'direct-api' || f.usage === 'model-reference')
   : findings
-const changedFindings = CHANGED_BASE === null
-  ? checkFindings
-  : (() => {
-      try {
-        return filterFindingsToChanged(checkFindings, addedLinesForTargets(targets, CHANGED_BASE))
-      } catch (e) {
-        console.error(`--changed failed: ${e.message}`)
-        process.exit(2)
-      }
-    })()
+let changedFindings = checkFindings
+if (CHANGED_BASE !== null) {
+  try {
+    changedFindings = filterFindingsToChanged(checkFindings, addedLinesForTargets(targets, CHANGED_BASE))
+  } catch (e) {
+    console.error(`--changed failed: ${e.message}`)
+    return 2
+  }
+}
 const bad = changedFindings.filter(isBad)
 const inventory = () => buildInventory({ scan, findings, days: DAYS, via: VIA, scope: SCOPE, targets })
 const schedule = () => buildSchedule(inventory())
@@ -210,7 +216,7 @@ if (command === 'plan') {
     via: VIA,
     scope: SCOPE,
   }), null, 2))
-  process.exit(0)
+  return 0
 }
 
 if (command === 'check') {
@@ -219,7 +225,7 @@ if (command === 'check') {
   } else {
     console.log(formatCheck({ findings: changedFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
   }
-  process.exit(bad.length ? 1 : 0)
+  return bad.length ? 1 : 0
 }
 
 if (command === 'inventory') {
@@ -232,7 +238,7 @@ if (command === 'inventory') {
   } else {
     console.log(formatInventory(inv, DAYS))
   }
-  process.exit(0)
+  return 0
 }
 
 if (command === 'schedule') {
@@ -242,7 +248,7 @@ if (command === 'schedule') {
   } else {
     console.log(formatSchedule(sched, DAYS))
   }
-  process.exit(0)
+  return 0
 }
 
 if (command === 'alert') {
@@ -256,8 +262,46 @@ if (command === 'alert') {
   } else {
     console.log(formatAlertGithub(payload, DAYS))
   }
-  process.exit(payload.errors.length ? 1 : 0)
+  return payload.errors.length ? 1 : 0
 }
 
 console.error(`unknown command: ${command}`)
-process.exit(2)
+return 2
+}
+
+const writeAndCapture = (stream, chunk) => new Promise(resolve => {
+  let error = null
+  let settling = false
+  const settle = nextError => {
+    if (nextError && !error) error = nextError
+    if (settling) return
+    settling = true
+    setImmediate(() => {
+      stream.off('error', onError)
+      resolve(error)
+    })
+  }
+  const onError = nextError => settle(nextError)
+  stream.on('error', onError)
+  try {
+    stream.write(chunk, settle)
+  } catch (writeError) {
+    settle(writeError)
+  }
+})
+const drainStream = stream => writeAndCapture(stream, '')
+
+const exitCode = main()
+const [stdoutError, stderrError] = await Promise.all([
+  drainStream(process.stdout),
+  drainStream(process.stderr),
+])
+const outputError = [stdoutError, stderrError].find(error => error && error.code !== 'EPIPE')
+let finalExitCode = exitCode
+if (exitCode === 0 && outputError) {
+  finalExitCode = 3
+  const diagnosticStream = stderrError ? (stdoutError ? null : process.stdout) : process.stderr
+  const detail = String(outputError.code ?? outputError.message ?? 'unknown error').replace(/[\r\n]+/g, ' ')
+  if (diagnosticStream) await writeAndCapture(diagnosticStream, `model-eol: output failed: ${detail}\n`)
+}
+process.exit(finalExitCode)
