@@ -1,6 +1,7 @@
 # model-eol
 
 ![npm](https://img.shields.io/npm/v/model-eol)
+[![marketplace](https://img.shields.io/badge/marketplace-model--eol%20check-blue?logo=github)](https://github.com/marketplace/actions/model-eol-check)
 ![CI](https://github.com/thossullivan/model-eol/actions/workflows/ci.yml/badge.svg)
 ![spec](https://img.shields.io/badge/spec-model--eol%2F0.1-blue)
 ![deps](https://img.shields.io/badge/runtime%20deps-zero-brightgreen)
@@ -8,7 +9,7 @@
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 **A machine-readable deprecation feed format for AI models, plus the reference
-tooling that turns it into a Dependabot for models.** v0.2.3.
+tooling that turns it into a Dependabot for models.** v0.2.4.
 
 ![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
 
