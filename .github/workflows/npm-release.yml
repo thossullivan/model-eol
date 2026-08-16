@@ -50,7 +50,10 @@ jobs:
           last=$(git describe --tags --abbrev=0 --match 'v*.*.*')
           echo "last tag: $last"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ "$(git rev-list "$last"..HEAD --count)" -gt 0 ]; then
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo "dispatch ref $GITHUB_REF is not main - refusing to release it"
+            elif [ "$(git rev-list "$last"..HEAD --count)" -gt 0 ]; then
               echo "changed=true" >> "$GITHUB_OUTPUT"
               echo "manual dispatch - releasing $(git rev-list "$last"..HEAD --count) commit(s) since $last"
             else
@@ -81,7 +84,7 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           git tag -f v0 "$version"
-          git push origin main "$version"
+          git push --atomic origin main "$version"
           git push -f origin v0
 
       - name: Publish to npm
