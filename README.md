@@ -101,6 +101,31 @@ PRs to trigger checks), and provider API keys enter the picture in exactly two
 optional places: your own eval hook command, and the feed-refresh models-endpoint
 coverage.
 
+## Use it as a GitHub Action
+
+The same gate as a composite action - no npm install, feeds bundled, pinned to
+the `v0` line:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0 # --changed needs history to diff against the base ref
+- uses: thossullivan/model-eol@v0
+  with:
+    command: check
+    changed: origin/${{ github.base_ref }}
+    days: 90
+    scope: direct
+```
+
+That is the PR gate: fail only when *this* change adds a model that is retired
+or retiring within the threshold. Add `via: aws-bedrock` (or `azure-ai-foundry`)
+to judge by a distributor's clock. The copy-paste version with both gates - PR
+diff plus a weekly full-repository check - is
+[`examples/workflows/model-eol.yml`](examples/workflows/model-eol.yml); the
+same inputs drive `inventory` and `schedule` if CI should export an ML-BOM or a
+retirement calendar instead.
+
 ## Same weights, different clocks
 
 The same model retires on different dates per channel, and a checker that ignores
