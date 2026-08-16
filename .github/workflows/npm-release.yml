@@ -9,6 +9,10 @@
 #
 # No loop: the version-bump commit touches package.json only, which never
 # matches the feeds/** path filter.
+#
+# workflow_dispatch releases regardless of the feeds guard - the path for code
+# releases (fixes, features) to reach npm with the same provenance. It still
+# refuses a no-op: dispatch with zero commits since the last tag does nothing.
 
 name: npm-release
 
@@ -45,7 +49,15 @@ jobs:
         run: |
           last=$(git describe --tags --abbrev=0 --match 'v*.*.*')
           echo "last tag: $last"
-          if git diff --quiet "$last"..HEAD -- feeds/; then
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$(git rev-list "$last"..HEAD --count)" -gt 0 ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "manual dispatch - releasing $(git rev-list "$last"..HEAD --count) commit(s) since $last"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo "nothing since $last - refusing a no-op release"
+            fi
+          elif git diff --quiet "$last"..HEAD -- feeds/; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "feeds unchanged since $last - no release"
           else
@@ -62,7 +74,11 @@ jobs:
         run: |
           git config user.name "model-eol release"
           git config user.email "actions@users.noreply.github.com"
-          version=$(npm version patch -m "model-eol v%s - automated feed-data release")
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version=$(npm version patch -m "model-eol v%s - dispatched code release")
+          else
+            version=$(npm version patch -m "model-eol v%s - automated feed-data release")
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           git tag -f v0 "$version"
           git push origin main "$version"
@@ -77,6 +93,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.bump.outputs.version }}" \
-            --title "${{ steps.bump.outputs.version }} - feed data" \
-            --notes "Automated feed-data release: the weekly refresh landed material feed changes, republished so \`npx model-eol\` always checks against current retirement dates. The semantic diff is in the merged feed-refresh PR. No code changes."
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            gh release create "${{ steps.bump.outputs.version }}" \
+              --title "${{ steps.bump.outputs.version }}" \
+              --generate-notes
+          else
+            gh release create "${{ steps.bump.outputs.version }}" \
+              --title "${{ steps.bump.outputs.version }} - feed data" \
+              --notes "Automated feed-data release: the weekly refresh landed material feed changes, republished so \`npx model-eol\` always checks against current retirement dates. The semantic diff is in the merged feed-refresh PR. No code changes."
+          fi
