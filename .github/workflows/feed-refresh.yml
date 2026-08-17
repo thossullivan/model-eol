@@ -1,9 +1,11 @@
 # Weekly feed refresh - regenerates feeds/ from the live provider pages and the
-# AWS Bedrock lifecycle page, updates the README freshness line, and opens a PR
-# with the semantic diff for human review. Never pushes to main directly.
+# AWS Bedrock and Google Vertex AI lifecycle pages, updates the README freshness
+# line, and opens a PR with the semantic diff for human review. Never pushes to
+# main directly.
 #
-# Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY enable the models
-# endpoints so current-model entries (and policy-floor horizons) populate.
+# Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY enable
+# the models endpoints so current-model entries (and policy-floor horizons)
+# populate.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
 # fine-grained PAT as MODEL_EOL_BOT_TOKEN if feed PRs should run checks.
 
@@ -34,38 +36,40 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           set +e
           node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
           providers=$?
-          node refresh/refresh.mjs --distributor aws-bedrock --check > bedrock-diff.md 2> bedrock-err.txt
-          bedrock=$?
+          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai --check > distributor-diff.md 2> distributor-err.txt
+          distributors=$?
           set -e
-          cat provider-err.txt bedrock-err.txt >&2 || true
+          cat provider-err.txt distributor-err.txt >&2 || true
           if [ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]; then
             echo "provider refresh failed with exit code $providers - no feed written" >&2
             exit 1
           fi
-          if [ "$bedrock" -ne 0 ] && [ "$bedrock" -ne 3 ]; then
-            echo "Bedrock refresh failed with exit code $bedrock - no feed written" >&2
+          if [ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]; then
+            echo "distributor refresh failed with exit code $distributors - no feed written" >&2
             exit 1
           fi
-          if [ "$providers" -eq 3 ] || [ "$bedrock" -eq 3 ]; then
+          if [ "$providers" -eq 3 ] || [ "$distributors" -eq 3 ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
           echo "providers=$providers" >> "$GITHUB_OUTPUT"
-          echo "bedrock=$bedrock" >> "$GITHUB_OUTPUT"
+          echo "distributors=$distributors" >> "$GITHUB_OUTPUT"
 
       - name: Regenerate feeds and README freshness
         if: steps.check.outputs.changed == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           node refresh/refresh.mjs
-          node refresh/refresh.mjs --distributor aws-bedrock
+          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai
           node scripts/update-readme-freshness.mjs
           npm test
 
@@ -86,7 +90,7 @@ jobs:
             echo
             # Include only the sources that materially changed.
             if [ "${{ steps.check.outputs.providers }}" = "3" ]; then cat provider-diff.md; echo; fi
-            if [ "${{ steps.check.outputs.bedrock }}" = "3" ]; then cat bedrock-diff.md; fi
+            if [ "${{ steps.check.outputs.distributors }}" = "3" ]; then cat distributor-diff.md; fi
           } > pr-body.md
           gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md --label model-eol || \
             gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md

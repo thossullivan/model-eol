@@ -25,12 +25,20 @@ const bodyFromResponse = async response => {
   return response
 }
 
+const MODEL_EOL_LABEL = {
+  name: 'model-eol',
+  color: 'b60205',
+  description: 'AI model lifecycle migration tracked by model-eol',
+}
+
 export class GitHubClient {
-  constructor({ repo, apiUrl = 'https://api.github.com', token, transport = globalThis.fetch }) {
+  constructor({ repo, apiUrl = 'https://api.github.com', token, transport = globalThis.fetch, warn = console.error }) {
     this.repo = repo
     this.apiUrl = apiUrl.replace(/\/$/, '')
     this.token = token
     this.transport = transport
+    this.warn = warn
+    this.modelEolLabelAvailable = true
   }
 
   url(value) {
@@ -56,9 +64,58 @@ export class GitHubClient {
     const data = await bodyFromResponse(response)
     if (status >= 400 || response?.ok === false) {
       const detail = typeof data === 'string' ? data : JSON.stringify(data)
-      throw new Error(`GitHub ${method} ${endpoint} failed (${status}): ${detail}`)
+      const error = new Error(`GitHub ${method} ${endpoint} failed (${status}): ${detail}`)
+      error.status = status
+      error.data = data
+      throw error
     }
     return { data, response }
+  }
+
+  async ensureModelEolLabel() {
+    const endpoint = `/repos/${this.repo}/labels/${encodeURIComponent(MODEL_EOL_LABEL.name)}`
+    try {
+      await this.request('GET', endpoint)
+      this.modelEolLabelAvailable = true
+      return true
+    } catch (error) {
+      if (error.status !== 404) {
+        this.modelEolLabelAvailable = false
+        this.warn(`model-eol: warning: could not check the model-eol label; continuing without labels (${error.message})`)
+        return false
+      }
+    }
+    try {
+      await this.request('POST', `/repos/${this.repo}/labels`, MODEL_EOL_LABEL)
+      this.modelEolLabelAvailable = true
+      return true
+    } catch (error) {
+      if (error.status === 422) {
+        try {
+          await this.request('GET', endpoint)
+          this.modelEolLabelAvailable = true
+          return true
+        } catch {
+          // Fall through to the warning below. Another writer may have raced us,
+          // but a failed confirmation should never block the migration itself.
+        }
+      }
+      this.modelEolLabelAvailable = false
+      this.warn(`model-eol: warning: could not create the model-eol label; continuing without labels (${error.message})`)
+      return false
+    }
+  }
+
+  async addModelEolLabel(number) {
+    if (!this.modelEolLabelAvailable) return false
+    try {
+      await this.request('POST', `/repos/${this.repo}/issues/${number}/labels`, { labels: [MODEL_EOL_LABEL.name] })
+      return true
+    } catch (error) {
+      this.modelEolLabelAvailable = false
+      this.warn(`model-eol: warning: could not label #${number}; the migration was still published (${error.message})`)
+      return false
+    }
   }
 
   async listAll(resource) {
@@ -100,7 +157,7 @@ export class GitHubClient {
   async createPull(payload) {
     const { data } = await this.request('POST', `/repos/${this.repo}/pulls`, payload)
     if (data?.number === undefined) throw new Error('GitHub pull request response did not contain a number')
-    await this.request('POST', `/repos/${this.repo}/issues/${data.number}/labels`, { labels: ['model-eol'] })
+    await this.addModelEolLabel(data.number)
     return data
   }
 
@@ -113,7 +170,20 @@ export class GitHubClient {
   }
 
   async createIssue(payload) {
-    return (await this.request('POST', `/repos/${this.repo}/issues`, payload)).data
+    const body = this.modelEolLabelAvailable
+      ? payload
+      : { ...payload, labels: (payload.labels ?? []).filter(label => label !== MODEL_EOL_LABEL.name) }
+    try {
+      return (await this.request('POST', `/repos/${this.repo}/issues`, body)).data
+    } catch (error) {
+      if (error.status !== 422 || !(body.labels ?? []).includes(MODEL_EOL_LABEL.name)) throw error
+      this.modelEolLabelAvailable = false
+      this.warn(`model-eol: warning: issue labels were rejected; retrying without the model-eol label (${error.message})`)
+      return (await this.request('POST', `/repos/${this.repo}/issues`, {
+        ...body,
+        labels: body.labels.filter(label => label !== MODEL_EOL_LABEL.name),
+      })).data
+    }
   }
 
   async updateIssue(number, payload) {

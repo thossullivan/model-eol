@@ -27,4 +27,75 @@ jobs:
           path: model-inventory.json
       - name: Dogfood - this repo's own fixture should flag
         run: |
-          node check.mjs test/fixture --days 90 --scope direct && exit 1 || echo "correctly failed on fixture"
+          set +e
+          node check.mjs test/fixture --days 90 --scope direct
+          status=$?
+          set -e
+          if [ "$status" -ne 1 ]; then
+            echo "expected model-eol to exit 1 for the retired fixture; got $status" >&2
+            exit 1
+          fi
+
+  action-consumer-uat:
+    name: Action consumer UAT
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Create disposable consumer fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .action-uat/clean .action-uat/configured
+          printf '%s\n' 'MODEL = "gpt-5.6-sol"' > .action-uat/clean/app.py
+          git init -q .action-uat/configured
+          printf '%s\n' \
+            'MODEL = "o3-deep-research"' \
+            'SAFE_MODEL = "gpt-5.6-sol"' \
+            > .action-uat/configured/app.py
+          printf '%s\n' 'MODEL = "claude-opus-4-1-20250805"' > .action-uat/configured/ignored.py
+          printf '%s\n' \
+            '{' \
+            '  "ignore": {' \
+            '    "models": ["o3-deep-research"],' \
+            '    "paths": ["ignored.py"]' \
+            '  }' \
+            '}' \
+            > .action-uat/configured/.model-eol.json
+          printf '%s\n' '{}' > .action-uat/no-ignore.json
+      - name: UAT clean consumer check
+        uses: ./
+        with:
+          command: check
+          paths: .action-uat/clean
+      - name: UAT default inventory and output file
+        uses: ./
+        with:
+          command: inventory
+          paths: .action-uat/configured
+          config: .action-uat/no-ignore.json
+          output-file: action-uat-inventory.json
+      - name: Verify default inventory artifact
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const report = JSON.parse(fs.readFileSync('action-uat-inventory.json', 'utf8'))
+          if (report.schema !== 'model-eol/inventory@0.1') throw new Error(`unexpected inventory schema: ${report.schema}`)
+          const matched = new Set(report.model_references.map(reference => reference.matched))
+          for (const expected of ['o3-deep-research', 'claude-opus-4-1-20250805']) {
+            if (!matched.has(expected)) throw new Error(`inventory did not detect UAT reference: ${expected}`)
+          }
+          NODE
+      - name: UAT auto-discovered config and ignores
+        uses: ./
+        with:
+          command: check
+          paths: .action-uat/configured
+      - name: Upload Action UAT inventory
+        uses: actions/upload-artifact@v7
+        with:
+          name: action-uat-inventory
+          path: action-uat-inventory.json

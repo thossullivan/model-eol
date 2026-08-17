@@ -1,13 +1,14 @@
 {
   "name": "model-eol",
   "version": "0.2.4",
-  "description": "A machine-readable deprecation feed format for AI models, plus a zero-dependency checker and inventory CLI.",
+  "description": "AI model deprecation feeds with a zero-dependency checker, inventory CLI, and migration bot.",
   "type": "module",
   "bin": {
-    "model-eol": "check.mjs"
+    "model-eol": "check.mjs",
+    "model-eol-bot": "bot/bot.mjs"
   },
   "scripts": {
-    "test": "node test/run.mjs && node refresh/test/run.mjs && node bot/test/run.mjs && node scripts/test-feed-changelog.mjs"
+    "test": "node test/run.mjs && node refresh/test/run.mjs && node bot/test/run.mjs && node scripts/test-action-contract.mjs && node bot/test/package.mjs && node scripts/test-feed-changelog.mjs"
   },
   "repository": {
     "type": "git",
@@ -31,7 +32,10 @@
   ],
   "files": [
     "check.mjs",
+    "bot.yml.example",
     "lib/",
+    "bot/bot.mjs",
+    "bot/lib/",
     "feeds/",
     "schema/",
     "SPEC.md",

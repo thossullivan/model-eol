@@ -1,6 +1,8 @@
 import crypto from 'node:crypto'
 import path from 'node:path'
 
+export { matchesAnyGlob, matchesGlob } from '../../lib/glob.mjs'
+
 export const sha256 = value => crypto.createHash('sha256').update(value).digest('hex')
 
 const stableValue = value => {
@@ -45,34 +47,6 @@ export const repoPath = (file, root) => {
   const relative = path.relative(root, absolute)
   return relative.split(path.sep).join('/').replace(/^\.\//, '')
 }
-
-const globRegex = pattern => {
-  let source = ''
-  const value = String(pattern).replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '')
-  for (let i = 0; i < value.length; i++) {
-    const char = value[i]
-    if (char === '*' && value[i + 1] === '*') {
-      if (value[i + 2] === '/') {
-        source += '(?:.*/)?'
-        i += 2
-      } else {
-        source += '.*'
-        i++
-      }
-    } else if (char === '*') {
-      source += '[^/]*'
-    } else if (char === '?') {
-      source += '[^/]'
-    } else {
-      source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    }
-  }
-  return new RegExp(`^${source}$`)
-}
-
-export const matchesGlob = (file, pattern) => globRegex(pattern).test(file)
-
-export const matchesAnyGlob = (file, patterns = []) => patterns.some(pattern => matchesGlob(file, pattern))
 
 export const metadataLine = metadata => `<!-- model-eol ${JSON.stringify(metadata).replaceAll('-->', '\\u002d\\u002d\\u003e')} -->`
 

@@ -9,6 +9,10 @@ concurrency:
   group: model-eol-bot
   cancel-in-progress: false
 
+env:
+  # Major-line pin: receives compatible fixes and refreshed bundled feeds.
+  MODEL_EOL_PACKAGE: model-eol@0
+
 jobs:
   plan:
     name: plan and evaluate
@@ -24,7 +28,10 @@ jobs:
         with:
           node-version: 20
       - name: Build the versioned plan
-        run: node check.mjs plan . --days 90 --scope direct > model-eol-plan.json
+        run: |
+          PLAN_ARGS=(plan .)
+          if [ ! -f .model-eol.json ]; then PLAN_ARGS+=(--days 90 --scope direct); fi
+          npx --yes --package="$MODEL_EOL_PACKAGE" model-eol "${PLAN_ARGS[@]}" > model-eol-plan.json
       - name: Run the configured eval harness
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -33,6 +40,15 @@ jobs:
           MODEL_EOL_PLAN: ${{ github.workspace }}/model-eol-plan.json
           MODEL_EOL_REPORT: ${{ github.workspace }}/model-eol-report.md
         run: |
+          # The workflow variable is an explicit override. Otherwise, use the
+          # eval.command already validated from .model-eol.json by the plan step.
+          if [ -z "${MODEL_EOL_EVAL_COMMAND:-}" ] && [ -f .model-eol.json ]; then
+            MODEL_EOL_EVAL_COMMAND="$(node --input-type=module -e '
+              import fs from "node:fs"
+              const config = JSON.parse(fs.readFileSync(".model-eol.json", "utf8"))
+              if (typeof config.eval?.command === "string") process.stdout.write(config.eval.command)
+            ')"
+          fi
           # Supply a provider-backed harness for this repository. It may read the
           # plan and write Markdown to MODEL_EOL_REPORT, but this job has read-only
           # contents permission and the publish job receives no provider keys.
@@ -65,6 +81,10 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # model-eol-bot authenticates its own temporary HTTPS clones and
+          # pushes with GITHUB_TOKEN; no checkout credential is persisted.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -74,17 +94,18 @@ jobs:
           name: model-eol-plan-and-report
       - name: Publish model-eol PRs and issues
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MODEL_EOL_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           MODEL_EOL_PLAN_FILE: ${{ github.workspace }}/model-eol-plan.json
           MODEL_EOL_EVAL_REPORT_FILE: ${{ github.workspace }}/model-eol-report.md
           MODEL_EOL_EVAL_STATUS_FILE: ${{ github.workspace }}/model-eol-eval-exit-code
-          MODEL_EOL_TOKEN_KIND: github-token
-        run: node bot/bot.mjs --repo "${{ github.repository }}" --target-dir .
+          MODEL_EOL_TOKEN_KIND: ${{ secrets.MODEL_EOL_BOT_TOKEN && 'external-token' || 'github-token' }}
+        run: npx --yes --package="$MODEL_EOL_PACKAGE" model-eol-bot --repo "${{ github.repository }}" --target-dir .
 
 # Security and checks note:
 # A PR made with GITHUB_TOKEN does not trigger pull_request workflows, so checks
 # may be skipped even though this job has opened the PR. For required checks, use
-# a narrowly scoped fine-grained PAT or a GitHub App installation token instead.
+# a narrowly scoped fine-grained PAT or a GitHub App installation token in the
+# optional MODEL_EOL_BOT_TOKEN secret instead.
 # Keep provider API keys only in the read-only plan/eval job and never pass them to
 # the publish job.
 # Set feeds.allow_vendored_fallback: true in .model-eol.json only for degraded report-only runs; the default is false.

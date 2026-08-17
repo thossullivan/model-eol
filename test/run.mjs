@@ -98,6 +98,7 @@ const a = run([path.join(root, 'test/fixture'), '--days', '30', '--json'])
 const aj = JSON.parse(a.out)
 const byId = id => aj.findings.find(f => f.id === id)
 assert(a.code === 1, 'exit 1 when findings exist')
+assert(aj.scope === 'all' && aj.threshold_days === 30 && aj.distributor === null, 'CLI flags retain precedence and no-config defaults retain all scope')
 assert(Array.isArray(aj.scan_notes) && aj.scan_notes.length === 0, 'check JSON emits scan_notes')
 assert(byId('o3-deep-research-2025-06-26')?.status === 'retired', 'o3-deep-research is retired')
 assert(['retiring', 'retired'].includes(byId('claude-opus-4-1-20250805')?.status), 'opus 4.1 flags (retiring or retired)')
@@ -209,6 +210,87 @@ assert(cyclonedxComponent?.evidence?.occurrences.some(item => item.location.ends
 assert(!cyclonedx.components.some(item => item.name === 'gpt-9-ultra-20990101'), 'CycloneDX omits candidate model references')
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
+
+const repositoryConfigDir = path.join(tempRoot, 'repository-config')
+const repositoryConfigSrc = path.join(repositoryConfigDir, 'src')
+const repositoryConfigIgnored = path.join(repositoryConfigSrc, 'ignored')
+fs.mkdirSync(repositoryConfigIgnored, { recursive: true })
+fs.writeFileSync(path.join(repositoryConfigDir, '.model-eol.json'), JSON.stringify({
+  days: 0,
+  scope: 'direct',
+  via: 'azure-ai-foundry',
+  feeds: { allow_vendored_fallback: false },
+  ignore: {
+    models: ['o3-deep-research', 'gpt-9-config-ignore'],
+    paths: ['src/ignored/**'],
+  },
+  issues: { enabled: false },
+  eval: { command: null },
+}, null, 2))
+fs.writeFileSync(path.join(repositoryConfigSrc, 'app.py'), [
+  'from openai import OpenAI',
+  'client = OpenAI()',
+  'CANONICAL = "o3-deep-research-2025-06-26"',
+  'ALIAS = "o3-deep-research"',
+  'CURRENT = "gpt-5.6-sol"',
+  'UNKNOWN = "gpt-9-config-ignore"',
+  '',
+].join('\n'))
+fs.writeFileSync(path.join(repositoryConfigIgnored, 'large.json'), 'x'.repeat(2 * 1024 * 1024 + 1))
+assert(spawnSync('git', ['init', '-q'], { cwd: repositoryConfigDir }).status === 0, 'repository-config fixture initializes a git root')
+
+const automaticConfig = run(['inventory', repositoryConfigDir, '--json'])
+const automaticConfigJson = JSON.parse(automaticConfig.out)
+assert(automaticConfig.code === 0, 'repository-local config loads automatically')
+assert(automaticConfigJson.threshold_days === 0 && automaticConfigJson.scope === 'direct' && automaticConfigJson.distributor === 'azure-ai-foundry', 'repository config supplies days, scope, and via defaults')
+assert(automaticConfigJson.model_references.length === 1 && automaticConfigJson.model_references[0].id === 'gpt-5.6-sol', 'ignored alias suppresses its canonical ID and every feed alias')
+assert(!automaticConfigJson.candidate_model_references.some(item => item.matched === 'gpt-9-config-ignore'), 'ignored unknown model strings are removed from candidates')
+assert(automaticConfigJson.scanned_files === 1 && automaticConfigJson.scan_notes.length === 0, 'config and ignored paths are excluded before scan coverage accounting')
+
+const configuredPlan = run(['plan', repositoryConfigSrc])
+const configuredPlanJson = JSON.parse(configuredPlan.out)
+assert(configuredPlan.code === 0 && configuredPlanJson.scan_notes.length === 0, 'git-root config is discovered for a subdirectory target and ignored large files do not block plan')
+assert(configuredPlanJson.items.length === 0 && configuredPlanJson.issues.length === 0, 'model ignores apply consistently to migration plans')
+
+const explicitConfigFile = path.join(tempRoot, 'explicit-model-eol.json')
+fs.writeFileSync(explicitConfigFile, JSON.stringify({
+  days: 12,
+  scope: 'all',
+  via: 'aws-bedrock',
+  ignore: { models: ['gpt-5.6-sol'], paths: ['src/ignored/**'] },
+}))
+const explicitConfig = run(['inventory', repositoryConfigDir, '--config', explicitConfigFile, '--json'])
+const explicitConfigJson = JSON.parse(explicitConfig.out)
+assert(explicitConfig.code === 0 && explicitConfigJson.threshold_days === 12 && explicitConfigJson.scope === 'all' && explicitConfigJson.distributor === 'aws-bedrock', '--config selects an explicit repository policy instead of the auto-discovered file')
+assert(explicitConfigJson.model_references.length === 2 && explicitConfigJson.model_references.every(item => item.id === 'o3-deep-research-2025-06-26'), 'explicit config model ignores replace auto-discovered ignores and still resolve aliases canonically')
+
+const emptyConfigFile = path.join(tempRoot, 'empty-model-eol.json')
+fs.writeFileSync(emptyConfigFile, '{}')
+const emptyConfig = JSON.parse(run(['inventory', repositoryConfigDir, '--config', emptyConfigFile, '--json']).out)
+assert(emptyConfig.threshold_days === 90 && emptyConfig.scope === 'direct' && emptyConfig.distributor === null, 'a present empty config uses the shared CLI/Action/bot defaults')
+
+const configOverrides = run(['inventory', repositoryConfigDir, '--config', explicitConfigFile, '--days', '7', '--scope', 'direct', '--via', 'azure-ai-foundry', '--json'])
+const configOverridesJson = JSON.parse(configOverrides.out)
+assert(configOverridesJson.threshold_days === 7 && configOverridesJson.scope === 'direct' && configOverridesJson.distributor === 'azure-ai-foundry', 'explicit CLI flags override explicit config values')
+
+const missingConfig = run(['inventory', repositoryConfigDir, '--config', path.join(tempRoot, 'missing-config.json'), '--json'])
+assert(missingConfig.code === 2 && missingConfig.err.includes('file not found'), 'an explicitly selected missing config fails closed')
+const invalidSharedConfig = path.join(tempRoot, 'invalid-shared-config.json')
+fs.writeFileSync(invalidSharedConfig, JSON.stringify({ ignore: { path: ['src/**'] } }))
+const invalidSharedConfigRun = run(['inventory', repositoryConfigDir, '--config', invalidSharedConfig, '--json'])
+assert(invalidSharedConfigRun.code === 2 && invalidSharedConfigRun.err.includes('ignore.path'), 'CLI preserves strict unknown-key validation for shared config')
+
+const partialGlobDir = path.join(tempRoot, 'partial-glob')
+fs.mkdirSync(path.join(partialGlobDir, 'partial', 'nested'), { recursive: true })
+fs.mkdirSync(path.join(partialGlobDir, 'literal'), { recursive: true })
+fs.writeFileSync(path.join(partialGlobDir, 'partial', 'direct.py'), 'MODEL = "o3-deep-research"\n')
+fs.writeFileSync(path.join(partialGlobDir, 'partial', 'nested', 'visible.py'), 'MODEL = "gpt-5.6-sol"\n')
+fs.writeFileSync(path.join(partialGlobDir, 'literal', 'hidden.py'), 'MODEL = "o3-deep-research"\n')
+assert(spawnSync('git', ['init', '-q'], { cwd: partialGlobDir }).status === 0, 'path-ignore fixture initializes a git root')
+const partialGlobConfig = path.join(tempRoot, 'partial-glob-config.json')
+fs.writeFileSync(partialGlobConfig, JSON.stringify({ ignore: { paths: ['partial/*', 'literal'] } }))
+const partialGlob = JSON.parse(run(['inventory', partialGlobDir, '--config', partialGlobConfig, '--json']).out)
+assert(partialGlob.model_references.length === 1 && partialGlob.model_references[0].id === 'gpt-5.6-sol', 'literal directories work with git listings while single-star paths do not over-prune deeper descendants')
 
 const badgeDir = path.join(tempRoot, 'badge')
 const badgeFeeds = path.join(badgeDir, 'feeds')
