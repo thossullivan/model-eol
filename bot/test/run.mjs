@@ -18,7 +18,7 @@ import { branchFor, metadataLine, parseMetadata, slugFor } from '../lib/common.m
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
-import { gitAuthentication } from '../lib/git.mjs'
+import { cloneRepository, gitAuthentication, originFor } from '../lib/git.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-test-'))
@@ -238,6 +238,26 @@ assert(gitAuthentication('git@github.com:example/private.git', 'private-token') 
 assert(gitAuthentication('http://github.example.test/example/private.git', 'private-token') === null, 'bot never sends a GitHub token over a plaintext HTTP remote')
 assert(gitAuthentication('https://attacker.example/example/private.git', 'private-token') === null, 'bot never sends a GitHub token to a remote outside the configured GitHub API host')
 assert(gitAuthentication('https://github.example.test/example/private.git', 'private-token', 'https://github.example.test/api/v3')?.key === 'http.https://github.example.test/.extraheader', 'GitHub Enterprise HTTPS remotes use their configured API host')
+
+const cloneInjectionRepo = makeRepo({ name: 'clone-option-injection', files: { 'README.md': 'fixture\n' } })
+const cloneInjectionMarker = path.join(tempRoot, 'clone-option-injection-ran')
+const cloneInjectionHelper = path.join(tempRoot, 'clone-option-injection-helper')
+write(cloneInjectionHelper, `#!/bin/sh\ntouch "${cloneInjectionMarker}"\nexec git-upload-pack "$@"\n`)
+fs.chmodSync(cloneInjectionHelper, 0o755)
+const cloneInjectionSource = `--upload-pack=${cloneInjectionHelper}`
+git(cloneInjectionRepo.work, ['config', 'remote.origin.url', cloneInjectionSource])
+assert(originFor(cloneInjectionRepo.work) === cloneInjectionSource, 'clone hardening covers a poisoned origin read back from repository config')
+const cloneInjectionCwd = process.cwd()
+let cloneInjectionRejected = false
+try {
+  process.chdir(tempRoot)
+  cloneRepository(originFor(cloneInjectionRepo.work), cloneInjectionRepo.bare)
+} catch {
+  cloneInjectionRejected = true
+} finally {
+  process.chdir(cloneInjectionCwd)
+}
+assert(cloneInjectionRejected && !fs.existsSync(cloneInjectionMarker), 'clone source is separated from Git options so --upload-pack cannot execute a command')
 
 const labelFallbackRepo = makeRepo({ name: 'label-fallback', files: baseFiles, config: { issues: { enabled: false } } })
 const labelFallbackGithub = new FakeGitHub()

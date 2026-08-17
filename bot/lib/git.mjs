@@ -56,7 +56,7 @@ export const originFor = targetDir =>
 
 export const cloneRepository = (source, destination, auth = null) => {
   fs.mkdirSync(path.dirname(destination), { recursive: true })
-  run(null, ['clone', '--quiet', source, destination], false, auth)
+  run(null, ['clone', '--quiet', '--', source, destination], false, auth)
   return destination
 }
 
