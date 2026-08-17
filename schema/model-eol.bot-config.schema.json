@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://example.invalid/model-eol/0.1/bot-config.schema.json",
-  "title": "model-eol bot configuration",
-  "description": "Optional .model-eol.json configuration for the zero-dependency GitHub bot adapter.",
+  "title": "model-eol repository configuration",
+  "description": "Optional strict .model-eol.json configuration shared by the zero-dependency CLI, Action, and GitHub bot adapter.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -15,10 +15,11 @@
     "scope": {
       "enum": ["direct", "all"],
       "default": "direct",
-      "description": "Use direct API references only, or include generic model references."
+      "description": "Use the direct-first scope (direct API plus generic model references, leaving cloud/gateway references as hints), or include all tracked references."
     },
     "via": {
       "type": ["string", "null"],
+      "minLength": 1,
       "default": null,
       "description": "Optional distributor lifecycle clock, such as azure-ai-foundry."
     },
@@ -42,13 +43,13 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": [],
-          "description": "Canonical IDs or aliases to ignore. A canonical ID ignores all of its aliases."
+          "description": "Canonical IDs or aliases to ignore across CLI, Action, and bot. Either form ignores every alias of the canonical feed entry."
         },
         "paths": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
           "default": [],
-          "description": "Repo-relative simple globs supporting *, **, and ?."
+          "description": "Repo-relative simple globs supporting *, **, and ?. Matching paths are excluded before file coverage checks where possible."
         }
       },
       "default": { "models": [], "paths": [] }
@@ -71,17 +72,20 @@
       "properties": {
         "command": {
           "type": ["string", "null"],
+          "minLength": 1,
           "default": null,
-          "description": "Opt-in command run in the temporary clone for changed patches."
+          "description": "Opt-in evaluation command. Direct bot --eval runs it per changed patch in a temporary clone; the split example workflow runs it once as a read-only plan preflight."
         },
         "timeout_ms": {
           "type": "integer",
-          "minimum": 1,
+          "minimum": 1000,
+          "maximum": 3600000,
           "default": 600000
         },
         "max_report_bytes": {
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1,
+          "maximum": 8388608,
           "default": 65536
         },
         "pass_env": {

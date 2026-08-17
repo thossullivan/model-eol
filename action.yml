@@ -5,7 +5,7 @@ branding:
   color: 'red'
 inputs:
   command:
-    description: 'Command to run: check, inventory, or schedule'
+    description: 'Command to run: check, inventory, schedule, alert, or plan'
     required: false
     default: 'check'
   paths:
@@ -13,27 +13,47 @@ inputs:
     required: false
     default: '.'
   days:
-    description: 'Fail when a model retires within this many days'
+    description: 'Fail when a model retires within this many days (defaults to CLI or repository config)'
     required: false
-    default: '90'
+    default: ''
   via:
     description: 'Judge lifecycles by a distributor clock (e.g. azure-ai-foundry, aws-bedrock) instead of the publisher''s'
     required: false
     default: ''
   scope:
-    description: 'Check scope: all tracked model IDs, or direct to leave cloud/gateway refs as inventory hints'
+    description: 'Check scope: all tracked model IDs, or direct to leave cloud/gateway refs as inventory hints (defaults to CLI or repository config)'
     required: false
-    default: 'all'
+    default: ''
   changed:
     description: 'Base ref for the PR gate: check only lines added relative to this ref (requires fetch-depth: 0)'
     required: false
     default: ''
   format:
-    description: 'Alert output format when command is alert: github, markdown, or badge'
+    description: 'Output format: json, cyclonedx, or text for inventory; github, markdown, badge, or json for alert. Defaults to json for inventory and github for alert.'
     required: false
-    default: 'github'
+    default: ''
   feeds:
     description: 'Directory of model-eol feeds (defaults to the feeds bundled with the action)'
+    required: false
+    default: ''
+  config:
+    description: 'Path to a model-eol JSON config (defaults to repository config discovery)'
+    required: false
+    default: ''
+  include-docs:
+    description: 'Scan documentation files in addition to the default source and config files'
+    required: false
+    default: 'false'
+  allow-incomplete:
+    description: 'Allow check and plan to continue when scan coverage is incomplete'
+    required: false
+    default: 'false'
+  json:
+    description: 'Emit JSON for check, inventory, schedule, or alert'
+    required: false
+    default: 'false'
+  output-file:
+    description: 'Optional path that receives an exact copy of stdout while stdout remains visible in the Actions log'
     required: false
     default: ''
 runs:
@@ -42,6 +62,7 @@ runs:
     - name: model-eol check
       shell: bash
       env:
+        MODEL_EOL_ACTION_PATH: ${{ github.action_path }}
         MODEL_EOL_COMMAND: ${{ inputs.command }}
         MODEL_EOL_PATHS: ${{ inputs.paths }}
         MODEL_EOL_DAYS: ${{ inputs.days }}
@@ -50,7 +71,14 @@ runs:
         MODEL_EOL_SCOPE: ${{ inputs.scope }}
         MODEL_EOL_FORMAT: ${{ inputs.format }}
         MODEL_EOL_FEEDS: ${{ inputs.feeds }}
+        MODEL_EOL_CONFIG: ${{ inputs.config }}
+        MODEL_EOL_INCLUDE_DOCS: ${{ inputs['include-docs'] }}
+        MODEL_EOL_ALLOW_INCOMPLETE: ${{ inputs['allow-incomplete'] }}
+        MODEL_EOL_JSON: ${{ inputs.json }}
+        MODEL_EOL_OUTPUT_FILE: ${{ inputs['output-file'] }}
       run: |
+        set -euo pipefail
+
         split_model_eol_paths() {
           PATH_ARGS=()
           if [[ "$MODEL_EOL_PATHS" == *$'\n'* ]]; then
@@ -62,10 +90,97 @@ runs:
           fi
         }
         split_model_eol_paths
-        ARGS=("$MODEL_EOL_COMMAND" "${PATH_ARGS[@]}" --days "$MODEL_EOL_DAYS")
+
+        case "$MODEL_EOL_COMMAND" in
+          check|inventory|schedule|alert|plan) ;;
+          *)
+            echo "model-eol action: command must be check, inventory, schedule, alert, or plan" >&2
+            exit 2
+            ;;
+        esac
+        if [ -n "$MODEL_EOL_CHANGED" ] && [ "$MODEL_EOL_COMMAND" != 'check' ]; then
+          echo "model-eol action: changed is only supported by the check command" >&2
+          exit 2
+        fi
+        if [ -n "$MODEL_EOL_FORMAT" ] && [ "$MODEL_EOL_COMMAND" != 'inventory' ] && [ "$MODEL_EOL_COMMAND" != 'alert' ]; then
+          echo "model-eol action: format is only supported by the inventory and alert commands" >&2
+          exit 2
+        fi
+
+        ARGS=("$MODEL_EOL_COMMAND" "${PATH_ARGS[@]}")
+        if [ -n "$MODEL_EOL_DAYS" ]; then ARGS+=(--days "$MODEL_EOL_DAYS"); fi
         if [ -n "$MODEL_EOL_VIA" ]; then ARGS+=(--via "$MODEL_EOL_VIA"); fi
         if [ -n "$MODEL_EOL_CHANGED" ]; then ARGS+=(--changed "$MODEL_EOL_CHANGED"); fi
         if [ -n "$MODEL_EOL_SCOPE" ]; then ARGS+=(--scope "$MODEL_EOL_SCOPE"); fi
         if [ -n "$MODEL_EOL_FORMAT" ]; then ARGS+=(--format "$MODEL_EOL_FORMAT"); fi
         if [ -n "$MODEL_EOL_FEEDS" ]; then ARGS+=(--feeds "$MODEL_EOL_FEEDS"); fi
-        node "${{ github.action_path }}/check.mjs" "${ARGS[@]}"
+        if [ -n "$MODEL_EOL_CONFIG" ]; then ARGS+=(--config "$MODEL_EOL_CONFIG"); fi
+
+        append_boolean_flag() {
+          local value="$1"
+          local flag="$2"
+          local input_name="$3"
+          case "$value" in
+            true) ARGS+=("$flag") ;;
+            false|'') ;;
+            *)
+              echo "model-eol action: $input_name must be true or false" >&2
+              exit 2
+              ;;
+          esac
+        }
+        append_boolean_flag "$MODEL_EOL_INCLUDE_DOCS" --include-docs include-docs
+        case "$MODEL_EOL_ALLOW_INCOMPLETE" in
+          true)
+            if [ "$MODEL_EOL_COMMAND" != 'check' ] && [ "$MODEL_EOL_COMMAND" != 'plan' ]; then
+              echo "model-eol action: allow-incomplete is only supported by the check and plan commands" >&2
+              exit 2
+            fi
+            ARGS+=(--allow-incomplete)
+            ;;
+          false|'') ;;
+          *)
+            echo "model-eol action: allow-incomplete must be true or false" >&2
+            exit 2
+            ;;
+        esac
+        case "$MODEL_EOL_JSON" in
+          true)
+            if [ "$MODEL_EOL_COMMAND" = 'plan' ]; then
+              echo "model-eol action: json is only supported by the check, inventory, schedule, and alert commands" >&2
+              exit 2
+            fi
+            ARGS+=(--json)
+            ;;
+          false|'') ;;
+          *)
+            echo "model-eol action: json must be true or false" >&2
+            exit 2
+            ;;
+        esac
+
+        if [ -z "$MODEL_EOL_OUTPUT_FILE" ]; then
+          exec node "$MODEL_EOL_ACTION_PATH/check.mjs" "${ARGS[@]}"
+        fi
+        if [ -d "$MODEL_EOL_OUTPUT_FILE" ]; then
+          echo "model-eol action: output-file must name a file, not a directory" >&2
+          exit 2
+        fi
+
+        OUTPUT_TEMP="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/model-eol-output.XXXXXX")"
+        trap 'rm -f "$OUTPUT_TEMP"' EXIT
+        set +e
+        node "$MODEL_EOL_ACTION_PATH/check.mjs" "${ARGS[@]}" | tee "$OUTPUT_TEMP"
+        PIPE_STATUSES=("${PIPESTATUS[@]}")
+        CLI_STATUS="${PIPE_STATUSES[0]}"
+        TEE_STATUS="${PIPE_STATUSES[1]}"
+        COPY_STATUS=0
+        if [ "$TEE_STATUS" -eq 0 ]; then
+          cp -- "$OUTPUT_TEMP" "$MODEL_EOL_OUTPUT_FILE"
+          COPY_STATUS=$?
+        fi
+
+        FINAL_STATUS="$CLI_STATUS"
+        if [ "$FINAL_STATUS" -eq 0 ] && [ "$TEE_STATUS" -ne 0 ]; then FINAL_STATUS="$TEE_STATUS"; fi
+        if [ "$FINAL_STATUS" -eq 0 ] && [ "$COPY_STATUS" -ne 0 ]; then FINAL_STATUS="$COPY_STATUS"; fi
+        exit "$FINAL_STATUS"

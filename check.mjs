@@ -2,7 +2,7 @@
 // model-eol reference CLI - zero dependencies.
 //
 // Default mode preserves the original CI gate:
-//   node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs] [--allow-incomplete]
+//   node check.mjs [paths...] [--config FILE] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs] [--allow-incomplete]
 //
 // New inventory modes:
 //   node check.mjs inventory [paths...] [--json|--format json|cyclonedx|text]
@@ -14,10 +14,12 @@
 // exit codes: check/alert 0 = clear, 1 = finding, 2 = usage error;
 // apply 0 = all items applied, 1 = item refused, 2 = usage or plan error.
 
+import fs from 'node:fs'
 import path from 'node:path'
 
 import { applyPlan } from './lib/apply.mjs'
 import { parseCliArgs } from './lib/cli.mjs'
+import { CLI_DEFAULT_CONFIG, DEFAULT_CONFIG, loadConfig, normalizeConfig } from './lib/config.mjs'
 import { findingFromRef, isBad, loadFeeds } from './lib/feeds.mjs'
 import { buildPlan } from './lib/plan.mjs'
 import {
@@ -32,7 +34,44 @@ import {
   formatInventoryCycloneDX,
   formatSchedule,
 } from './lib/reports.mjs'
-import { addedLinesForTargets, filterFindingsToChanged, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
+import { addedLinesForTargets, filterFindingsToChanged, gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
+
+const rootForTarget = target => {
+  const absolute = path.resolve(target)
+  let stat
+  try {
+    stat = fs.lstatSync(absolute)
+  } catch {
+    return null
+  }
+  let resolved = absolute
+  try {
+    resolved = fs.realpathSync(absolute)
+  } catch {
+  }
+  try {
+    const gitRoot = gitRootFor(resolved)
+    if (gitRoot) return gitRoot
+  } catch {
+  }
+  return stat.isDirectory() ? resolved : path.dirname(resolved)
+}
+
+const configForTargets = ({ targets, explicit }) => {
+  const roots = [...new Set(targets.map(rootForTarget).filter(Boolean))]
+  if (explicit !== null) {
+    if (!explicit) throw new Error('--config must be a non-empty path')
+    return { file: path.resolve(explicit), roots }
+  }
+
+  const files = [...new Set(roots
+    .map(root => path.join(root, '.model-eol.json'))
+    .filter(file => fs.existsSync(file)))]
+  if (files.length > 1) {
+    throw new Error(`multiple .model-eol.json files found (${files.join(', ')}); use --config FILE to choose one`)
+  }
+  return { file: files[0] ?? null, roots }
+}
 
 const main = () => {
 const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'apply', 'help'])
@@ -46,6 +85,7 @@ try {
     args,
     options: {
       days: { type: 'string' },
+      config: { type: 'string' },
       feeds: { type: 'string' },
       via: { type: 'string' },
       scope: { type: 'string' },
@@ -69,10 +109,6 @@ try {
 const { values, positionals } = parsed
 if (values.help) command = 'help'
 
-const DAYS = Number(values.days ?? '90')
-const FEEDS_DIR = values.feeds ?? path.join(import.meta.dirname, 'feeds')
-const VIA = values.via ?? null // e.g. azure-ai-foundry, aws-bedrock
-const SCOPE = values.scope ?? 'all'
 const FORMAT = values.format ?? null
 const PLAN_FILE = values.plan ?? null
 const AS_JSON = values.json ?? false
@@ -86,12 +122,12 @@ if (command === 'help') {
   console.log(`model-eol
 
 Usage:
-  node check.mjs [paths...] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs] [--allow-incomplete]
-  node check.mjs check [paths...] [--days N] [--scope all|direct] [--json] [--changed BASE_REF] [--allow-incomplete]
-  node check.mjs inventory [paths...] [--json] [--format json|cyclonedx|text]
-  node check.mjs schedule [paths...] [--days N] [--json]
-  node check.mjs alert [paths...] [--days N] [--scope all|direct] [--format github|markdown|badge] [--json]
-  node check.mjs plan [paths...] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR] [--allow-incomplete]
+  node check.mjs [paths...] [--config FILE] [--days N] [--feeds DIR] [--via DISTRIBUTOR] [--scope all|direct] [--json] [--include-docs] [--allow-incomplete]
+  node check.mjs check [paths...] [--config FILE] [--days N] [--scope all|direct] [--json] [--changed BASE_REF] [--allow-incomplete]
+  node check.mjs inventory [paths...] [--config FILE] [--json] [--format json|cyclonedx|text]
+  node check.mjs schedule [paths...] [--config FILE] [--days N] [--json]
+  node check.mjs alert [paths...] [--config FILE] [--days N] [--scope all|direct] [--format github|markdown|badge] [--json]
+  node check.mjs plan [paths...] [--config FILE] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR] [--allow-incomplete]
   node check.mjs apply --plan plan.json [--dry-run]
 
 Commands:
@@ -108,6 +144,10 @@ Commands:
 Scopes:
   all        Check every tracked model ID found. This preserves the original behavior.
   direct     Check direct API and generic model references; leave cloud/gateway refs in inventory.
+
+Configuration:
+  .model-eol.json is loaded automatically from the target repository root.
+  --config FILE selects an explicit config. Explicit CLI flags override config values.
 
 Exit codes:
   0  Clean, or report generated successfully.
@@ -131,6 +171,23 @@ if (command === 'apply') {
     return 2
   }
 }
+
+let configLocation
+let repositoryConfig
+try {
+  configLocation = configForTargets({ targets, explicit: values.config ?? null })
+  repositoryConfig = configLocation.file
+    ? loadConfig(configLocation.file, { defaults: DEFAULT_CONFIG, allowMissing: false })
+    : normalizeConfig({}, { defaults: CLI_DEFAULT_CONFIG })
+} catch (e) {
+  console.error(`failed to load repository config: ${e.message}`)
+  return 2
+}
+
+const DAYS = Number(values.days ?? repositoryConfig.days)
+const FEEDS_DIR = values.feeds ?? path.join(import.meta.dirname, 'feeds')
+const VIA = values.via ?? repositoryConfig.via // e.g. azure-ai-foundry, aws-bedrock
+const SCOPE = values.scope ?? repositoryConfig.scope
 
 if (!Number.isFinite(DAYS) || !Number.isInteger(DAYS) || DAYS < 0) {
   console.error('--days must be a finite non-negative integer')
@@ -172,6 +229,10 @@ try {
     entries: feedData.entries,
     keys: feedData.keys,
     includeDocs: INCLUDE_DOCS,
+    ignoreModels: repositoryConfig.ignore.models,
+    ignorePaths: repositoryConfig.ignore.paths,
+    ignoreRoots: configLocation.roots,
+    ignoredFiles: configLocation.file ? [configLocation.file] : [],
   })
 } catch (e) {
   console.error(`scan failed: ${e.message}`)

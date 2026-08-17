@@ -20,7 +20,7 @@ const listed = counts.length > 1
   : counts[0]
 const newest = feeds.map(f => (f.generated ?? '').slice(0, 10)).sort().at(-1)
 
-const status = `${listed}, generated from the providers' live deprecation pages plus the AWS Bedrock lifecycle page, last verified ${newest}`
+const status = `${listed}, generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated ${newest}`
 
 const readme = fs.readFileSync(readmePath, 'utf8')
 const pattern = /<!-- feeds-status -->[\s\S]*?<!-- \/feeds-status -->/

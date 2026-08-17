@@ -139,6 +139,27 @@ function sameRecord(left, right) {
     left.eol === right.eol
 }
 
+const isBedrockModelId = value => /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9._:+-]*$/i.test(value)
+
+// AWS occasionally omits a provider cell without a compensating rowspan. In
+// that row every later cell shifts left, even though the table header does not.
+// Anchor on the model ID and apply the same offset to the lifecycle columns.
+function bedrockModelCell(row, expectedIndex) {
+  const expected = row.cells[expectedIndex]
+  if (expected && isBedrockModelId(expected.text.trim())) {
+    return { cell: expected, index: expectedIndex }
+  }
+  const candidates = row.cells
+    .map((cell, index) => ({ cell, index }))
+    .filter(candidate => isBedrockModelId(candidate.cell.text.trim()))
+  if (candidates.length === 1) return candidates[0]
+  if (candidates.length > 1) {
+    throw new Error(`aws-bedrock lifecycle table contains an ambiguous model row: ${candidates.map(candidate => candidate.cell.text.trim()).join(', ')}`)
+  }
+  const value = expected?.text.trim()
+  throw new Error(`aws-bedrock lifecycle table contains an invalid model id: ${value || '(empty)'}`)
+}
+
 /** Parse AWS Bedrock's model lifecycle table into distributor records. */
 export function parseBedrockLifecycleHtml(html) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('aws-bedrock lifecycle page is empty')
@@ -157,20 +178,18 @@ export function parseBedrockLifecycleHtml(html) {
     for (const row of rows.slice(headers.row + 1)) {
       const hasContent = row.cells.some(cell => cell.text)
       if (!hasContent) continue
-      const modelCell = row.cells[headers.model]
-      if (!modelCell || !modelCell.text) {
-        throw new Error('aws-bedrock lifecycle table contains a row without a model id')
-      }
+      const model = bedrockModelCell(row, headers.model)
+      const modelCell = model.cell
       const bedrockId = modelCell.text.trim()
-      if (!bedrockId || /\s/.test(bedrockId) || !bedrockId.includes('.')) {
-        throw new Error(`aws-bedrock lifecycle table contains an invalid model id: ${bedrockId || '(empty)'}`)
-      }
-      if (!row.cells[headers.legacy] || !row.cells[headers.eol]) {
+      const offset = model.index - headers.model
+      const legacyCell = row.cells[headers.legacy + offset]
+      const eolCell = row.cells[headers.eol + offset]
+      if (!legacyCell || !eolCell) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} is missing lifecycle columns`)
       }
 
-      const legacy = lifecycleDate(row.cells[headers.legacy], 'legacy', bedrockId)
-      const eol = lifecycleDate(row.cells[headers.eol], 'EOL', bedrockId)
+      const legacy = lifecycleDate(legacyCell, 'legacy', bedrockId)
+      const eol = lifecycleDate(eolCell, 'EOL', bedrockId)
       if (legacy && eol && eol < legacy) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has EOL before legacy date`)
       }

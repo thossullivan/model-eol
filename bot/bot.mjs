@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 
 import {
   branchFor,
@@ -31,6 +32,7 @@ import {
   commitAll,
   configureIdentity,
   defaultBranch,
+  gitAuthentication,
   originFor,
   prepareBranch,
   pushBranch,
@@ -89,7 +91,7 @@ Usage:
   node bot/bot.mjs [--repo owner/name] [--target-dir PATH] [--config PATH] [--dry-run] [--eval] [--feeds-url URL[,URL...]]
 
 Environment:
-  GITHUB_TOKEN            Required unless --dry-run.
+  GITHUB_TOKEN            Required unless --dry-run; authenticates the API and HTTPS Git remotes.
   GITHUB_API_URL          GitHub API root, default https://api.github.com.
   MODEL_EOL_TOKEN_KIND    Set to github-token to add the checks warning to PRs.
 `
@@ -99,9 +101,10 @@ const validateRepo = repo => {
   return repo
 }
 
-const spawnPlan = ({ workDir, config, feedsDir, checkerPath = CHECKER, warn = console.error }) => {
+const spawnPlan = ({ workDir, config, configPath = null, feedsDir, checkerPath = CHECKER, warn = console.error }) => {
   const args = [checkerPath, 'plan', '.', '--days', String(config.days), '--scope', config.scope]
   if (config.via) args.push('--via', config.via)
+  if (configPath) args.push('--config', configPath)
   if (feedsDir) args.push('--feeds', feedsDir)
   const result = spawnSync(process.execPath, args, {
     cwd: workDir,
@@ -146,6 +149,17 @@ const readPlanFile = file => {
     throw new Error(`could not read plan artifact ${file}: ${error.message}`)
   }
   return validatePlan(plan)
+}
+
+const verifiedPlanArtifact = (file, generatedPlan) => {
+  if (!file) return generatedPlan
+  const artifact = readPlanFile(asAbsolute(file))
+  const { generated: artifactGenerated, ...artifactStable } = artifact
+  const { generated: regeneratedGenerated, ...regeneratedStable } = generatedPlan
+  if (!isDeepStrictEqual(artifactStable, regeneratedStable)) {
+    throw new Error('refusing plan artifact: it does not match the independently regenerated plan')
+  }
+  return artifact
 }
 
 const readEvalArtifact = (file, maxBytes, statusFile = null) => {
@@ -549,7 +563,7 @@ const evalWorkspaceDrift = (root, planFiles, expectedHashes, expectedHead) => {
   return null
 }
 
-const makePatch = ({ source, base, branch, expectedHead, group, plan, config, checkerPath, evalEnabled, root, warn }) => {
+const makePatch = ({ source, base, branch, expectedHead, group, plan, config, checkerPath, evalEnabled, root, warn, gitAuth }) => {
   const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-work-'))
   const planRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-plan-'))
   const clone = path.join(workRoot, 'repo')
@@ -559,8 +573,8 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
   writeJson(fullPlanPath, plan)
   writeJson(selectedPlanPath, { ...plan, items: group.items, issues: [] })
   try {
-    cloneRepository(source, clone)
-    prepareBranch(clone, branch, base)
+    cloneRepository(source, clone, gitAuth)
+    prepareBranch(clone, branch, base, gitAuth)
     const applied = spawnSync(process.execPath, [checkerPath, 'apply', '--plan', selectedPlanPath], {
       cwd: clone,
       encoding: 'utf8',
@@ -613,7 +627,7 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
     const files = planFiles
     const message = `model-eol: migrate ${group.id} to ${group.items[0].replacement} (${group.feedDigest.slice(0, 8)})`
     const headSha = commitAll(clone, files, message)
-    pushBranch(clone, branch, expectedHead)
+    pushBranch(clone, branch, expectedHead, gitAuth)
     return { headSha, evalResult }
   } finally {
     fs.rmSync(workRoot, { recursive: true, force: true })
@@ -623,7 +637,7 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
 
 const decision = (group, action, extra = {}) => ({ group, action, ...extra })
 
-const processModel = async ({ api, pulls, group, source, base, plan, config, checkerPath, evalEnabled, externalEval, root, now, tokenKind, warn }) => {
+const processModel = async ({ api, pulls, group, source, base, plan, config, checkerPath, evalEnabled, externalEval, root, now, tokenKind, warn, gitAuth }) => {
   if (externalEval && externalEval.status !== 'pass') {
     return decision(group, 'eval-failed', { evalResult: externalEval })
   }
@@ -653,6 +667,7 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
         evalEnabled,
         root,
         warn,
+        gitAuth,
       })
     } catch (error) {
       if (error.code === 'MODEL_EOL_EVAL_FAILED') {
@@ -693,6 +708,7 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
       evalEnabled,
       root,
       warn,
+      gitAuth,
     })
   } catch (error) {
     if (error.code === 'MODEL_EOL_EVAL_FAILED') {
@@ -767,11 +783,11 @@ const reportOnlyDecision = (group, now, tokenKind) => {
   return { ...result, action: 'report-only' }
 }
 
-const prepareScan = ({ targetDir, source, dryRun }) => {
+const prepareScan = ({ targetDir, source, dryRun, gitAuth }) => {
   if (!dryRun || !String(targetDir).startsWith('file://')) return { path: targetDir, cleanup: () => {} }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-scan-'))
   const clone = path.join(root, 'repo')
-  cloneRepository(source, clone)
+  cloneRepository(source, clone, gitAuth)
   return { path: clone, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) }
 }
 
@@ -825,16 +841,18 @@ export const runBot = async ({
   const targetIsUrl = String(targetDir).startsWith('file://')
   const targetPath = targetIsUrl ? targetDir : path.resolve(targetDir)
   const source = targetIsUrl ? targetDir : originFor(targetPath)
+  const gitAuth = gitAuthentication(source, token, apiUrl)
   let scan = null
   let baseClone = null
   let ownedBaseRoot = null
   let feedSet = null
   try {
     if (dryRun) {
-      scan = prepareScan({ targetDir: targetPath, source, dryRun })
+      scan = prepareScan({ targetDir: targetPath, source, dryRun, gitAuth })
       const configFile = configFileFor({ targetDir, configPath, scanPath: scan.path })
       if (configPath && !fs.existsSync(configFile)) throw new Error(`config file not found: ${configFile}`)
       const config = loadConfig(configFile)
+      const planConfigPath = fs.existsSync(configFile) ? configFile : null
       feedSet = await downloadFeeds({
         urls: feedsUrls,
         fetchImpl,
@@ -842,8 +860,8 @@ export const runBot = async ({
         allowVendoredFallback: config.feeds.allow_vendored_fallback,
         warn,
       })
-      const generatedPlan = runPlan({ workDir: scan.path, config, feedsDir: feedSet.dir, checkerPath, warn })
-      const plan = planFile ? readPlanFile(asAbsolute(planFile)) : generatedPlan
+      const generatedPlan = runPlan({ workDir: scan.path, config, configPath: planConfigPath, feedsDir: feedSet.dir, checkerPath, warn })
+      const plan = verifiedPlanArtifact(planFile, generatedPlan)
       const records = feedContext(feedSet.dir)
       const models = buildModelGroups(plan, config, scan.path, records)
       const issues = config.issues.enabled ? buildIssueGroups(plan, config, scan.path, records) : []
@@ -854,11 +872,12 @@ export const runBot = async ({
 
     ownedBaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-base-'))
     baseClone = path.join(ownedBaseRoot, 'repo')
-    cloneRepository(source, baseClone)
-    const base = defaultBranch(baseClone)
+    cloneRepository(source, baseClone, gitAuth)
+    const base = defaultBranch(baseClone, gitAuth)
     const configFile = configFileFor({ targetDir, configPath, scanPath: baseClone })
     if (configPath && !fs.existsSync(configFile)) throw new Error(`config file not found: ${configFile}`)
     const config = loadConfig(configFile)
+    const planConfigPath = fs.existsSync(configFile) ? configFile : null
     feedSet = await downloadFeeds({
       urls: feedsUrls,
       fetchImpl,
@@ -866,8 +885,8 @@ export const runBot = async ({
       allowVendoredFallback: config.feeds.allow_vendored_fallback,
       warn,
     })
-    const generatedPlan = runPlan({ workDir: baseClone, config, feedsDir: feedSet.dir, checkerPath, warn })
-    const plan = planFile ? readPlanFile(asAbsolute(planFile)) : generatedPlan
+    const generatedPlan = runPlan({ workDir: baseClone, config, configPath: planConfigPath, feedsDir: feedSet.dir, checkerPath, warn })
+    const plan = verifiedPlanArtifact(planFile, generatedPlan)
     const records = feedContext(feedSet.dir)
     const models = buildModelGroups(plan, config, baseClone, records)
     const issues = config.issues.enabled ? buildIssueGroups(plan, config, baseClone, records) : []
@@ -881,7 +900,8 @@ export const runBot = async ({
       config.eval.max_report_bytes,
       evalStatusFile ? asAbsolute(evalStatusFile) : null,
     )
-    const api = new GitHubClient({ repo, apiUrl, token, transport })
+    const api = new GitHubClient({ repo, apiUrl, token, transport, warn })
+    if (models.length || issues.length) await api.ensureModelEolLabel()
     const pulls = models.length ? await api.listPulls() : []
     const issueRecords = issues.length ? await api.listIssues() : []
     const decisions = []
@@ -901,6 +921,7 @@ export const runBot = async ({
         now,
         tokenKind,
         warn,
+        gitAuth,
       }))
     }
     for (const group of issues) decisions.push(await processIssue({ api, issues: issueRecords, group, now }))
@@ -940,7 +961,16 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
   return 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+const invokedFile = (() => {
+  if (!process.argv[1]) return null
+  try {
+    return fs.realpathSync(process.argv[1])
+  } catch {
+    return path.resolve(process.argv[1])
+  }
+})()
+
+if (invokedFile === fs.realpathSync(fileURLToPath(import.meta.url))) {
   main().then(code => process.exit(code)).catch(error => {
     console.error(`model-eol bot: ${error.message}`)
     process.exit(2)

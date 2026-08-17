@@ -32,14 +32,15 @@ second, so the existing trackers can converge instead of each scraping alone.
   replacement, `distributions` for per-channel lifecycles, and publisher `policy`
   floors. Small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (29 entries), Google (64 entries) and OpenAI (194 entries), generated from the providers' live deprecation pages plus the AWS Bedrock lifecycle page, last verified 2026-08-03<!-- /feeds-status -->. Every
+- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (29 entries), Google (64 entries) and OpenAI (194 entries), generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated 2026-08-03<!-- /feeds-status -->. Every
   dated entry carries a source URL.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
   ML-BOM export, retirement schedule, alerts and badges, migration plan/apply.
 - **`refresh/`** - regenerates the feeds from provider pages, models endpoints, and
   distributor lifecycle pages, with a semantic diff for human review.
 - **`bot/`** - the Dependabot part: a cron GitHub workflow that maintains one
-  migration PR or issue per retiring model.
+  migration PR or issue per retiring model, published as the `model-eol-bot`
+  binary in the same npm package.
 - **`scripts/feed-changelog.mjs`** - the feeds' git history as Atom/markdown, so
   "model retirements as they are announced" is a feed you can subscribe to.
 
@@ -102,6 +103,11 @@ PRs to trigger checks), and provider API keys enter the picture in exactly two
 optional places: your own eval hook command, and the feed-refresh models-endpoint
 coverage.
 
+Both command-line binaries ship in one zero-dependency npm artifact. The test
+suite packs that artifact, installs it into an empty consumer directory with the
+network disabled, and runs both bins; it also fails if runtime, development,
+peer, or optional npm dependencies are introduced.
+
 ## Use it as a GitHub Action
 
 The same gate as a composite action - no npm install, feeds bundled, pinned to
@@ -123,9 +129,38 @@ That is the PR gate: fail only when *this* change adds a model that is retired
 or retiring within the threshold. Add `via: aws-bedrock` (or `azure-ai-foundry`)
 to judge by a distributor's clock. The copy-paste version with both gates - PR
 diff plus a weekly full-repository check - is
-[`examples/workflows/model-eol.yml`](examples/workflows/model-eol.yml); the
-same inputs drive `inventory` and `schedule` if CI should export an ML-BOM or a
-retirement calendar instead.
+[`examples/workflows/model-eol.yml`](examples/workflows/model-eol.yml). The
+Action also exposes `inventory`, `schedule`, `alert`, and `plan`. Use
+`format: cyclonedx` for an ML-BOM, or `output-file` to retain any report as a
+workflow artifact while keeping the same output in the job log.
+
+## One repository policy
+
+The CLI, Action, and bot all discover a strict `.model-eol.json` at the target
+Git repository root. CLI flags or Action inputs override configured values, and
+`--config FILE` selects an explicit policy when auto-discovery is ambiguous:
+
+```json
+{
+  "days": 90,
+  "scope": "direct",
+  "via": null,
+  "ignore": {
+    "models": ["o3-deep-research"],
+    "paths": ["test/fixtures/**", "vendor"]
+  },
+  "issues": { "enabled": true },
+  "eval": { "command": "npm test" }
+}
+```
+
+Unknown keys and invalid values fail closed. A canonical model ID or any alias
+in `ignore.models` suppresses the whole alias family; `ignore.paths` uses
+repo-relative `*`, `**`, and `?` globs and excludes matching files before scan
+coverage limits are counted. With no config the CLI keeps its historical
+`scope: all`; once a config exists, omitted values use the shared bot defaults
+(`days: 90`, `scope: direct`, and the publisher clock). The complete contract is
+[`schema/model-eol.bot-config.schema.json`](schema/model-eol.bot-config.schema.json).
 
 ## Same weights, different clocks
 
@@ -134,9 +169,9 @@ this is wrong in both directions: o3-deep-research died at OpenAI on July 23 but
 lives on Azure AI Foundry until December 26; claude-opus-4-1 retires at Anthropic on
 August 5 but lives on Amazon Bedrock until January 8, 2027. `distributions` in the
 spec carries these per-channel clocks, `--via <distributor>` judges your repo by the
-channel you actually call, and the bedrock distributor fetcher keeps the clocks
-current from AWS's own lifecycle page. Treat a distributor's later date as runway
-for the same migration, not as a destination.
+channel you actually call, and the distributor refresh keeps Bedrock and Vertex
+clocks current from their lifecycle pages. Treat a distributor's later date as
+runway for the same migration, not as a destination.
 
 ## Policy floors - a planning floor from absence
 
@@ -175,25 +210,41 @@ directories stay excluded.
 Copy `bot.yml.example` to `.github/workflows/model-eol-bot.yml` for a weekly run
 that maintains exactly one labelled migration PR per retiring model (full feed
 context in the body, never auto-merged) and one issue per finding that needs a
-human. Dismissals are respected; a changed shutdown date reopens. Configure via
-`.model-eol.json`: thresholds, scope, ignores, and an optional eval hook that runs
-your own regression command against the replacement before the PR opens. Preview
-everything with no GitHub calls:
+human. The workflow runs `model-eol@0` from npm in both jobs; consumer repositories
+do not need to copy `check.mjs` or the `bot/` source directory. Dismissals are
+respected; a changed shutdown date reopens. Configure via `.model-eol.json`:
+thresholds, scope, ignores, and an optional plan-level eval hook that can inspect
+`MODEL_EOL_PLAN` before publication. Preview everything with no GitHub calls and
+without adding a project dependency:
 
 ```sh
-node bot/bot.mjs --dry-run --target-dir . --repo OWNER/REPO
+npx --yes --package=model-eol@0 model-eol-bot --dry-run --target-dir . --repo OWNER/REPO
 ```
+
+The workflow honors configured `days`, `scope`, and `via` values; without a config
+it uses the bot defaults of 90 days and direct references. `eval.command` also
+comes from the config unless the `MODEL_EOL_EVAL_COMMAND` repository variable is
+set as an explicit workflow override. In the split workflow this command runs
+once in the unmodified, read-only checkout; it is a plan preflight, not a test of
+each patched migration branch.
+
+On its first actionable run, the bot creates the `model-eol` label. If repository
+policy prevents label creation or assignment, it warns and still publishes work;
+metadata in each PR or issue preserves idempotence. For HTTPS remotes—including
+private repositories—the bot passes `GITHUB_TOKEN` to its temporary Git processes
+as a host-scoped authorization header and never places it in a remote URL.
 
 Two operational notes the hard way teaches: PRs created with `GITHUB_TOKEN` do not
 trigger `pull_request` workflows (use a fine-grained PAT or GitHub App token when
-checks must run), and the workflow splits privileges - provider keys live only in
-the read-only plan/eval job, write tokens only in the publish job.
+checks must run, stored as the optional `MODEL_EOL_BOT_TOKEN` secret), and the
+workflow splits privileges—provider keys live only in the read-only plan/eval job,
+write tokens only in the publish job.
 
 ## Keeping the feeds honest
 
 ```sh
 node refresh/refresh.mjs --check                      # semantic diff vs live pages; exit 3 = PR-worthy
-node refresh/refresh.mjs --distributor aws-bedrock    # distributor clocks from AWS's lifecycle page
+node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai # distributor lifecycle clocks
 node scripts/feed-changelog.mjs                       # feeds' git history as an Atom feed
 ```
 
@@ -227,8 +278,9 @@ move any of us can make here.
 
 - Feeds refresh automatically: the weekly feed-refresh workflow is live in this
   repo (parse failures fail the run; material changes become a reviewed PR), and
-  CI runs the full suite on every push and PR. The bot workflow still ships as
-  `bot.yml.example`.
+  CI runs the full suite on every push and PR. The copy-ready bot workflow ships
+  as `bot.yml.example` and consumes the published package rather than local copies
+  of the tooling.
 - Current-model entries (and therefore policy-floor horizons) populate only when
   refresh runs with provider API keys for the models endpoints.
 - The checker matches known IDs only - it will not discover models absent from the

@@ -12,11 +12,13 @@ import {
   contextFor,
   formatDecisions,
   runBot,
+  runPlan,
 } from '../bot.mjs'
 import { branchFor, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
+import { cloneRepository, gitAuthentication, originFor } from '../lib/git.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-test-'))
@@ -81,6 +83,8 @@ class FakeGitHub {
     this.listIssueCount = 0
     this.beforeListPulls = null
     this.beforeListIssues = null
+    this.labelExists = false
+    this.labelCreateStatus = 201
   }
 
   response(data, status = 200) {
@@ -92,6 +96,16 @@ class FakeGitHub {
     const body = options.body ? JSON.parse(options.body) : null
     this.calls.push({ method: options.method, path: parsed.pathname, query: parsed.search, body })
     const pathName = parsed.pathname
+    if (options.method === 'GET' && pathName.endsWith('/labels/model-eol')) {
+      return this.labelExists
+        ? this.response({ name: 'model-eol', color: 'b60205' })
+        : this.response({ message: 'Not Found' }, 404)
+    }
+    if (options.method === 'POST' && /^\/repos\/[^/]+\/[^/]+\/labels$/.test(pathName)) {
+      if (this.labelCreateStatus >= 400) return this.response({ message: 'label creation denied' }, this.labelCreateStatus)
+      this.labelExists = true
+      return this.response(body, 201)
+    }
     if (options.method === 'GET' && pathName.endsWith('/pulls')) {
       this.listPullCount++
       this.beforeListPulls?.(this, this.listPullCount)
@@ -184,8 +198,9 @@ const metadata = parseMetadata(firstDecision?.body)
 const createdPull = github.pulls.find(item => item.number === firstDecision?.number)
 if (createdPull) createdPull.head.sha = metadata?.head_sha
 assert(firstDecision?.action === 'create', 'create-PR flow returns create decision')
+assert(github.callsFor('POST', '/repos/example/app/labels').length === 1, 'first actionable run bootstraps the model-eol repository label')
 assert(createCall?.body?.labels === undefined, 'pull create payload leaves label assignment to the label endpoint')
-assert(github.callsFor('POST', '/labels').length === 1, 'created PR receives the model-eol label')
+assert(github.calls.filter(call => call.method === 'POST' && call.path.includes('/issues/') && call.path.endsWith('/labels')).length === 1, 'created PR receives the model-eol label')
 assert(createCall?.body?.title === 'model-eol: migrate o3-deep-research-2025-06-26 before 2026-07-23', 'PR title includes canonical ID and shutdown')
 assert(metadata?.schema === 'model-eol.bot/0.1' && metadata.publisher === 'openai' && metadata.replacement === 'gpt-5.6-sol', 'PR has the machine-readable metadata block including replacement')
 assert(firstDecision.body.includes('## What / when') && firstDecision.body.includes('## Replacement') && firstDecision.body.includes('## Sources') && firstDecision.body.includes('## Feed notes'), 'PR body has lifecycle, replacement, source, and note sections')
@@ -205,6 +220,61 @@ const contextRecords = new Map([
   }],
 ])
 assert(contextFor(contextRecords, 'openai', 'clocked-model', 'azure-ai-foundry').announced === null, 'explicit distribution without announced date does not use publisher announcement')
+
+const httpsAuth = gitAuthentication('https://github.com/example/private.git', 'private-token')
+assert(httpsAuth?.key === 'http.https://github.com/.extraheader', 'GitHub HTTPS authentication is scoped to the remote host')
+assert(httpsAuth?.value.startsWith('AUTHORIZATION: basic ') && !httpsAuth.value.includes('private-token'), 'GitHub token is passed to Git via an encoded header instead of a remote URL')
+const gitAuthProbe = spawnSync('git', ['config', '--get-urlmatch', 'http.extraheader', 'https://github.com/example/private.git'], {
+  encoding: 'utf8',
+  env: {
+    ...process.env,
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: httpsAuth.key,
+    GIT_CONFIG_VALUE_0: httpsAuth.value,
+  },
+})
+assert(gitAuthProbe.status === 0 && gitAuthProbe.stdout.trim() === httpsAuth.value, 'Git accepts the host-scoped authorization header used by private-repository clones and pushes')
+assert(gitAuthentication('git@github.com:example/private.git', 'private-token') === null, 'SSH remotes retain their existing authentication instead of receiving an HTTP header')
+assert(gitAuthentication('http://github.example.test/example/private.git', 'private-token') === null, 'bot never sends a GitHub token over a plaintext HTTP remote')
+assert(gitAuthentication('https://attacker.example/example/private.git', 'private-token') === null, 'bot never sends a GitHub token to a remote outside the configured GitHub API host')
+assert(gitAuthentication('https://github.example.test/example/private.git', 'private-token', 'https://github.example.test/api/v3')?.key === 'http.https://github.example.test/.extraheader', 'GitHub Enterprise HTTPS remotes use their configured API host')
+
+const cloneInjectionRepo = makeRepo({ name: 'clone-option-injection', files: { 'README.md': 'fixture\n' } })
+const cloneInjectionMarker = path.join(tempRoot, 'clone-option-injection-ran')
+const cloneInjectionHelper = path.join(tempRoot, 'clone-option-injection-helper')
+write(cloneInjectionHelper, `#!/bin/sh\ntouch "${cloneInjectionMarker}"\nexec git-upload-pack "$@"\n`)
+fs.chmodSync(cloneInjectionHelper, 0o755)
+const cloneInjectionSource = `--upload-pack=${cloneInjectionHelper}`
+git(cloneInjectionRepo.work, ['config', 'remote.origin.url', cloneInjectionSource])
+assert(originFor(cloneInjectionRepo.work) === cloneInjectionSource, 'clone hardening covers a poisoned origin read back from repository config')
+const cloneInjectionCwd = process.cwd()
+let cloneInjectionRejected = false
+try {
+  process.chdir(tempRoot)
+  cloneRepository(originFor(cloneInjectionRepo.work), cloneInjectionRepo.bare)
+} catch {
+  cloneInjectionRejected = true
+} finally {
+  process.chdir(cloneInjectionCwd)
+}
+assert(cloneInjectionRejected && !fs.existsSync(cloneInjectionMarker), 'clone source is separated from Git options so --upload-pack cannot execute a command')
+
+const labelFallbackRepo = makeRepo({ name: 'label-fallback', files: baseFiles, config: { issues: { enabled: false } } })
+const labelFallbackGithub = new FakeGitHub()
+labelFallbackGithub.labelCreateStatus = 403
+const labelWarnings = []
+const labelFallbackResult = await runBot({
+  repo: 'example/label-fallback',
+  targetDir: labelFallbackRepo.work,
+  token: 'test-token',
+  transport: labelFallbackGithub.transport.bind(labelFallbackGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  warn: message => labelWarnings.push(message),
+})
+assert(labelFallbackResult.decisions.find(item => item.group.kind === 'model')?.action === 'create', 'label bootstrap denial does not block migration PR creation')
+assert(labelWarnings.some(message => message.includes('continuing without labels')), 'label bootstrap denial emits a clear degraded-label warning')
+assert(labelFallbackGithub.calls.filter(call => call.method === 'POST' && call.path.includes('/issues/') && call.path.endsWith('/labels')).length === 0, 'bot skips PR label assignment after label bootstrap is denied')
 
 const clockRepo = makeRepo({ name: 'clock-matching', files: baseFiles, config })
 const clockGithub = new FakeGitHub()
@@ -394,6 +464,24 @@ const ignoreRun = await runBot({
   now: new Date('2026-08-01T00:00:00Z'),
 })
 assert(ignoreRun.decisions.length === 0, 'canonical model and path ignores suppress all matching aliases and paths')
+
+const externalConfigRepo = makeRepo({
+  name: 'external-config',
+  files: {
+    'app.py': 'MODEL = "gpt-5.6-sol"\n',
+    'ignored/oversized.json': 'x'.repeat(2 * 1024 * 1024 + 1),
+  },
+})
+const externalConfigFile = path.join(tempRoot, 'external-model-eol.json')
+write(externalConfigFile, JSON.stringify({ ignore: { paths: ['ignored/**'] }, issues: { enabled: false } }))
+const externalConfigRun = await runBot({
+  repo: 'example/external-config',
+  targetDir: externalConfigRepo.work,
+  configPath: externalConfigFile,
+  dryRun: true,
+  vendoredFeeds: path.join(root, 'feeds'),
+})
+assert(externalConfigRun.plan.scan_notes.length === 0 && externalConfigRun.decisions.length === 0, 'external --config path is forwarded to the plan subprocess before scan coverage checks')
 
 assert(slugFor('A very/unsafe ID!!! with a long tail that should be trimmed') .length <= 40, 'slug generation trims unsafe long IDs to 40 characters')
 assert(branchFor('openai', 'model/with?unsafe') !== branchFor('openai', 'model-with-unsafe'), 'hash suffix keeps collision-prone slugs distinct')
@@ -763,6 +851,51 @@ try {
   mismatchRefused = error.message.includes('refusing plan schema')
 }
 assert(mismatchRefused, 'plan schema mismatch is refused before decisions')
+
+const artifactRepo = makeRepo({ name: 'plan-artifact', files: baseFiles, config: { issues: { enabled: false } } })
+const artifactConfig = loadConfig(path.join(artifactRepo.work, '.model-eol.json'))
+const trustedArtifact = runPlan({
+  workDir: artifactRepo.work,
+  config: artifactConfig,
+  feedsDir: path.join(root, 'feeds'),
+  warn: () => {},
+})
+trustedArtifact.generated = '2000-01-01T00:00:00.000Z'
+const artifactFile = path.join(tempRoot, 'trusted-plan-artifact.json')
+write(artifactFile, JSON.stringify(trustedArtifact, null, 2))
+const acceptedArtifact = await runBot({
+  repo: 'example/plan-artifact',
+  targetDir: artifactRepo.work,
+  dryRun: true,
+  planFile: artifactFile,
+  vendoredFeeds: path.join(root, 'feeds'),
+})
+assert(acceptedArtifact.decisions.some(item => item.group.kind === 'model'), 'plan artifact comparison ignores only the volatile generated timestamp')
+
+const tamperedArtifact = {
+  ...trustedArtifact,
+  items: trustedArtifact.items.map((item, index) => index === 0
+    ? { ...item, id: `${item.id}-tampered`, file: 'different.py', replacement: 'attacker-model' }
+    : item),
+}
+const tamperedArtifactFile = path.join(tempRoot, 'tampered-plan-artifact.json')
+write(tamperedArtifactFile, JSON.stringify(tamperedArtifact, null, 2))
+const artifactGithub = new FakeGitHub()
+let tamperedArtifactError = null
+try {
+  await runBot({
+    repo: 'example/plan-artifact',
+    targetDir: artifactRepo.work,
+    token: 'test-token',
+    transport: artifactGithub.transport.bind(artifactGithub),
+    planFile: tamperedArtifactFile,
+    vendoredFeeds: path.join(root, 'feeds'),
+  })
+} catch (error) {
+  tamperedArtifactError = error
+}
+assert(tamperedArtifactError?.message.includes('does not match the independently regenerated plan'), 'shape-valid plan artifact mutations to ID, path, or replacement fail closed')
+assert(artifactGithub.calls.length === 0, 'tampered plan artifact is rejected before any GitHub reads or writes')
 
 const passEnvConfigFile = path.join(tempRoot, 'pass-env-config.json')
 write(passEnvConfigFile, JSON.stringify({ eval: { pass_env: ['CUSTOM_EVAL_KEY'] } }))
