@@ -33,6 +33,7 @@ import {
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
 import { validateGeneratedFeeds } from '../refresh.mjs'
+import { validateReleaseVersion } from '../../scripts/validate-release-version.mjs'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const refresh = path.join(root, 'refresh', 'refresh.mjs')
@@ -630,6 +631,30 @@ assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 
 assert(refreshWorkflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]') && refreshWorkflow.includes('exit code $distributors'), 'workflow fails explicitly on unexpected distributor refresh exit codes')
 assert(refreshWorkflow.includes('GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}'), 'workflow passes the Google models endpoint credential')
 assert(refreshWorkflow.includes('--distributor aws-bedrock,vertex-ai'), 'workflow refreshes every implemented distributor')
+const releaseWorkflow = fs.readFileSync(path.join(root, '.github/workflows/npm-release.yml'), 'utf8')
+assert(releaseWorkflow.includes('release_version:') && releaseWorkflow.includes('type: string') && !releaseWorkflow.includes('release_version:\n        default:'), 'manual releases require an explicit exact version')
+assert(validateReleaseVersion({ current: '0.2.4', requested: '0.3.0', published: ['0.2.4'] }) === '0.3.0', 'release validation accepts the requested 0.3.0 minor release')
+for (const requested of ['0.2.4', '0.2.3', '0.3.0-beta.1', 'v0.3.0']) {
+  let rejected = false
+  try {
+    validateReleaseVersion({ current: '0.2.4', requested, published: ['0.2.4'] })
+  } catch {
+    rejected = true
+  }
+  assert(rejected, `release validation rejects unsafe version ${requested}`)
+}
+let publishedReleaseRejected = false
+try {
+  validateReleaseVersion({ current: '0.2.4', requested: '0.3.0', published: ['0.2.4', '0.3.0'] })
+} catch {
+  publishedReleaseRejected = true
+}
+assert(publishedReleaseRejected, 'release validation refuses a version already published to npm')
+assert(releaseWorkflow.includes('npm view model-eol versions --json') && releaseWorkflow.includes('tag v$RELEASE_VERSION already exists') && releaseWorkflow.includes('GitHub release v$RELEASE_VERSION already exists'), 'manual releases refuse existing npm versions, tags, and GitHub releases')
+assert(releaseWorkflow.includes('node scripts/validate-release-version.mjs "$current" "$RELEASE_VERSION" "$published"'), 'manual releases run the tested release-version validator')
+assert(releaseWorkflow.includes('npm version "$RELEASE_VERSION"'), 'manual releases apply the exact requested version')
+assert(releaseWorkflow.includes('npm version patch -m "model-eol v%s - automated feed-data release"'), 'automated feed releases remain patch-only')
+assert(releaseWorkflow.includes('git push --atomic origin main "$version" +refs/tags/v0:refs/tags/v0') && !releaseWorkflow.includes('git push -f origin v0'), 'release commit, immutable version tag, and moving v0 tag push atomically')
 const freshnessScript = fs.readFileSync(path.join(root, 'scripts/update-readme-freshness.mjs'), 'utf8')
 assert(freshnessScript.includes('AWS Bedrock and Google Vertex AI lifecycle pages'), 'README freshness metadata names every automated distributor source')
 

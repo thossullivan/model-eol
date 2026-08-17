@@ -11,8 +11,9 @@
 # matches the feeds/** path filter.
 #
 # workflow_dispatch releases regardless of the feeds guard - the path for code
-# releases (fixes, features) to reach npm with the same provenance. It still
-# refuses a no-op: dispatch with zero commits since the last tag does nothing.
+# releases (fixes, features) to reach npm with the same provenance and an
+# explicit stable version. It still refuses a no-op: dispatch with zero commits
+# since the last tag does nothing.
 
 name: npm-release
 
@@ -21,6 +22,11 @@ on:
     branches: [main]
     paths: ['feeds/**']
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: Exact stable semver for this code release (for example, 0.3.0)
+        required: true
+        type: string
 
 concurrency: npm-release
 
@@ -71,21 +77,40 @@ jobs:
         if: steps.guard.outputs.changed == 'true'
         run: npm test
 
-      - name: Bump patch version, tag, push
+      - name: Validate requested code release
+        if: github.event_name == 'workflow_dispatch' && steps.guard.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          current=$(node -p "require('./package.json').version")
+          published=$(npm view model-eol versions --json)
+          node scripts/validate-release-version.mjs "$current" "$RELEASE_VERSION" "$published"
+          if git show-ref --verify --quiet "refs/tags/v$RELEASE_VERSION"; then
+            echo "tag v$RELEASE_VERSION already exists" >&2
+            exit 1
+          fi
+          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "GitHub release v$RELEASE_VERSION already exists" >&2
+            exit 1
+          fi
+
+      - name: Bump release version, tag, push
         if: steps.guard.outputs.changed == 'true'
         id: bump
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           git config user.name "model-eol release"
           git config user.email "actions@users.noreply.github.com"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            version=$(npm version patch -m "model-eol v%s - dispatched code release")
+            version=$(npm version "$RELEASE_VERSION" -m "model-eol v%s - dispatched code release")
           else
             version=$(npm version patch -m "model-eol v%s - automated feed-data release")
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           git tag -f v0 "$version"
-          git push --atomic origin main "$version"
-          git push -f origin v0
+          git push --atomic origin main "$version" +refs/tags/v0:refs/tags/v0
 
       - name: Publish to npm
         if: steps.guard.outputs.changed == 'true'
