@@ -81,7 +81,7 @@ export class GitHubClient {
     } catch (error) {
       if (error.status !== 404) {
         this.modelEolLabelAvailable = false
-        this.warn(`model-eol: warning: could not check the model-eol label; continuing without labels (${error.message})`)
+        this.warn(`model-eol: warning: could not check the model-eol label; refusing to publish untrusted work (${error.message})`)
         return false
       }
     }
@@ -97,11 +97,11 @@ export class GitHubClient {
           return true
         } catch {
           // Fall through to the warning below. Another writer may have raced us,
-          // but a failed confirmation should never block the migration itself.
+          // but ownership must be confirmed before publishing work.
         }
       }
       this.modelEolLabelAvailable = false
-      this.warn(`model-eol: warning: could not create the model-eol label; continuing without labels (${error.message})`)
+      this.warn(`model-eol: warning: could not create the model-eol label; refusing to publish untrusted work (${error.message})`)
       return false
     }
   }
@@ -113,7 +113,7 @@ export class GitHubClient {
       return true
     } catch (error) {
       this.modelEolLabelAvailable = false
-      this.warn(`model-eol: warning: could not label #${number}; the migration was still published (${error.message})`)
+      this.warn(`model-eol: warning: could not label #${number}; refusing to leave it open as trusted bot work (${error.message})`)
       return false
     }
   }
@@ -157,7 +157,10 @@ export class GitHubClient {
   async createPull(payload) {
     const { data } = await this.request('POST', `/repos/${this.repo}/pulls`, payload)
     if (data?.number === undefined) throw new Error('GitHub pull request response did not contain a number')
-    await this.addModelEolLabel(data.number)
+    if (!await this.addModelEolLabel(data.number)) {
+      try { await this.updatePull(data.number, { state: 'closed' }) } catch {}
+      throw new Error(`refusing unlabeled bot pull request #${data.number}; it was closed because ownership could not be established`)
+    }
     return data
   }
 
@@ -170,20 +173,8 @@ export class GitHubClient {
   }
 
   async createIssue(payload) {
-    const body = this.modelEolLabelAvailable
-      ? payload
-      : { ...payload, labels: (payload.labels ?? []).filter(label => label !== MODEL_EOL_LABEL.name) }
-    try {
-      return (await this.request('POST', `/repos/${this.repo}/issues`, body)).data
-    } catch (error) {
-      if (error.status !== 422 || !(body.labels ?? []).includes(MODEL_EOL_LABEL.name)) throw error
-      this.modelEolLabelAvailable = false
-      this.warn(`model-eol: warning: issue labels were rejected; retrying without the model-eol label (${error.message})`)
-      return (await this.request('POST', `/repos/${this.repo}/issues`, {
-        ...body,
-        labels: body.labels.filter(label => label !== MODEL_EOL_LABEL.name),
-      })).data
-    }
+    if (!this.modelEolLabelAvailable) throw new Error('refusing unlabeled bot issue; model-eol label is unavailable')
+    return (await this.request('POST', `/repos/${this.repo}/issues`, payload)).data
   }
 
   async updateIssue(number, payload) {

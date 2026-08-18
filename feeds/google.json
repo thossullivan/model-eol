@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-08-03T21:43:59.800Z",
+  "generated": "2026-08-18T00:47:44.931Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -318,7 +318,13 @@
     },
     {
       "id": "gemini-embedding-2",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "distributions": [
+        {
+          "via": "vertex-ai",
+          "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
+        }
+      ]
     },
     {
       "id": "gemini-embedding-001",
@@ -518,9 +524,7 @@
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
       "shutdown": "2026-08-31",
       "date_precision": "earliest",
-      "replacement_options": [
-        "gemini-robotics-er-2-preview"
-      ]
+      "replacement": "gemini-robotics-er-2-preview"
     },
     {
       "id": "gemini-robotics-er-1.5-preview",
@@ -528,6 +532,85 @@
       "shutdown": "2026-04-30",
       "date_precision": "earliest",
       "replacement": "gemini-robotics-er-1.6-preview"
+    },
+    {
+      "id": "gemini-3.7-flash",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "distributions": [
+        {
+          "via": "vertex-ai",
+          "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
+        }
+      ]
+    },
+    {
+      "id": "gemma-4-26b-a4b-it"
+    },
+    {
+      "id": "gemma-4-31b-it"
+    },
+    {
+      "id": "gemini-flash-latest"
+    },
+    {
+      "id": "gemini-flash-lite-latest"
+    },
+    {
+      "id": "gemini-pro-latest"
+    },
+    {
+      "id": "gemini-3.1-pro-preview-customtools"
+    },
+    {
+      "id": "nano-banana-pro-preview"
+    },
+    {
+      "id": "gemini-3.1-flash-lite-image",
+      "distributions": [
+        {
+          "via": "vertex-ai",
+          "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
+        }
+      ]
+    },
+    {
+      "id": "gemini-omni-flash-preview"
+    },
+    {
+      "id": "gemini-robotics-er-2-preview"
+    },
+    {
+      "id": "gemini-2.5-computer-use-preview-10-2025"
+    },
+    {
+      "id": "antigravity-preview-05-2026"
+    },
+    {
+      "id": "deep-research-max-preview-04-2026"
+    },
+    {
+      "id": "deep-research-preview-04-2026"
+    },
+    {
+      "id": "deep-research-pro-preview-12-2025"
+    },
+    {
+      "id": "gemini-embedding-2-preview"
+    },
+    {
+      "id": "aqa"
+    },
+    {
+      "id": "gemini-2.5-flash-native-audio-latest"
+    },
+    {
+      "id": "gemini-2.5-flash-native-audio-preview-09-2025"
+    },
+    {
+      "id": "gemini-robotics-er-2-streaming-preview"
+    },
+    {
+      "id": "gemini-3.5-live-translate-preview"
     }
   ]
 }

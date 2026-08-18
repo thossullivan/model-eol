@@ -31,6 +31,11 @@
         "shutdown": { "type": "string" },
         "days": { "type": "integer" },
         "status": { "enum": ["retired", "retiring"] },
+        "requested_via": { "type": ["string", "null"] },
+        "threshold_days": { "type": "integer", "minimum": 0 },
+        "effective_scope": { "enum": ["all", "direct"] },
+        "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
+        "mapped_from": { "type": "string", "minLength": 1 },
         "sources": { "type": "array", "items": { "type": "string" } },
         "notes": { "type": ["string", "null"] }
       },
@@ -50,7 +55,12 @@
         "status": { "enum": ["retired", "retiring", "scheduled", "watch", "ok"] },
         "shutdown": { "type": ["string", "null"] },
         "via": { "type": ["string", "null"] },
+        "requested_via": { "type": ["string", "null"] },
         "days": { "type": ["integer", "null"] },
+        "threshold_days": { "type": "integer", "minimum": 0 },
+        "effective_scope": { "enum": ["all", "direct"] },
+        "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
+        "mapped_from": { "type": "string", "minLength": 1 },
         "replacement": { "type": ["string", "null"] },
         "replacement_options": {
           "type": "array",
@@ -75,6 +85,18 @@
         "bytes": { "type": "integer", "minimum": 0 },
         "limit_bytes": { "type": "integer", "minimum": 0 },
         "limit_files": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "policyProvenance": {
+      "type": "object",
+      "required": ["override_indexes", "route_index"],
+      "properties": {
+        "override_indexes": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "route_index": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     }

@@ -15,12 +15,11 @@ env:
 
 jobs:
   plan:
-    name: plan and evaluate
+    name: build trusted plan
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # The eval job must never hold write tokens.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -29,51 +28,75 @@ jobs:
           node-version: 20
       - name: Build the versioned plan
         run: |
+          mkdir -p "$RUNNER_TEMP/model-eol-plan"
+          MODEL_EOL_VERSION="$(npm view "$MODEL_EOL_PACKAGE" version --json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const v=JSON.parse(s);const r=Array.isArray(v)?v.at(-1):v;if(typeof r!=="string")process.exit(1);process.stdout.write(r)})')"
+          if [[ ! "$MODEL_EOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "refusing invalid resolved model-eol version: $MODEL_EOL_VERSION" >&2
+            exit 1
+          fi
+          printf '%s\n' "$MODEL_EOL_VERSION" > "$RUNNER_TEMP/model-eol-plan/model-eol-version"
           PLAN_ARGS=(plan .)
           if [ ! -f .model-eol.json ]; then PLAN_ARGS+=(--days 90 --scope direct); fi
-          npx --yes --package="$MODEL_EOL_PACKAGE" model-eol "${PLAN_ARGS[@]}" > model-eol-plan.json
-      - name: Run the configured eval harness
+          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol "${PLAN_ARGS[@]}" > "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json"
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-eol-plan
+          path: |
+            ${{ runner.temp }}/model-eol-plan/model-eol-plan.json
+            ${{ runner.temp }}/model-eol-plan/model-eol-version
+          if-no-files-found: error
+
+  evaluate:
+    name: evaluate isolated migrations
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Provider credentials exist only in this read-only job. The evaluator
+      # forwards only names explicitly allowed by eval.pass_env.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Download trusted plan
+        uses: actions/download-artifact@v4
+        with:
+          name: model-eol-plan
+          path: ${{ runner.temp }}/model-eol-plan
+      - name: Apply and evaluate each migration independently
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # A non-empty repository variable overrides eval.command. Otherwise
+          # the strictly validated command in .model-eol.json is used.
           MODEL_EOL_EVAL_COMMAND: ${{ vars.MODEL_EOL_EVAL_COMMAND }}
-          MODEL_EOL_PLAN: ${{ github.workspace }}/model-eol-plan.json
-          MODEL_EOL_REPORT: ${{ github.workspace }}/model-eol-report.md
         run: |
-          # The workflow variable is an explicit override. Otherwise, use the
-          # eval.command already validated from .model-eol.json by the plan step.
-          if [ -z "${MODEL_EOL_EVAL_COMMAND:-}" ] && [ -f .model-eol.json ]; then
-            MODEL_EOL_EVAL_COMMAND="$(node --input-type=module -e '
-              import fs from "node:fs"
-              const config = JSON.parse(fs.readFileSync(".model-eol.json", "utf8"))
-              if (typeof config.eval?.command === "string") process.stdout.write(config.eval.command)
-            ')"
+          mkdir -p "$RUNNER_TEMP/model-eol-eval"
+          MODEL_EOL_VERSION="$(cat "$RUNNER_TEMP/model-eol-plan/model-eol-version")"
+          if [[ ! "$MODEL_EOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "refusing invalid resolved model-eol version: $MODEL_EOL_VERSION" >&2
+            exit 1
           fi
-          # Supply a provider-backed harness for this repository. It may read the
-          # plan and write Markdown to MODEL_EOL_REPORT, but this job has read-only
-          # contents permission and the publish job receives no provider keys.
-          if [ -n "${MODEL_EOL_EVAL_COMMAND:-}" ]; then
-            set +e
-            sh -c "$MODEL_EOL_EVAL_COMMAND"
-            eval_status=$?
-            set -e
-            printf '%s\n' "$eval_status" > model-eol-eval-exit-code
-          else
-            : > "$MODEL_EOL_REPORT"
-            printf '0\n' > model-eol-eval-exit-code
-          fi
-      - name: Upload plan and eval report
+          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol-bot evaluate \
+            --target-dir . \
+            --plan-file "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json" \
+            --output-file "$RUNNER_TEMP/model-eol-eval/model-eol-eval-results.json"
+      - name: Upload bounded eval results
         uses: actions/upload-artifact@v4
         with:
-          name: model-eol-plan-and-report
-          path: |
-            model-eol-plan.json
-            model-eol-report.md
-            model-eol-eval-exit-code
+          name: model-eol-eval-results
+          path: ${{ runner.temp }}/model-eol-eval/model-eol-eval-results.json
+          if-no-files-found: error
 
   publish:
-    name: publish migration work
-    needs: plan
+    name: reconcile migration work
+    needs: [plan, evaluate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -88,25 +111,35 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Download the plan and eval report
+      - name: Download trusted plan
         uses: actions/download-artifact@v4
         with:
-          name: model-eol-plan-and-report
-      - name: Publish model-eol PRs and issues
+          name: model-eol-plan
+          path: ${{ runner.temp }}/model-eol-plan
+      - name: Download eval results
+        uses: actions/download-artifact@v4
+        with:
+          name: model-eol-eval-results
+          path: ${{ runner.temp }}/model-eol-eval
+      - name: Publish and reconcile model-eol work
         env:
           GITHUB_TOKEN: ${{ secrets.MODEL_EOL_BOT_TOKEN || secrets.GITHUB_TOKEN }}
-          MODEL_EOL_PLAN_FILE: ${{ github.workspace }}/model-eol-plan.json
-          MODEL_EOL_EVAL_REPORT_FILE: ${{ github.workspace }}/model-eol-report.md
-          MODEL_EOL_EVAL_STATUS_FILE: ${{ github.workspace }}/model-eol-eval-exit-code
+          MODEL_EOL_PLAN_FILE: ${{ runner.temp }}/model-eol-plan/model-eol-plan.json
+          MODEL_EOL_EVAL_RESULTS_FILE: ${{ runner.temp }}/model-eol-eval/model-eol-eval-results.json
+          # The write job receives the non-secret command text only so it can
+          # verify the eval configuration digest. It receives no provider keys.
+          MODEL_EOL_EVAL_COMMAND: ${{ vars.MODEL_EOL_EVAL_COMMAND }}
           MODEL_EOL_TOKEN_KIND: ${{ secrets.MODEL_EOL_BOT_TOKEN && 'external-token' || 'github-token' }}
-        run: npx --yes --package="$MODEL_EOL_PACKAGE" model-eol-bot --repo "${{ github.repository }}" --target-dir .
+        run: |
+          MODEL_EOL_VERSION="$(cat "$RUNNER_TEMP/model-eol-plan/model-eol-version")"
+          if [[ ! "$MODEL_EOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "refusing invalid resolved model-eol version: $MODEL_EOL_VERSION" >&2
+            exit 1
+          fi
+          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol-bot --repo "${{ github.repository }}" --target-dir .
 
-# Security and checks note:
-# A PR made with GITHUB_TOKEN does not trigger pull_request workflows, so checks
-# may be skipped even though this job has opened the PR. For required checks, use
-# a narrowly scoped fine-grained PAT or a GitHub App installation token in the
-# optional MODEL_EOL_BOT_TOKEN secret instead.
-# Keep provider API keys only in the read-only plan/eval job and never pass them to
-# the publish job.
-# Set feeds.allow_vendored_fallback: true in .model-eol.json only for degraded report-only runs; the default is false.
-# Independent concurrent invocations need external mutual exclusion; this tool does not lock.
+# A PR made with GITHUB_TOKEN does not trigger pull_request workflows. For
+# required checks, store a narrowly scoped fine-grained PAT or GitHub App token
+# as MODEL_EOL_BOT_TOKEN. Keep provider keys out of the publish job.
+# Set feeds.allow_vendored_fallback: true only for degraded report-only runs.
+# Independent concurrent invocations need external mutual exclusion.

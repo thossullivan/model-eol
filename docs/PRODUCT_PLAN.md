@@ -49,6 +49,47 @@ node check.mjs alert . --days 90 --scope direct
 node check.mjs . --days 90 --via azure-ai-foundry
 ```
 
+## Mixed repositories and generated code
+
+Repository-level `days`, `scope`, and `via` values are defaults. A monorepo can
+refine them with path-scoped `overrides` and route each reference through the
+clock that actually serves it:
+
+```json
+{
+  "days": 90,
+  "scope": "direct",
+  "overrides": [
+    { "paths": ["services/**"], "scope": "all" },
+    { "paths": ["services/bedrock/**"], "days": 180, "via": "aws-bedrock" }
+  ],
+  "routes": [
+    { "paths": ["services/vertex/**"], "via": "vertex-ai" },
+    {
+      "paths": ["services/bedrock/**"],
+      "match": "chat-prod",
+      "model": "claude-3-7-sonnet-20250219",
+      "via": "aws-bedrock"
+    }
+  ]
+}
+```
+
+Path globs are repository-relative and support `*`, `**`, and `?`. Matching
+overrides apply in array order: later scalar values win, while `ignore.models`
+and `ignore.paths` remain additive. The last matching route wins. A route with
+an exact `match` and canonical feed `model` turns a known deployment alias into
+a tracked, non-direct reference without pretending it is safe to patch. Explicit
+CLI flags still override repository and path policy. Machine reports carry the
+effective threshold, scope, requested channel, and matching rule indexes when a
+path rule or route changed behavior.
+
+The scanner reads `.baml` source but skips conservative generated-code headers,
+BAML-generated clients, and model-eol inventory/schedule/alert/plan artifacts.
+CycloneDX is skipped only when its metadata carries model-eol generator
+provenance, so third-party BOMs stay visible. Intentional artifact skips are
+diagnostics, not incomplete-coverage warnings.
+
 ## Next resolvers
 
 Add optional resolvers only when they can return exact deployed model/version data:

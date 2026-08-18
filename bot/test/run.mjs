@@ -10,7 +10,9 @@ import {
   buildIssueBody,
   buildPullBody,
   contextFor,
+  evaluatePlan,
   formatDecisions,
+  main,
   runBot,
   runPlan,
 } from '../bot.mjs'
@@ -129,7 +131,8 @@ class FakeGitHub {
         labels: [{ name: 'model-eol' }],
         body: body.body,
         title: body.title,
-        head: { ref: body.head, sha: body.head_sha ?? null },
+        head: { ref: body.head, sha: body.head_sha ?? null, repo: { full_name: parsed.pathname.split('/').slice(2, 4).join('/') } },
+        base: { ref: body.base },
       }
       this.pulls.push(created)
       return this.response(created, 201)
@@ -272,9 +275,9 @@ const labelFallbackResult = await runBot({
   now: new Date('2026-08-01T00:00:00Z'),
   warn: message => labelWarnings.push(message),
 })
-assert(labelFallbackResult.decisions.find(item => item.group.kind === 'model')?.action === 'create', 'label bootstrap denial does not block migration PR creation')
-assert(labelWarnings.some(message => message.includes('continuing without labels')), 'label bootstrap denial emits a clear degraded-label warning')
-assert(labelFallbackGithub.calls.filter(call => call.method === 'POST' && call.path.includes('/issues/') && call.path.endsWith('/labels')).length === 0, 'bot skips PR label assignment after label bootstrap is denied')
+assert(labelFallbackResult.decisions.find(item => item.group.kind === 'model')?.action === 'label-unavailable', 'label bootstrap denial blocks untrusted migration PR creation')
+assert(labelWarnings.some(message => message.includes('refusing to publish untrusted work')), 'label bootstrap denial emits a clear fail-closed warning')
+assert(labelFallbackGithub.callsFor('POST', '/pulls').length === 0, 'bot performs no PR write when ownership label bootstrap is denied')
 
 const clockRepo = makeRepo({ name: 'clock-matching', files: baseFiles, config })
 const clockGithub = new FakeGitHub()
@@ -302,6 +305,77 @@ const callsAfterCreate = github.calls.length
 const unchanged = await run({ evalEnabled: true })
 assert(unchanged.decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'unchanged feed digest does nothing')
 assert(github.calls.length > callsAfterCreate && github.callsFor('PATCH', '/pulls').length === 0, 'unchanged state only performs discovery')
+
+const baseFreshRepo = makeRepo({ name: 'base-freshness', files: baseFiles, config: { issues: { enabled: false } } })
+const baseFreshGithub = new FakeGitHub()
+const baseFreshRun = () => runBot({
+  repo: 'example/base-freshness',
+  targetDir: baseFreshRepo.work,
+  token: 'test-token',
+  transport: baseFreshGithub.transport.bind(baseFreshGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const baseFreshFirst = await baseFreshRun()
+const baseFreshFirstDecision = baseFreshFirst.decisions.find(item => item.group.kind === 'model')
+const baseFreshPull = baseFreshGithub.pulls.find(item => item.number === baseFreshFirstDecision?.number)
+if (baseFreshPull) baseFreshPull.head.sha = parseMetadata(baseFreshFirstDecision?.body)?.head_sha
+write(path.join(baseFreshRepo.work, 'README.md'), 'unrelated default-branch advance\n')
+git(baseFreshRepo.work, ['add', 'README.md'])
+git(baseFreshRepo.work, ['commit', '-m', 'advance default branch'])
+git(baseFreshRepo.work, ['push', 'origin', 'main'])
+const baseFreshSecond = await baseFreshRun()
+const baseFreshSecondDecision = baseFreshSecond.decisions.find(item => item.group.kind === 'model')
+assert(baseFreshSecondDecision?.action === 'update', 'unchanged finding is regenerated when its recorded default-branch base is stale')
+assert(parseMetadata(baseFreshSecondDecision?.body)?.base_sha === headOf(baseFreshRepo, 'main'), 'refreshed PR metadata records the independently cloned default-branch head')
+
+const staleRepo = makeRepo({ name: 'stale-reconciliation', files: baseFiles, config: { issues: { enabled: false } } })
+const staleGithub = new FakeGitHub()
+const staleRun = () => runBot({
+  repo: 'example/stale-reconciliation',
+  targetDir: staleRepo.work,
+  token: 'test-token',
+  transport: staleGithub.transport.bind(staleGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const staleFirst = await staleRun()
+const stalePull = staleGithub.pulls.find(item => item.number === staleFirst.decisions.find(record => record.group.kind === 'model')?.number)
+write(path.join(staleRepo.work, 'direct.py'), fs.readFileSync(path.join(staleRepo.work, 'direct.py'), 'utf8').replaceAll('o3-deep-research', 'gpt-5.6-sol'))
+git(staleRepo.work, ['add', 'direct.py'])
+git(staleRepo.work, ['commit', '-m', 'remove retired reference'])
+git(staleRepo.work, ['push', 'origin', 'main'])
+const staleSecond = await staleRun()
+assert(staleSecond.decisions.some(record => record.action === 'close-stale') && stalePull?.state === 'closed', 'vanished finding closes its trusted open bot PR')
+assert(staleGithub.callsFor('POST', '/comments').some(call => call.body.body?.includes('no longer actionable')), 'stale PR reconciliation records an explanatory comment')
+assert(parseMetadata(stalePull?.body)?.stale_closed === true, 'stale PR closure is distinguished from a human dismissal in trusted metadata')
+write(path.join(staleRepo.work, 'direct.py'), baseFiles['direct.py'])
+git(staleRepo.work, ['add', 'direct.py'])
+git(staleRepo.work, ['commit', '-m', 'reintroduce retired reference'])
+git(staleRepo.work, ['push', 'origin', 'main'])
+const staleThird = await staleRun()
+assert(staleThird.decisions.some(record => record.group.kind === 'model' && record.action === 'create'), 'a finding reappearing after automated stale PR closure creates fresh work')
+assert(staleGithub.callsFor('POST', '/pulls').length === 2, 'automated stale PR closure never permanently suppresses recurrence')
+
+const unrelatedMarkerRepo = makeRepo({ name: 'unrelated-marker', files: baseFiles, config: { issues: { enabled: false } } })
+const unrelatedMarkerGithub = new FakeGitHub()
+unrelatedMarkerGithub.pulls.push({
+  number: 88,
+  state: 'open',
+  labels: [],
+  body: '<!-- model-eol {malformed} -->',
+  head: { ref: 'someone/elses-branch', sha: null, repo: { full_name: 'example/unrelated-marker' } },
+  base: { ref: 'main' },
+})
+const unrelatedMarkerResult = await runBot({
+  repo: 'example/unrelated-marker',
+  targetDir: unrelatedMarkerRepo.work,
+  token: 'test-token',
+  transport: unrelatedMarkerGithub.transport.bind(unrelatedMarkerGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+assert(unrelatedMarkerResult.decisions.some(record => record.action === 'create') && !unrelatedMarkerResult.decisions.some(record => record.action === 'conflict'), 'malformed marker on an unrelated branch neither conflicts nor suppresses trusted work')
 
 const changedFeeds = path.join(tempRoot, 'changed-feeds')
 fs.cpSync(path.join(root, 'feeds'), changedFeeds, { recursive: true })
@@ -358,14 +432,15 @@ fs.cpSync(changedFeeds, changedAgain, { recursive: true })
 const changedAgainOpenai = JSON.parse(fs.readFileSync(path.join(changedAgain, 'openai.json'), 'utf8'))
 changedAgainOpenai.note = 'A second changed feed note'
 fs.writeFileSync(path.join(changedAgain, 'openai.json'), JSON.stringify(changedAgainOpenai, null, 2))
-const standDown = await run({ vendoredFeeds: changedAgain })
-assert(standDown.decisions.find(item => item.group.kind === 'model')?.action === 'stand-down', 'foreign branch head causes stand-down')
-assert(github.callsFor('POST', '/comments').length === 1, 'stand-down comments on the PR')
-assert(headOf(repo, branch) === beforeStandDownHead, 'stand-down does not push')
+const spoofResistant = await run({ vendoredFeeds: changedAgain })
+const spoofDecision = spoofResistant.decisions.find(item => item.group.kind === 'model')
+assert(spoofDecision?.action === 'update', 'stale or forged API head data cannot override the independently verified Git lease')
+assert(github.callsFor('POST', '/comments').length === 0, 'verified remote branch avoids a false stand-down comment')
+assert(headOf(repo, branch) !== beforeStandDownHead, 'verified remote branch can still receive the lifecycle update')
 
 pull.state = 'closed'
-pull.head.sha = metadata.head_sha
-pull.body = updateDecision.body
+pull.head.sha = parseMetadata(spoofDecision?.body)?.head_sha
+pull.body = spoofDecision.body
 const dismissed = await run({ vendoredFeeds: changedFeeds })
 assert(dismissed.decisions.find(item => item.group.kind === 'model')?.action === 'skip-dismissed', 'closed unmerged PR with same shutdown is dismissed')
 
@@ -377,6 +452,37 @@ fs.writeFileSync(path.join(movedFeeds, 'openai.json'), JSON.stringify(movedOpena
 const fresh = await run({ vendoredFeeds: movedFeeds })
 assert(fresh.decisions.find(item => item.group.kind === 'model')?.action === 'create', 'closed PR with changed shutdown creates a fresh PR')
 assert(github.callsFor('POST', '/pulls').length === 2, 'changed shutdown opens another pull request')
+
+const reintroducedRepo = makeRepo({ name: 'merged-reintroduced', files: baseFiles, config: { issues: { enabled: false } } })
+const reintroducedGithub = new FakeGitHub()
+const reintroducedRun = () => runBot({
+  repo: 'example/merged-reintroduced',
+  targetDir: reintroducedRepo.work,
+  token: 'test-token',
+  transport: reintroducedGithub.transport.bind(reintroducedGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const reintroducedFirst = await reintroducedRun()
+const reintroducedDecision = reintroducedFirst.decisions.find(item => item.group.kind === 'model')
+const reintroducedBranch = branchFor('openai', 'o3-deep-research-2025-06-26')
+const reintroducedPull = reintroducedGithub.pulls.find(item => item.number === reintroducedDecision?.number)
+if (reintroducedPull) {
+  reintroducedPull.state = 'closed'
+  reintroducedPull.merged_at = '2026-08-02T00:00:00Z'
+}
+write(path.join(reintroducedRepo.work, 'direct.py'), bareBranchFile(reintroducedRepo, reintroducedBranch, 'direct.py'))
+git(reintroducedRepo.work, ['add', 'direct.py'])
+git(reintroducedRepo.work, ['commit', '-m', 'merge migration'])
+git(reintroducedRepo.work, ['push', 'origin', 'main'])
+git(reintroducedRepo.bare, ['update-ref', '-d', `refs/heads/${reintroducedBranch}`])
+write(path.join(reintroducedRepo.work, 'direct.py'), baseFiles['direct.py'])
+git(reintroducedRepo.work, ['add', 'direct.py'])
+git(reintroducedRepo.work, ['commit', '-m', 'reintroduce retired model'])
+git(reintroducedRepo.work, ['push', 'origin', 'main'])
+const reintroducedSecond = await reintroducedRun()
+assert(reintroducedSecond.decisions.some(item => item.action === 'create') && reintroducedGithub.callsFor('POST', '/pulls').length === 2, 'a retired model reintroduced after a merged migration creates fresh work')
+assert(headOf(reintroducedRepo, reintroducedBranch), 'deleted merged branch is safely recreated for the reintroduced migration')
 
 const issueRepo = makeRepo({
   name: 'issues',
@@ -398,7 +504,12 @@ assert(issueGithub.callsFor('POST', '/issues').some(call => call.body.labels?.in
 const disabledIssueConfig = path.join(tempRoot, 'issues-disabled.json')
 fs.writeFileSync(disabledIssueConfig, JSON.stringify({ issues: { enabled: false } }))
 const disabled = await issueRun({ configPath: disabledIssueConfig })
-assert(!disabled.decisions.some(item => item.group.kind === 'issue') && issueGithub.callsFor('POST', '/issues').length === 1, 'issues.enabled false suppresses issue maintenance')
+assert(disabled.decisions.some(item => item.group.kind === 'issue' && item.action === 'close-stale') && issueGithub.issues[0].state === 'closed', 'issues.enabled false closes the now-stale bot issue')
+assert(issueGithub.callsFor('POST', '/comments').some(call => call.body.body?.includes('no longer actionable')), 'stale issue reconciliation explains why the issue was closed')
+assert(parseMetadata(issueGithub.issues[0].body)?.stale_closed === true, 'stale issue closure is distinguished from a human dismissal in trusted metadata')
+const recurringIssue = await issueRun()
+assert(recurringIssue.decisions.some(item => item.group.kind === 'issue' && item.action === 'create'), 'a finding reappearing after automated stale issue closure creates fresh work')
+assert(issueGithub.callsFor('POST', '/issues').length === 2, 'automated stale issue closure never permanently suppresses recurrence')
 
 const referenceRepo = makeRepo({
   name: 'model-reference',
@@ -521,6 +632,16 @@ assert(fallback.degraded === true && fallback.decisions.some(item => item.group.
 assert(feedFailureGithub.calls.length === 0, 'degraded vendored fallback makes zero GitHub calls')
 assert(warnings.some(message => message.includes('using vendored feeds') && message.includes('degraded')), 'feed fallback emits a degraded warning')
 assert(formatDecisions(fallback.decisions, { degraded: fallback.degraded }).includes('status: degraded'), 'degraded fallback state is visible in formatted output')
+const blockedSummaryFile = path.join(tempRoot, 'blocked-summary.md')
+const blockedExit = await main([
+  '--dry-run',
+  '--target-dir', repo.work,
+  '--config', fallbackConfig,
+  '--feeds-url', 'https://127.0.0.1:1/feed.json',
+], { ...process.env, GITHUB_STEP_SUMMARY: blockedSummaryFile })
+const blockedSummary = fs.readFileSync(blockedSummaryFile, 'utf8')
+assert(blockedExit === 1, 'report-only blocked decision produces an explicit non-success CLI exit')
+assert(blockedSummary.includes('Outcome: **blocked**') && blockedSummary.includes('report-only'), 'blocked CLI outcome is written to the GitHub step summary')
 
 let feedTemp
 const feedDownload = await downloadFeeds({
@@ -759,7 +880,7 @@ if (unlabeledPull) {
   unlabeledPull.head.sha = parseMetadata(unlabeledDecision?.body)?.head_sha
 }
 const unlabeledSecond = await unlabeledRun({ vendoredFeeds: changedFeeds })
-assert(unlabeledSecond.decisions.find(item => item.group.kind === 'model')?.action === 'update' && unlabeledGithub.callsFor('POST', '/pulls').length === 1, 'unlabeled bot PR on the expected branch is reused without duplicate creation')
+assert(unlabeledSecond.decisions.find(item => item.group.kind === 'model')?.action === 'conflict' && unlabeledGithub.callsFor('POST', '/pulls').length === 1, 'unlabeled work is never trusted or overwritten and its occupied expected branch is a localized conflict')
 
 const conflictRepo = makeRepo({ name: 'metadata-conflict', files: baseFiles, config: { issues: { enabled: false } } })
 const conflictGithub = new FakeGitHub()
@@ -767,7 +888,7 @@ const conflictBranch = branchFor('openai', 'o3-deep-research-2025-06-26')
 conflictGithub.pulls.push({
   number: 90,
   state: 'open',
-  labels: [],
+  labels: [{ name: 'model-eol' }],
   body: '<!-- model-eol {"schema":"model-eol.bot/0.1","id":"o3-deep-research-2025-06-26"} -->',
   head: { ref: conflictBranch, sha: null },
 })
@@ -779,7 +900,7 @@ const conflictResult = await runBot({
   vendoredFeeds: path.join(root, 'feeds'),
   now: new Date('2026-08-01T00:00:00Z'),
 })
-assert(conflictResult.decisions.find(item => item.group.kind === 'model')?.action === 'conflict' && conflictGithub.callsFor('POST', '/pulls').length === 0, 'marked malformed metadata produces a visible conflict instead of a duplicate PR')
+assert(conflictResult.decisions.find(item => item.group.kind === 'model')?.action === 'conflict' && conflictGithub.callsFor('POST', '/pulls').length === 0, 'labeled malformed metadata on the expected branch produces a localized conflict')
 
 const raceRepo = makeRepo({ name: 'precreate-race', files: baseFiles, config: { issues: { enabled: false } } })
 const raceGithub = new FakeGitHub()
@@ -811,7 +932,7 @@ const raceResult = await runBot({
   vendoredFeeds: path.join(root, 'feeds'),
   now: new Date('2026-08-01T00:00:00Z'),
 })
-assert(raceResult.decisions.find(item => item.group.kind === 'model')?.action === 'update' && raceGithub.callsFor('POST', '/pulls').length === 0 && raceGithub.calls.some(call => call.method === 'GET' && call.path.endsWith('/pulls') && call.query.includes('head=')), 'pre-create branch check catches an injected PR and avoids a race duplicate')
+assert(raceResult.decisions.find(item => item.group.kind === 'model')?.action === 'conflict' && raceGithub.callsFor('POST', '/pulls').length === 0 && raceGithub.calls.some(call => call.method === 'GET' && call.path.endsWith('/pulls') && call.query.includes('head=')), 'pre-create branch check catches untrusted injected work and avoids a race duplicate')
 
 const probeEnv = 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, JSON.stringify({ path: process.env.PATH, implicitToken: process.env.GITHUB_TOKEN, providerKey: process.env.OPENAI_API_KEY, modelSecret: process.env.MODEL_EOL_SECRET, explicit: process.env.MODEL_EOL_EXPLICIT }))\''
 const envNames = ['GITHUB_TOKEN', 'OPENAI_API_KEY', 'MODEL_EOL_SECRET', 'MODEL_EOL_EXPLICIT']
@@ -896,6 +1017,181 @@ try {
 }
 assert(tamperedArtifactError?.message.includes('does not match the independently regenerated plan'), 'shape-valid plan artifact mutations to ID, path, or replacement fail closed')
 assert(artifactGithub.calls.length === 0, 'tampered plan artifact is rejected before any GitHub reads or writes')
+
+const policyArgsChecker = path.join(tempRoot, 'policy-args-checker.mjs')
+write(policyArgsChecker, `const forbidden = process.argv.slice(2).filter(value => ["--days", "--scope", "--via"].includes(value)); if (forbidden.length) { console.error("config masked by " + forbidden.join(",")); process.exit(9) } console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:["config-only-policy"],items:[],issues:[]}))\n`)
+const policyArgsRepo = makeRepo({
+  name: 'policy-args',
+  files: baseFiles,
+  config: {
+    overrides: [{ paths: ['routed/**'], days: 200 }],
+    routes: [{ paths: ['routed/**'], via: 'azure-ai-foundry' }],
+  },
+})
+const policyArgsResult = await runBot({
+  repo: 'example/policy-args',
+  targetDir: policyArgsRepo.work,
+  dryRun: true,
+  checkerPath: policyArgsChecker,
+  vendoredFeeds: path.join(root, 'feeds'),
+})
+assert(policyArgsResult.plan.scan_notes.includes('config-only-policy'), 'bot forwards config without top-level days/scope/via flags that would mask path routes and overrides')
+
+const nullViaRepo = makeRepo({
+  name: 'null-via',
+  files: { 'direct/direct.py': baseFiles['direct.py'] },
+  config: {
+    via: 'azure-ai-foundry',
+    issues: { enabled: false },
+    overrides: [{ paths: ['direct/**'], via: null }],
+  },
+})
+const nullViaResult = await runBot({
+  repo: 'example/null-via',
+  targetDir: nullViaRepo.work,
+  dryRun: true,
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const nullViaDecision = nullViaResult.decisions.find(item => item.group.kind === 'model')
+assert(nullViaResult.plan.items[0]?.requested_via === null && nullViaDecision?.group.via === null, 'bot preserves a path override that resets the repository distributor to the publisher clock')
+assert(nullViaDecision?.group.branch === branchFor('openai', 'o3-deep-research-2025-06-26'), 'publisher-clock reset uses the direct migration branch identity')
+
+const partitionCommand = 'node -e \'const fs=require("fs");const p=JSON.parse(fs.readFileSync(process.env.MODEL_EOL_PLAN,"utf8"));const file=p.items[0].file;const fail=process.env.MODEL_EOL_OLD_ID.includes("o4-mini");const patched=fs.readFileSync(file,"utf8").includes("gpt-5.6-sol");const text=[patched,process.env.MODEL_EOL_ALLOWED,String(process.env.MODEL_EOL_HIDDEN),p.items.length].join("|")+(fail?"|"+"x".repeat(512):"");fs.writeFileSync(process.env.MODEL_EOL_REPORT,text);process.exit(fail?7:0)\''
+const partitionRepo = makeRepo({
+  name: 'partition-eval',
+  files: {
+    'public/direct.py': baseFiles['direct.py'],
+    'fail/direct.py': baseFiles['direct.py'].replace('o3-deep-research', 'o4-mini-deep-research'),
+  },
+  config: {
+    days: 90,
+    scope: 'direct',
+    issues: { enabled: false },
+    eval: {
+      command: partitionCommand,
+      timeout_ms: 1000,
+      max_report_bytes: 128,
+      pass_env: ['MODEL_EOL_ALLOWED'],
+    },
+  },
+})
+const partitionConfigFile = path.join(partitionRepo.work, '.model-eol.json')
+const partitionConfig = loadConfig(partitionConfigFile)
+const partitionPlan = runPlan({
+  workDir: partitionRepo.work,
+  config: partitionConfig,
+  configPath: partitionConfigFile,
+  feedsDir: path.join(root, 'feeds'),
+  warn: () => {},
+})
+assert(partitionPlan.items.length === 2 && new Set(partitionPlan.items.map(item => item.id)).size === 2, 'eval partition fixture contains two independently patchable model groups')
+const partitionPlanFile = path.join(tempRoot, 'partition-plan.json')
+const partitionEvalFile = path.join(tempRoot, 'partition-eval.json')
+write(partitionPlanFile, JSON.stringify(partitionPlan, null, 2))
+const savedAllowed = process.env.MODEL_EOL_ALLOWED
+const savedHidden = process.env.MODEL_EOL_HIDDEN
+process.env.MODEL_EOL_ALLOWED = 'explicit-pass-env'
+process.env.MODEL_EOL_HIDDEN = 'must-not-leak'
+const partitionEvaluation = await evaluatePlan({
+  targetDir: partitionRepo.work,
+  configPath: partitionConfigFile,
+  planFile: partitionPlanFile,
+  outputFile: partitionEvalFile,
+  vendoredFeeds: path.join(root, 'feeds'),
+  commandOverride: null,
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+if (savedAllowed === undefined) delete process.env.MODEL_EOL_ALLOWED
+else process.env.MODEL_EOL_ALLOWED = savedAllowed
+if (savedHidden === undefined) delete process.env.MODEL_EOL_HIDDEN
+else process.env.MODEL_EOL_HIDDEN = savedHidden
+const partitionPass = partitionEvaluation.artifact.results.find(item => item.status === 'pass')
+const partitionFail = partitionEvaluation.artifact.results.find(item => item.status === 'fail')
+assert(partitionEvaluation.artifact.results.length === 2 && partitionPass && partitionFail, 'isolated evaluator records an independent pass/fail result for every migration group')
+assert(partitionEvaluation.artifact.base_sha === headOf(partitionRepo, 'main'), 'eval manifest records the exact evaluated default-branch commit')
+assert(partitionPass.report.includes('true|explicit-pass-env|undefined|1'), 'per-group eval sees the patched migration, selected one-item plan, and explicit pass_env only')
+assert(Buffer.byteLength(partitionFail.report) <= 128 && partitionFail.report.includes('truncated'), 'per-group eval report honors the configured byte cap')
+
+const timeoutEvalFile = path.join(tempRoot, 'partition-timeout-eval.json')
+const timeoutEvaluation = await evaluatePlan({
+  targetDir: partitionRepo.work,
+  configPath: partitionConfigFile,
+  planFile: partitionPlanFile,
+  outputFile: timeoutEvalFile,
+  vendoredFeeds: path.join(root, 'feeds'),
+  commandOverride: 'node -e \'setTimeout(()=>{},10000)\'',
+})
+assert(timeoutEvaluation.artifact.results.every(item => item.status === 'timeout'), 'isolated evaluator applies eval.timeout_ms to each migration')
+
+const partitionGithub = new FakeGitHub()
+const partitionPublished = await runBot({
+  repo: 'example/partition-eval',
+  targetDir: partitionRepo.work,
+  token: 'test-token',
+  transport: partitionGithub.transport.bind(partitionGithub),
+  planFile: partitionPlanFile,
+  evalResultsFile: partitionEvalFile,
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+assert(partitionPublished.decisions.filter(item => item.action === 'create').length === 1 && partitionPublished.decisions.filter(item => item.action === 'eval-failed').length === 1, 'publish partitions eval outcomes so passing work is created while its failing peer is blocked')
+assert(partitionGithub.callsFor('POST', '/pulls').length === 1, 'per-group eval failure cannot suppress a different passing migration or publish itself')
+
+const digestTamper = JSON.parse(fs.readFileSync(partitionEvalFile, 'utf8'))
+digestTamper.plan_digest = '0'.repeat(64)
+const digestTamperFile = path.join(tempRoot, 'partition-eval-tampered.json')
+write(digestTamperFile, JSON.stringify(digestTamper, null, 2))
+const digestTamperGithub = new FakeGitHub()
+let digestTamperError = null
+try {
+  await runBot({
+    repo: 'example/partition-eval',
+    targetDir: partitionRepo.work,
+    token: 'test-token',
+    transport: digestTamperGithub.transport.bind(digestTamperGithub),
+    planFile: partitionPlanFile,
+    evalResultsFile: digestTamperFile,
+    vendoredFeeds: path.join(root, 'feeds'),
+  })
+} catch (error) {
+  digestTamperError = error
+}
+assert(digestTamperError?.message.includes('plan digest') && digestTamperGithub.calls.length === 0, 'tampered eval digest is rejected before any GitHub read or write')
+
+write(path.join(partitionRepo.work, 'README.md'), 'default branch advanced after evaluation\n')
+git(partitionRepo.work, ['add', 'README.md'])
+git(partitionRepo.work, ['commit', '-m', 'advance runtime after evaluation'])
+git(partitionRepo.work, ['push', 'origin', 'main'])
+const baseDriftGithub = new FakeGitHub()
+let baseDriftError = null
+try {
+  await runBot({
+    repo: 'example/partition-eval',
+    targetDir: partitionRepo.work,
+    token: 'test-token',
+    transport: baseDriftGithub.transport.bind(baseDriftGithub),
+    planFile: partitionPlanFile,
+    evalResultsFile: partitionEvalFile,
+    vendoredFeeds: path.join(root, 'feeds'),
+  })
+} catch (error) {
+  baseDriftError = error
+}
+assert(baseDriftError?.message.includes('evaluated base commit') && baseDriftError.message.includes('does not match current default-branch head'), 'publish refuses eval results produced against an older default-branch commit')
+assert(baseDriftGithub.calls.length === 0, 'evaluated-base drift is rejected before any GitHub read or write')
+
+const unavailableChecker = path.join(tempRoot, 'shutdown-unavailable-checker.mjs')
+write(unavailableChecker, `console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:[],items:[],issues:[{file:"direct.py",line:1,matched:"retired-without-date",id:"retired-without-date",publisher:"google",usage:"direct-api",confidence:"high",status:"retired",shutdown:null,via:"vertex-ai",requested_via:"vertex-ai",reason:"shutdown-date-unavailable",sources:[],notes:null}]}))\n`)
+const unavailableRepo = makeRepo({ name: 'shutdown-unavailable', files: baseFiles })
+const unavailableResult = await runBot({
+  repo: 'example/shutdown-unavailable',
+  targetDir: unavailableRepo.work,
+  dryRun: true,
+  checkerPath: unavailableChecker,
+  vendoredFeeds: path.join(root, 'feeds'),
+})
+assert(unavailableResult.decisions.some(item => item.group.kind === 'issue' && item.body.includes('shutdown-date-unavailable')), 'retired distributor finding without a shutdown date becomes an actionable bot issue')
 
 const passEnvConfigFile = path.join(tempRoot, 'pass-env-config.json')
 write(passEnvConfigFile, JSON.stringify({ eval: { pass_env: ['CUSTOM_EVAL_KEY'] } }))
@@ -1016,8 +1312,8 @@ git(leaseWork, ['add', 'human-change.txt'])
 git(leaseWork, ['commit', '-m', 'human change'])
 git(leaseWork, ['push', 'origin', `HEAD:refs/heads/${leaseBranch}`])
 const leaseHeadBefore = headOf(leaseRepo, leaseBranch)
-const identityStandDown = await leaseRun({ vendoredFeeds: changedFeeds })
-assert(identityStandDown.decisions.find(item => item.group.kind === 'model')?.action === 'stand-down', 'committer identity mismatch causes stand-down before force-push')
+const identityStandDown = await leaseRun()
+assert(identityStandDown.decisions.find(item => item.group.kind === 'model')?.action === 'stand-down', 'unchanged open PR still validates freshness and stands down on a committer identity mismatch')
 assert(headOf(leaseRepo, leaseBranch) === leaseHeadBefore, 'committer identity mismatch does not push')
 assert(leaseGithub.callsFor('POST', '/comments').some(call => call.body.body?.includes('forge the configured identity')), 'lease stand-down comment records the residual identity-forgery risk')
 

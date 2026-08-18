@@ -67,6 +67,8 @@ export const parseMetadata = body => {
     if (metadata.replacement !== undefined && metadata.replacement !== null && typeof metadata.replacement !== 'string') return null
     if (metadata.replacement_options !== undefined && (!Array.isArray(metadata.replacement_options) || metadata.replacement_options.some(option => typeof option !== 'string'))) return null
     if (metadata.replacement_note !== undefined && metadata.replacement_note !== null && typeof metadata.replacement_note !== 'string') return null
+    if (metadata.base_sha !== undefined && metadata.base_sha !== null && (typeof metadata.base_sha !== 'string' || !/^[0-9a-f]{40,64}$/.test(metadata.base_sha))) return null
+    if (metadata.stale_closed !== undefined && metadata.stale_closed !== true) return null
     if (typeof metadata.feed_digest !== 'string' || !metadata.feed_digest) return null
     if (!Object.hasOwn(metadata, 'head_sha') || (metadata.head_sha !== null && typeof metadata.head_sha !== 'string')) return null
     if (metadata.channel !== undefined && (typeof metadata.channel !== 'string' || !metadata.channel)) return null
