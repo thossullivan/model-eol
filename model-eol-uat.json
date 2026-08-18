@@ -1,0 +1,31 @@
+{
+  "days": 90,
+  "scope": "direct",
+  "ignore": {
+    "paths": [
+      ".claude/**",
+      ".github/**",
+      "bot/**",
+      "docs/**",
+      "examples/**",
+      "feeds/**",
+      "lib/**",
+      "refresh/**",
+      "schema/**",
+      "scripts/**",
+      "test/**",
+      "*.example",
+      "*.json",
+      "*.md",
+      "*.mjs",
+      "*.yaml",
+      "*.yml",
+      "LICENSE"
+    ]
+  },
+  "eval": {
+    "command": "node uat/live-consumer/eval.mjs",
+    "timeout_ms": 30000,
+    "pass_env": []
+  }
+}
