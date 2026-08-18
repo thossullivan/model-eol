@@ -554,6 +554,140 @@ assert(openaiCheck.code === 0 || openaiCheck.code === 3, 'OpenAI --check exits 0
 assert(openaiCheck.out.includes('Unconfirmed entries') && openaiCheck.out.includes('retained because neither source confirmed it'), '--check retains and reports committed entries the fixture slice does not confirm')
 
 const responseFor = body => ({ ok: true, status: 200, text: async () => body })
+const googleFetchOptions = fetchImpl => ({
+  env: { GEMINI_API_KEY: 'fixture-key' },
+  notice: () => {},
+  fetchImpl,
+})
+const googleModelsPath = '/v1beta/models'
+
+const googlePageUrls = []
+const googlePageToken = 'opaque+/='
+const paginatedGoogle = await loadProviderSources({
+  ...PROVIDERS.google,
+  modelsUrl: `${PROVIDERS.google.modelsUrl}?pageSize=2&alt=json&pageToken=stale`,
+}, googleFetchOptions(async url => {
+  const parsedUrl = new URL(url)
+  if (parsedUrl.pathname === googleModelsPath) {
+    googlePageUrls.push(parsedUrl)
+    return parsedUrl.searchParams.get('pageToken')
+      ? responseFor(JSON.stringify({
+          models: [
+            { name: 'models/google-shared' },
+            { name: 'models/google-page-two' },
+            { name: 'models/google-page-two' },
+          ],
+        }))
+      : responseFor(JSON.stringify({
+          models: [
+            { name: 'models/google-page-one' },
+            { name: 'models/google-shared' },
+            { name: 'models/google-page-one' },
+          ],
+          nextPageToken: googlePageToken,
+        }))
+  }
+  return responseFor(googleHtml)
+}))
+assert(JSON.stringify(paginatedGoogle.currentIds) === JSON.stringify(['google-page-one', 'google-shared', 'google-page-two']), 'Google models pagination combines pages and de-duplicates ids in first-seen order')
+assert(googlePageUrls.length === 2 && !googlePageUrls[0].searchParams.has('pageToken') && googlePageUrls[1].searchParams.get('pageToken') === googlePageToken, 'Google models pagination starts at page one and forwards the opaque nextPageToken')
+assert(googlePageUrls.every(url => url.searchParams.get('pageSize') === '2' && url.searchParams.get('alt') === 'json'), 'Google models pagination preserves page size and existing query parameters')
+
+let googleHttpCalls = 0
+let googleHttpReason = ''
+const googleHttpUrls = []
+try {
+  await loadProviderSources(PROVIDERS.google, googleFetchOptions(async url => {
+    const parsedUrl = new URL(url)
+    if (parsedUrl.pathname === googleModelsPath) {
+      googleHttpCalls++
+      googleHttpUrls.push(parsedUrl)
+      if (googleHttpCalls === 1) {
+        return responseFor(JSON.stringify({ models: [{ name: 'models/google-http-one' }], nextPageToken: 'http-page-two' }))
+      }
+      return { ok: false, status: 503, text: async () => 'try later' }
+    }
+    return responseFor(googleHtml)
+  }))
+} catch (error) {
+  googleHttpReason = error.message
+}
+assert(googleHttpCalls === 2 && googleHttpReason.includes('google fetch failed') && googleHttpReason.includes('HTTP 503'), 'Google models pagination fails closed when a later page request fails')
+assert(googleHttpUrls[0]?.searchParams.get('pageSize') === '1000', 'Google models pagination requests the documented maximum page size by default')
+
+let googleMalformedCalls = 0
+let googleMalformedReason = ''
+try {
+  await loadProviderSources(PROVIDERS.google, googleFetchOptions(async url => {
+    const parsedUrl = new URL(url)
+    if (parsedUrl.pathname === googleModelsPath) {
+      googleMalformedCalls++
+      return googleMalformedCalls === 1
+        ? responseFor(JSON.stringify({ models: [{ name: 'models/google-malformed-one' }], nextPageToken: 'malformed-page-two' }))
+        : responseFor(JSON.stringify({ models: {} }))
+    }
+    return responseFor(googleHtml)
+  }))
+} catch (error) {
+  googleMalformedReason = error.message
+}
+assert(googleMalformedCalls === 2 && googleMalformedReason.includes('google models response has no models array'), 'Google models pagination rejects a malformed later page without returning partial results')
+
+let googleCycleCalls = 0
+let googleCycleReason = ''
+const googleCycleTokens = ['cycle-a', 'cycle-b', 'cycle-a']
+try {
+  await loadProviderSources(PROVIDERS.google, googleFetchOptions(async url => {
+    const parsedUrl = new URL(url)
+    if (parsedUrl.pathname === googleModelsPath) {
+      const call = googleCycleCalls++
+      return responseFor(JSON.stringify({
+        models: [{ name: `models/google-cycle-${call + 1}` }],
+        nextPageToken: googleCycleTokens[call],
+      }))
+    }
+    return responseFor(googleHtml)
+  }))
+} catch (error) {
+  googleCycleReason = error.message
+}
+assert(googleCycleCalls === 3 && googleCycleReason.includes('pagination token repeated'), 'Google models pagination rejects a non-adjacent token cycle')
+
+let googleCapCalls = 0
+let googleCapReason = ''
+try {
+  await loadProviderSources(PROVIDERS.google, googleFetchOptions(async url => {
+    const parsedUrl = new URL(url)
+    if (parsedUrl.pathname === googleModelsPath) {
+      googleCapCalls++
+      return responseFor(JSON.stringify({
+        models: [{ name: `models/google-cap-${googleCapCalls}` }],
+        nextPageToken: `google-cap-token-${googleCapCalls}`,
+      }))
+    }
+    return responseFor(googleHtml)
+  }))
+} catch (error) {
+  googleCapReason = error.message
+}
+assert(googleCapCalls === 20 && googleCapReason.includes('pagination cap of 20 pages'), 'Google models pagination fails loudly at the hard page cap')
+
+let googleInvalidTokenReason = ''
+try {
+  parseGoogleModels({ models: [{ name: 'models/google-invalid-token' }], nextPageToken: 42 })
+} catch (error) {
+  googleInvalidTokenReason = error.message
+}
+assert(googleInvalidTokenReason.includes('invalid nextPageToken'), 'Google models parsing rejects a malformed pagination token')
+
+let googleInvalidResourceReason = ''
+try {
+  parseGoogleModels({ models: [{ name: 'google-invalid-resource' }] })
+} catch (error) {
+  googleInvalidResourceReason = error.message
+}
+assert(googleInvalidResourceReason.includes('invalid model resource name'), 'Google models parsing enforces the documented models resource prefix')
+
 const openaiPageUrls = []
 const paginatedOpenAI = await loadProviderSources(PROVIDERS.openai, {
   env: { OPENAI_API_KEY: 'fixture-key' },
