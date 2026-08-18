@@ -15,6 +15,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
       - name: Validate feeds against the spec
         run: node scripts/validate-feeds.mjs
       - name: Checker smoke tests
@@ -44,6 +45,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
       - name: Create disposable consumer fixtures
         shell: bash
         run: |

@@ -35,6 +35,32 @@ try {
   assert(manifest.bin?.['model-eol'] === 'check.mjs', 'package exposes the model-eol checker bin')
   assert(manifest.bin?.['model-eol-bot'] === 'bot/bot.mjs', 'package exposes the model-eol-bot bin')
   const workflow = fs.readFileSync(path.join(root, 'bot.yml.example'), 'utf8')
+  for (const [action, major, count] of [
+    ['checkout', 'v7', 3],
+    ['setup-node', 'v7', 3],
+    ['upload-artifact', 'v7', 2],
+    ['download-artifact', 'v8', 3],
+  ]) {
+    const references = [...workflow.matchAll(new RegExp(`actions/${action}@(v\\d+)`, 'g'))].map(match => match[1])
+    assert(references.length === count && references.every(reference => reference === major), `consumer workflow uses the Node 24 ${action}@${major} action`)
+  }
+  for (const [file, count] of [
+    ['README.md', 1],
+    ['examples/workflows/model-eol.yml', 2],
+  ]) {
+    const source = fs.readFileSync(path.join(root, file), 'utf8')
+    const references = [...source.matchAll(/actions\/checkout@(v\d+)/g)].map(match => match[1])
+    assert(references.length === count && references.every(reference => reference === 'v7'), `${file} uses the Node 24 checkout@v7 action`)
+  }
+  assert(workflow.match(/node-version: 22/g)?.length === 3, 'consumer workflow runs every model-eol job on supported Node 22')
+  assert(workflow.match(/package-manager-cache: false/g)?.length === 3, 'consumer workflow disables automatic package-manager caching in every job')
+  const repositoryWorkflows = [
+    '.github/workflows/ci.yml',
+    '.github/workflows/feed-refresh.yml',
+    '.github/workflows/npm-release.yml',
+  ].map(file => fs.readFileSync(path.join(root, file), 'utf8')).join('\n')
+  assert(repositoryWorkflows.match(/actions\/setup-node@v7/g)?.length === 4, 'repository workflows use the Node 24 setup-node@v7 action')
+  assert(repositoryWorkflows.match(/package-manager-cache: false/g)?.length === 4, 'repository workflows disable automatic package-manager caching in every job')
   assert(workflow.includes('MODEL_EOL_PACKAGE: model-eol@0'), 'consumer workflow uses the model-eol v0 package line')
   assert(workflow.includes('model-eol "${PLAN_ARGS[@]}"') && workflow.includes('model-eol-bot --repo'), 'consumer workflow invokes both published bins')
   assert(!workflow.includes('node check.mjs') && !workflow.includes('node bot/bot.mjs'), 'consumer workflow has no repository-local tool assumption')
