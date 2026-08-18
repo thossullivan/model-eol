@@ -8,6 +8,7 @@
 # populate.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
 # fine-grained PAT as MODEL_EOL_BOT_TOKEN if feed PRs should run checks.
+# Failures open or update one durable issue; the next successful check closes it.
 
 name: feed-refresh
 
@@ -20,6 +21,7 @@ concurrency: feed-refresh
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 jobs:
@@ -75,6 +77,7 @@ jobs:
 
       - name: Open feed refresh PR
         if: steps.check.outputs.changed == 'true'
+        id: pr
         env:
           GH_TOKEN: ${{ secrets.MODEL_EOL_BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
@@ -92,5 +95,67 @@ jobs:
             if [ "${{ steps.check.outputs.providers }}" = "3" ]; then cat provider-diff.md; echo; fi
             if [ "${{ steps.check.outputs.distributors }}" = "3" ]; then cat distributor-diff.md; fi
           } > pr-body.md
-          gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md --label model-eol || \
-            gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md
+          if ! pr_url=$(gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md --label model-eol); then
+            pr_url=$(gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md)
+          fi
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Record successful refresh check
+        if: success()
+        env:
+          MATERIAL_CHANGES: ${{ steps.check.outputs.changed }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          {
+            echo "## Feed refresh result"
+            if [ "$MATERIAL_CHANGES" = "true" ]; then
+              echo "Material feed changes were regenerated and validated."
+              echo "Review PR: $PR_URL"
+            else
+              echo "All configured live sources were checked successfully; no material feed changes were found."
+              echo "The committed feed-generated date is intentionally unchanged because no feed data changed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve prior feed refresh failure
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATERIAL_CHANGES: ${{ steps.check.outputs.changed }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          issue=$(gh issue list --state open --limit 100 --json number,title \
+            --jq 'map(select(.title == "Feed refresh automation failed")) | .[0].number // ""')
+          if [ -n "$issue" ]; then
+            if [ "$MATERIAL_CHANGES" = "true" ]; then
+              result="material changes were published for review at $PR_URL"
+            else
+              result="all sources were checked and no material changes were found"
+            fi
+            gh issue comment "$issue" --body "Recovered in $RUN_URL: $result."
+            gh issue close "$issue" --reason completed
+          fi
+
+      - name: Report feed refresh failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Feed refresh automation failed"
+          body=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
+            "The feed freshness check failed. The committed feeds may now be stale." \
+            "Run: $RUN_URL" \
+            "Event: $RUN_EVENT" \
+            "Commit: $RUN_SHA" \
+            "Inspect the failed step, repair the parser or workflow, then rerun feed-refresh from main.")
+          issue=$(gh issue list --state open --limit 100 --json number,title \
+            --jq 'map(select(.title == "Feed refresh automation failed")) | .[0].number // ""')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "$body"
+          elif ! gh issue create --title "$title" --body "$body" --label model-eol; then
+            gh issue create --title "$title" --body "$body"
+          fi

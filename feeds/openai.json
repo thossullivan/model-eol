@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-08-03T21:43:59.800Z",
+  "generated": "2026-08-18T00:47:44.930Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -308,35 +308,35 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.4-mini"
+      "replacement": "gpt-5.6-terra"
     },
     {
       "id": "ft-gpt-4",
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.5"
+      "replacement": "gpt-5.6-sol"
     },
     {
       "id": "ft-gpt-4.1-nano-2025-04-14",
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.4-nano"
+      "replacement": "gpt-5.6-luna"
     },
     {
       "id": "ft-babbage-002",
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.4-mini"
+      "replacement": "gpt-5.6-terra"
     },
     {
       "id": "ft-davinci-002",
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-04-22",
       "shutdown": "2026-10-23",
-      "replacement": "gpt-5.4-mini"
+      "replacement": "gpt-5.6-terra"
     },
     {
       "id": "sora-2",
@@ -373,40 +373,28 @@
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2025-09-26",
       "shutdown": "2026-09-28",
-      "replacement_options": [
-        "gpt-5.4-mini",
-        "gpt-5-mini"
-      ]
+      "replacement": "gpt-5.6-terra"
     },
     {
       "id": "babbage-002",
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2025-09-26",
       "shutdown": "2026-09-28",
-      "replacement_options": [
-        "gpt-5.4-mini",
-        "gpt-5-mini"
-      ]
+      "replacement": "gpt-5.6-terra"
     },
     {
       "id": "davinci-002",
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2025-09-26",
       "shutdown": "2026-09-28",
-      "replacement_options": [
-        "gpt-5.4-mini",
-        "gpt-5-mini"
-      ]
+      "replacement": "gpt-5.6-terra"
     },
     {
       "id": "gpt-3.5-turbo-1106",
       "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2025-09-26",
       "shutdown": "2026-09-28",
-      "replacement_options": [
-        "gpt-5.4-mini",
-        "gpt-5-mini"
-      ]
+      "replacement": "gpt-5.6-terra"
     },
     {
       "id": "computer-use-preview-2025-03-11",
@@ -427,10 +415,7 @@
     },
     {
       "id": "gpt-4o-mini-tts-2025-03-20",
-      "source": "https://developers.openai.com/api/docs/deprecations",
-      "announced": "2026-04-22",
-      "shutdown": "2026-07-23",
-      "replacement": "gpt-4o-mini-tts-2025-12-15"
+      "source": "https://developers.openai.com/api/docs/deprecations"
     },
     {
       "id": "gpt-4o-search-preview-2025-03-11",

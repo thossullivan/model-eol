@@ -33,6 +33,7 @@ import {
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
 import { validateGeneratedFeeds } from '../refresh.mjs'
+import { classifyFeedReleasePaths } from '../../scripts/feed-release-guard.mjs'
 import { validateReleaseVersion } from '../../scripts/validate-release-version.mjs'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -631,6 +632,12 @@ assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 
 assert(refreshWorkflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]') && refreshWorkflow.includes('exit code $distributors'), 'workflow fails explicitly on unexpected distributor refresh exit codes')
 assert(refreshWorkflow.includes('GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}'), 'workflow passes the Google models endpoint credential')
 assert(refreshWorkflow.includes('--distributor aws-bedrock,vertex-ai'), 'workflow refreshes every implemented distributor')
+assert(refreshWorkflow.includes('issues: write') && refreshWorkflow.includes('if: failure()') && refreshWorkflow.includes('Feed refresh automation failed'), 'workflow gives failed refreshes a durable issue')
+assert(refreshWorkflow.includes('gh issue comment "$issue" --body "$body"') && refreshWorkflow.includes('gh issue create --title "$title"'), 'workflow updates one failure issue instead of silently repeating failures')
+assert(refreshWorkflow.includes('Resolve prior feed refresh failure') && refreshWorkflow.includes('gh issue close "$issue" --reason completed'), 'a successful refresh resolves the prior failure issue')
+assert(refreshWorkflow.includes('$GITHUB_STEP_SUMMARY') && refreshWorkflow.includes('no material feed changes were found') && refreshWorkflow.includes('feed-generated date is intentionally unchanged'), 'a successful no-change refresh records an honest result without changing feed freshness')
+const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
+assert(readme.includes('actions/workflows/feed-refresh.yml/badge.svg'), 'README exposes feed-refresh workflow health')
 const releaseWorkflow = fs.readFileSync(path.join(root, '.github/workflows/npm-release.yml'), 'utf8')
 assert(releaseWorkflow.includes('release_version:') && releaseWorkflow.includes('type: string') && !releaseWorkflow.includes('release_version:\n        default:'), 'manual releases require an explicit exact version')
 assert(validateReleaseVersion({ current: '0.2.4', requested: '0.3.0', published: ['0.2.4'] }) === '0.3.0', 'release validation accepts the requested 0.3.0 minor release')
@@ -654,6 +661,12 @@ assert(releaseWorkflow.includes('npm view model-eol versions --json') && release
 assert(releaseWorkflow.includes('node scripts/validate-release-version.mjs "$current" "$RELEASE_VERSION" "$published"'), 'manual releases run the tested release-version validator')
 assert(releaseWorkflow.includes('npm version "$RELEASE_VERSION"'), 'manual releases apply the exact requested version')
 assert(releaseWorkflow.includes('npm version patch -m "model-eol v%s - automated feed-data release"'), 'automated feed releases remain patch-only')
+const feedOnlyRelease = classifyFeedReleasePaths(['feeds/openai.json', 'feeds/google.json', 'README.md'])
+assert(feedOnlyRelease.changed && feedOnlyRelease.blockedPaths.length === 0, 'feed and generated README metadata changes may publish an automatic patch')
+const mixedRelease = classifyFeedReleasePaths(['feeds/openai.json', 'README.md', 'lib/scanner.mjs', '.github/workflows/ci.yml'])
+assert(!mixedRelease.changed && JSON.stringify(mixedRelease.blockedPaths) === JSON.stringify(['lib/scanner.mjs', '.github/workflows/ci.yml']), 'code mixed with feeds requires an explicit release')
+assert(!classifyFeedReleasePaths(['README.md']).changed, 'README-only changes do not publish an automatic feed patch')
+assert(releaseWorkflow.includes('node scripts/feed-release-guard.mjs "$last"') && !releaseWorkflow.includes('git diff --quiet "$last"..HEAD -- feeds/'), 'npm release workflow uses the tested mixed-change guard')
 assert(releaseWorkflow.includes('git push --atomic origin main "$version" +refs/tags/v0:refs/tags/v0') && !releaseWorkflow.includes('git push -f origin v0'), 'release commit, immutable version tag, and moving v0 tag push atomically')
 const freshnessScript = fs.readFileSync(path.join(root, 'scripts/update-readme-freshness.mjs'), 'utf8')
 assert(freshnessScript.includes('AWS Bedrock and Google Vertex AI lifecycle pages'), 'README freshness metadata names every automated distributor source')

@@ -3,13 +3,14 @@
 ![npm](https://img.shields.io/npm/v/model-eol)
 [![marketplace](https://img.shields.io/badge/marketplace-model--eol%20check-blue?logo=github)](https://github.com/marketplace/actions/model-eol-check)
 ![CI](https://github.com/thossullivan/model-eol/actions/workflows/ci.yml/badge.svg)
+[![feed refresh](https://github.com/thossullivan/model-eol/actions/workflows/feed-refresh.yml/badge.svg)](https://github.com/thossullivan/model-eol/actions/workflows/feed-refresh.yml)
 ![spec](https://img.shields.io/badge/spec-model--eol%2F0.1-blue)
 ![deps](https://img.shields.io/badge/runtime%20deps-zero-brightgreen)
 ![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 **A machine-readable deprecation feed format for AI models, plus the reference
-tooling that turns it into a Dependabot for models.** v0.2.4.
+tooling that turns it into a Dependabot for models.**
 
 ![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
 
@@ -32,7 +33,7 @@ second, so the existing trackers can converge instead of each scraping alone.
   replacement, `distributions` for per-channel lifecycles, and publisher `policy`
   floors. Small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (29 entries), Google (64 entries) and OpenAI (194 entries), generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated 2026-08-03<!-- /feeds-status -->. Every
+- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (29 entries), Google (86 entries) and OpenAI (194 entries), generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated 2026-08-18<!-- /feeds-status -->. Every
   dated entry carries a source URL.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
   ML-BOM export, retirement schedule, alerts and badges, migration plan/apply.
