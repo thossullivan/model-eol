@@ -20,12 +20,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
+          package-manager-cache: false
       - name: Build the versioned plan
         run: |
           mkdir -p "$RUNNER_TEMP/model-eol-plan"
@@ -39,7 +40,7 @@ jobs:
           if [ ! -f .model-eol.json ]; then PLAN_ARGS+=(--days 90 --scope direct); fi
           npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol "${PLAN_ARGS[@]}" > "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json"
       - name: Upload plan
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: model-eol-plan
           path: |
@@ -56,14 +57,15 @@ jobs:
     steps:
       # Provider credentials exist only in this read-only job. The evaluator
       # forwards only names explicitly allowed by eval.pass_env.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
+          package-manager-cache: false
       - name: Download trusted plan
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: model-eol-plan
           path: ${{ runner.temp }}/model-eol-plan
@@ -88,7 +90,7 @@ jobs:
             --plan-file "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json" \
             --output-file "$RUNNER_TEMP/model-eol-eval/model-eol-eval-results.json"
       - name: Upload bounded eval results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: model-eol-eval-results
           path: ${{ runner.temp }}/model-eol-eval/model-eol-eval-results.json
@@ -103,21 +105,22 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # model-eol-bot authenticates its own temporary HTTPS clones and
           # pushes with GITHUB_TOKEN; no checkout credential is persisted.
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
+          package-manager-cache: false
       - name: Download trusted plan
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: model-eol-plan
           path: ${{ runner.temp }}/model-eol-plan
       - name: Download eval results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: model-eol-eval-results
           path: ${{ runner.temp }}/model-eol-eval

@@ -115,7 +115,7 @@ The same gate as a composite action - no npm install, feeds bundled, pinned to
 the `v0` line:
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
   with:
     fetch-depth: 0 # --changed needs history to diff against the base ref
 - uses: thossullivan/model-eol@v0
