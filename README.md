@@ -14,31 +14,6 @@ tooling that turns it into a Dependabot for models.**
 
 ![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
 
-## Release line
-
-**0.4.1 - trusted migrations.** The 0.4 line made bot migrations independently
-evaluable and bound each result to the exact default-branch commit, plan, eval
-configuration, and feed digests. The workflow resolves the package version once
-and reuses that exact version across planning, evaluation, and publication. It added
-path-scoped policy and lifecycle routing for mixed-provider repositories,
-trusted PR/issue ownership, stale-work reconciliation, and fresh-work behavior
-when a retired model returns. The 0.4.1 patch moved the copy-ready workflows to
-the current Node-backed Actions and fixed Google models-endpoint pagination. The
-bundled feeds contain 313 entries across Amazon, Anthropic, Google, and OpenAI.
-
-**0.5.0 - public contract and trust.** This milestone makes the data contract public:
-canonical hosted schemas, a zero-dependency `validate` command, hosted feeds,
-an Atom changelog, and byte-exact refresh receipts whose digests must match the
-published data. It adds status-aware distributor refresh including Bedrock Public
-Extended Access, preserves structured replacement guidance across JSON reports
-and preserves channel-specific lifecycle clocks in CycloneDX,
-preflights multi-file apply plan-wide and rolls back later commit failures,
-fails explicitly on unapproved symlink coverage, and keeps configured eval
-failures as distinct durable issues. It also
-ships a repository-owned eval-harness starter, permanent exact-package consumer
-UAT, and a Node 22 support floor. The hosted URLs become authoritative only after
-the first green Pages deployment.
-
 ## The problem
 
 On July 23, 2026, OpenAI shut down a scheduled wave of model snapshots. One of my
@@ -68,10 +43,11 @@ second, so the existing trackers can converge instead of each scraping alone.
 - **`bot/`** - the Dependabot part: a cron GitHub workflow that maintains one
   migration PR or issue per retiring model, published as the `model-eol-bot`
   binary in the same npm package.
-- **Public contract rollout** - the 0.5 Pages workflow publishes versioned
-  schemas, hosted feeds, refresh health, and an Atom changelog. Those URLs
-  become authoritative only after Pages is enabled and the exact-byte deployment
-  check passes.
+- **Public contract** - versioned schemas, hosted feeds, refresh health, a
+  publication manifest, and an Atom changelog are live at
+  [`thossullivan.github.io/model-eol`](https://thossullivan.github.io/model-eol/).
+  Publication requires a refresh receipt for the exact feeds on `main`, followed
+  by an exact-byte check against every deployed asset.
 
 ## Try it
 
@@ -400,10 +376,9 @@ after the dry run if you want to retain the receipt as UAT evidence. Then let
 `bot.yml.example` run the same contract with any explicitly opted-in provider
 keys available to its read-only evaluate job, not its write-capable publish job.
 
-Starting in 0.5, inline `model-eol-bot --eval` and the legacy unbound report/status
-artifacts are refused. A configured publication must consume the commit-bound
-manifest from `model-eol-bot evaluate`; missing results fail before GitHub API
-access.
+Inline `model-eol-bot --eval` and the legacy unbound report/status artifacts are
+refused. A configured publication must consume the commit-bound manifest from
+`model-eol-bot evaluate`; missing results fail before GitHub API access.
 
 On its first actionable run, the bot creates the `model-eol` label. If repository
 policy prevents label creation or assignment, it fails closed rather than publish
@@ -448,9 +423,8 @@ The refresh also travels in the other direction. On August 3, Google removed the
 previously listed October 16 earliest shutdown dates for the Gemini 2.5 Pro,
 Flash, and Flash-Lite GA models. The pipeline opened
 [a PR with the semantic retraction](https://github.com/thossullivan/model-eol/pull/60),
-and merging it published v0.2.3 so downstream checks stopped warning from dates
-Google no longer listed. A lifecycle tracker has to retract stale alarms as well
-as add new ones.
+and downstream checks stopped warning from dates Google no longer listed. A
+lifecycle tracker has to retract stale alarms as well as add new ones.
 
 ## The actual ask
 
@@ -469,15 +443,12 @@ move any of us can make here.
   CI runs the full suite on every push and PR. The copy-ready bot workflow ships
   as `bot.yml.example` and consumes the published package rather than local copies
   of the tooling.
-- The 0.5 Pages workflow publishes canonical schemas, feeds, refresh health, and
-  Atom at `thossullivan.github.io/model-eol`. Treat that host as authoritative
-  only after repository Pages is enabled and its first deployment passes the
-  exact-byte live check. `model-eol validate` checks feeds, repository policy,
-  check reports, inventories, schedules, alerts, and plans against the same zero-dependency
-  runtime contracts.
-  Maintainer rollout: set Pages source to GitHub Actions, dispatch `feed-refresh`
-  from `main`, and require the resulting `public-contract` deployment to pass
-  before releasing 0.5.
+- The [public contract](https://thossullivan.github.io/model-eol/) publishes
+  canonical schemas, feeds, refresh health, a publication manifest, and Atom.
+  Each deployment is bound to an exact feed-refresh receipt and verified against
+  every live asset. `model-eol validate` checks feeds, repository policy, check
+  reports, inventories, schedules, alerts, and plans against the same
+  zero-dependency runtime contracts.
 - Current-model entries (and therefore policy-floor horizons) populate only when
   refresh runs with provider API keys for the models endpoints.
 - The checker matches known IDs only - it will not discover models absent from the
