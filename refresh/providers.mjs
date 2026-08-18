@@ -600,6 +600,7 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
 export const parseGoogleGeminiDeprecations = parseGoogleDeprecations
 
 const MAX_MODEL_PAGES = 20
+const GOOGLE_MODEL_PAGE_SIZE = 1000
 
 function parseModelsPage(body, provider) {
   let parsed
@@ -640,8 +641,7 @@ export function parseModelsResponse(body, provider = 'provider') {
   return parseModelsPage(body, provider).ids
 }
 
-/** Parse Google's models endpoint response and remove its resource prefix. */
-export function parseGoogleModelsResponse(body) {
+function parseGoogleModelsPage(body) {
   let parsed
   try {
     parsed = typeof body === 'string' ? JSON.parse(body) : body
@@ -656,13 +656,26 @@ export function parseGoogleModelsResponse(body) {
     if (!row || typeof row.name !== 'string' || !row.name.trim()) {
       throw new Error('google models response contains an entry without a model name')
     }
-    const id = row.name.trim().replace(/^models\//, '')
+    const name = row.name.trim()
+    if (!name.startsWith('models/')) {
+      throw new Error(`google models response contains an invalid model resource name ${name}`)
+    }
+    const id = name.slice('models/'.length)
     if (!id) throw new Error('google models response contains an empty model id')
-    if (seen.has(id)) throw new Error(`google models response contains duplicate model id ${id}`)
+    if (seen.has(id)) continue
     seen.add(id)
     ids.push(id)
   }
-  return ids
+  const nextPageToken = parsed?.nextPageToken
+  if (nextPageToken !== undefined && (typeof nextPageToken !== 'string' || !nextPageToken.trim())) {
+    throw new Error('google models response has an invalid nextPageToken value')
+  }
+  return { ids, nextPageToken }
+}
+
+/** Parse Google's models endpoint response and remove its resource prefix. */
+export function parseGoogleModelsResponse(body) {
+  return parseGoogleModelsPage(body).ids
 }
 
 export const parseOpenAIModels = body => parseModelsResponse(body, 'openai')
@@ -674,6 +687,36 @@ function nextPageUrl(url, parameter, cursor) {
   const next = new URL(url)
   next.searchParams.set(parameter, cursor)
   return next.toString()
+}
+
+async function fetchPaginatedGoogleModels(config, headers, fetchImpl) {
+  const ids = []
+  const seenIds = new Set()
+  const seenTokens = new Set()
+  const firstPage = new URL(config.modelsUrl)
+  firstPage.searchParams.delete('pageToken')
+  if (!firstPage.searchParams.has('pageSize')) firstPage.searchParams.set('pageSize', String(GOOGLE_MODEL_PAGE_SIZE))
+  let url = firstPage.toString()
+
+  for (let page = 1; page <= MAX_MODEL_PAGES; page++) {
+    const body = await fetchBody(url, headers, config.publisher, fetchImpl)
+    const parsed = parseGoogleModelsPage(body)
+    for (const id of parsed.ids) {
+      if (seenIds.has(id)) continue
+      seenIds.add(id)
+      ids.push(id)
+    }
+    if (parsed.nextPageToken === undefined) return ids
+    if (page === MAX_MODEL_PAGES) {
+      throw new Error(`google models endpoint exceeded pagination cap of ${MAX_MODEL_PAGES} pages`)
+    }
+    if (seenTokens.has(parsed.nextPageToken)) {
+      throw new Error('google models pagination token repeated')
+    }
+    seenTokens.add(parsed.nextPageToken)
+    url = nextPageUrl(firstPage, 'pageToken', parsed.nextPageToken)
+  }
+  throw new Error('google models endpoint pagination failed')
 }
 
 async function fetchPaginatedModels(config, headers, fetchImpl) {
@@ -932,8 +975,7 @@ export async function loadProviderSources(config, options = {}) {
       if (config.publisher === 'anthropic') headers['x-api-key'] = key
       if (config.keyHeader) headers[config.keyHeader] = key
       if (config.publisher === 'google') {
-        const body = await fetchBody(config.modelsUrl, headers, config.publisher, fetchImpl)
-        currentIds = parseGoogleModelsResponse(body)
+        currentIds = await fetchPaginatedGoogleModels(config, headers, fetchImpl)
       } else {
         currentIds = await fetchPaginatedModels(config, headers, fetchImpl)
       }
