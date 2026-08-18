@@ -41,7 +41,12 @@ try {
   assert(workflow.match(/persist-credentials: false/g)?.length === 2, 'both workflow jobs disable persisted checkout credentials')
 
   const packResult = run(npm, ['pack', root, '--json', '--ignore-scripts'], { cwd: tempRoot })
-  const packed = JSON.parse(packResult.stdout)[0]
+  const packOutput = JSON.parse(packResult.stdout)
+  const packed = Array.isArray(packOutput)
+    ? packOutput[0]
+    : packOutput && typeof packOutput === 'object'
+      ? packOutput[manifest.name] ?? Object.values(packOutput)[0]
+      : null
   assert(packed?.filename, 'npm pack produced a tarball description')
   const packedFiles = new Set((packed.files ?? []).map(file => file.path))
   for (const file of [
