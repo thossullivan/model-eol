@@ -336,6 +336,19 @@ const invalidSharedConfig = path.join(tempRoot, 'invalid-shared-config.json')
 fs.writeFileSync(invalidSharedConfig, JSON.stringify({ ignore: { path: ['src/**'] } }))
 const invalidSharedConfigRun = run(['inventory', repositoryConfigDir, '--config', invalidSharedConfig, '--json'])
 assert(invalidSharedConfigRun.code === 2 && invalidSharedConfigRun.err.includes('ignore.path'), 'CLI preserves strict unknown-key validation for shared config')
+const invalidUtf8Config = path.join(tempRoot, 'invalid-utf8-config.json')
+fs.writeFileSync(invalidUtf8Config, Buffer.concat([
+  Buffer.from('{"ignore":{"paths":["noise-'),
+  Buffer.from([0xff]),
+  Buffer.from('"]}}\n'),
+]))
+const invalidUtf8ConfigRun = run(['inventory', repositoryConfigDir, '--config', invalidUtf8Config, '--json'])
+assert(
+  invalidUtf8ConfigRun.code === 2 &&
+    invalidUtf8ConfigRun.err.includes('invalid UTF-8') &&
+    invalidUtf8ConfigRun.err.includes(path.basename(invalidUtf8Config)),
+  'operational config loading rejects invalid UTF-8 with the selected filename',
+)
 
 const partialGlobDir = path.join(tempRoot, 'partial-glob')
 fs.mkdirSync(path.join(partialGlobDir, 'partial', 'nested'), { recursive: true })
@@ -606,6 +619,34 @@ assert(trackedSymlinkGit(['add', '.model-eol.json']).status === 0 && trackedSyml
 const ignoredTrackedSymlink = run([trackedSymlinkRepo, '--json'])
 assert(ignoredTrackedSymlink.code === 0 && JSON.parse(ignoredTrackedSymlink.out).scan_notes.every(note => note.reason !== 'symlink-skipped'), 'repository path policy can explicitly accept an intentional tracked symlink')
 
+const untrackedNestedRepo = path.join(tempRoot, 'untracked-nested-repo')
+const untrackedNestedPath = path.join(untrackedNestedRepo, 'nested')
+fs.mkdirSync(untrackedNestedPath, { recursive: true })
+const untrackedNestedGit = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' })
+assert(untrackedNestedGit(untrackedNestedRepo, ['init', '-q']).status === 0, 'untracked-nested fixture initializes the parent repository')
+assert(untrackedNestedGit(untrackedNestedPath, ['init', '-q']).status === 0, 'untracked-nested fixture initializes the embedded repository')
+fs.writeFileSync(path.join(untrackedNestedPath, 'app.py'), 'MODEL = "o3-deep-research"\n')
+const untrackedNestedCheck = run([untrackedNestedRepo, '--json'])
+assert(untrackedNestedCheck.code === 2 && untrackedNestedCheck.err.includes('nested-repository-skipped'), 'an untracked nested Git repository fails check as incomplete coverage')
+const untrackedNestedPlan = run(['plan', untrackedNestedRepo])
+assert(untrackedNestedPlan.code === 2 && untrackedNestedPlan.err.includes('nested-repository-skipped'), 'an untracked nested Git repository fails plan as incomplete coverage')
+const allowedUntrackedNested = run([untrackedNestedRepo, '--allow-incomplete', '--json'])
+const allowedUntrackedNestedJson = JSON.parse(allowedUntrackedNested.out)
+assert(
+  allowedUntrackedNested.code === 0 &&
+    allowedUntrackedNestedJson.findings.length === 0 &&
+    allowedUntrackedNestedJson.scan_notes.some(note => note.reason === 'nested-repository-skipped' && note.file.endsWith('/nested')),
+  'allow-incomplete records an untracked nested repository without recursively scanning its retired reference',
+)
+const untrackedNestedConfig = path.join(untrackedNestedRepo, '.model-eol.json')
+fs.writeFileSync(untrackedNestedConfig, '{"ignore":{"paths":["nested"]}}\n')
+const ignoredUntrackedNested = run([untrackedNestedRepo, '--json'])
+assert(
+  ignoredUntrackedNested.code === 0 &&
+    JSON.parse(ignoredUntrackedNested.out).scan_notes.every(note => note.reason !== 'nested-repository-skipped'),
+  'repository path policy can explicitly accept an intentional untracked nested repository',
+)
+
 const trackedSubmoduleRepo = path.join(tempRoot, 'tracked-submodule-repo')
 const trackedSubmodulePath = path.join(trackedSubmoduleRepo, 'sub')
 fs.mkdirSync(trackedSubmodulePath, { recursive: true })
@@ -731,6 +772,23 @@ try {
   invalidControlMessage = error.message
 }
 assert(invalidControlMessage.includes('invalid-control.json') && invalidControlMessage.includes('replacement') && invalidControlMessage.includes('control characters'), 'loadFeeds rejects control characters in replacement fields')
+const invalidUtf8Feeds = path.join(tempRoot, 'invalid-utf8-feeds')
+const invalidUtf8Feed = path.join(invalidUtf8Feeds, 'invalid-utf8.json')
+fs.mkdirSync(invalidUtf8Feeds)
+fs.writeFileSync(invalidUtf8Feed, Buffer.concat([
+  Buffer.from('{"spec":"model-eol/0.1","publisher":"test","generated":"2026-08-01T00:00:00Z","source":"https://example.invalid/utf8","note":"bad-'),
+  Buffer.from([0xff]),
+  Buffer.from('","models":[{"id":"utf8-test-model"}]}\n'),
+]))
+let invalidUtf8FeedMessage = ''
+try {
+  loadFeeds(invalidUtf8Feeds)
+} catch (error) {
+  invalidUtf8FeedMessage = error.message
+}
+assert(invalidUtf8FeedMessage.includes('invalid-utf8.json') && invalidUtf8FeedMessage.includes('invalid UTF-8'), 'operational feed loading rejects invalid UTF-8 with the feed filename')
+const invalidUtf8FeedRun = run(['check', path.join(root, 'test/fixture'), '--feeds', invalidUtf8Feeds, '--json'])
+assert(invalidUtf8FeedRun.code === 2 && invalidUtf8FeedRun.err.includes('invalid-utf8.json') && invalidUtf8FeedRun.err.includes('invalid UTF-8'), 'check exits 2 instead of loading a replacement-decoded feed')
 
 const federationDir = path.join(tempRoot, 'federation')
 const federationFeeds = path.join(federationDir, 'feeds')
@@ -808,6 +866,18 @@ assert(changedRun.out.trim().startsWith('{'), `--changed emits JSON (stderr: ${c
 const changedJson = JSON.parse(changedRun.out)
 assert(changedRun.code === 1, '--changed fails for an added bad model')
 assert(changedJson.findings.length === 1 && changedJson.findings[0].id === 'claude-opus-4-1-20250805', '--changed pins parseable prefixes and color despite hostile Git config')
+const changedExpressionRun = run(['check', changedRepo, '--days', '30', '--changed', 'HEAD~0', '--json'])
+assert(changedExpressionRun.code === 1 && JSON.parse(changedExpressionRun.out).findings.length === 1, '--changed resolves ordinary revision expressions to a commit')
+const injectedDiffOutput = path.join(changedRepo, 'injected.diff')
+const injectedChanged = run(['check', changedRepo, '--days', '30', `--changed=--output=${injectedDiffOutput}`, '--json'])
+assert(
+  injectedChanged.code === 2 &&
+    injectedChanged.err.includes('base ref must not begin') &&
+    !fs.existsSync(injectedDiffOutput),
+  '--changed rejects leading-option input without allowing Git to create an output file',
+)
+const missingChangedBase = run(['check', changedRepo, '--days', '30', '--changed', 'definitely-not-a-ref', '--json'])
+assert(missingChangedBase.code === 2 && missingChangedBase.err.includes('could not resolve base ref'), '--changed fails closed when its revision does not resolve to a commit')
 assert(parseDiffPath('"b/path with spaces.py"') === 'path with spaces.py', 'Git diff path parsing preserves ordinary quoted paths with spaces')
 assert(parseDiffPath('"b/\\303\\251.py"') === 'é.py', 'Git diff path parsing decodes octal UTF-8 bytes')
 let malformedDiffPathFailed = false

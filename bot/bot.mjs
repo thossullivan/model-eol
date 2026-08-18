@@ -33,11 +33,15 @@ import {
   commitAll,
   configureIdentity,
   defaultBranch,
+  deleteRemoteBranch,
   gitAuthentication,
+  isCommitAvailable,
   originFor,
   prepareBranch,
   pushBranch,
+  restoreRemoteBranch,
   verifyBotBranch,
+  verifyRemoteBranchHead,
 } from './lib/git.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
@@ -913,6 +917,124 @@ const makePatch = ({ source, base, expectedBaseHead, branch, expectedHead, allow
 
 const decision = (group, action, extra = {}) => ({ group, action, ...extra })
 
+const publicationBaseDecision = ({ group, root, base, baseHead, gitAuth, number = undefined }) => {
+  const state = verifyRemoteBranchHead(root, base, baseHead, gitAuth)
+  if (state.safe) return null
+  return decision(group, 'stand-down', {
+    ...(number === undefined ? {} : { number }),
+    reason: state.error ? 'default-branch-unverifiable' : 'default-branch-moved',
+    expectedBaseHead: baseHead,
+    currentBaseHead: state.head,
+  })
+}
+
+const staleBodyFor = body => {
+  const metadata = parseMetadata(body)
+  if (!metadata) throw new Error('refusing to close bot pull request with malformed generated metadata')
+  return staleClosedBody(body, metadata)
+}
+
+const cleanupPushedBranchAndRethrow = ({ error, root, branch, headSha, gitAuth, context, relatedErrors = [] }) => {
+  try {
+    deleteRemoteBranch(root, branch, headSha, gitAuth)
+  } catch (cleanupError) {
+    throw new AggregateError(
+      [error, ...relatedErrors, cleanupError],
+      `${context} and exact-head cleanup of ${branch} also failed`,
+    )
+  }
+  if (relatedErrors.length) {
+    throw new AggregateError(
+      [error, ...relatedErrors],
+      `${context}; exact-head cleanup succeeded after pull-request state verification also failed`,
+    )
+  }
+  throw error
+}
+
+const rollbackPushedBranchAndRethrow = ({ error, root, branch, headSha, restoreHead, gitAuth, context }) => {
+  try {
+    restoreRemoteBranch(root, branch, headSha, restoreHead, gitAuth)
+  } catch (rollbackError) {
+    throw new AggregateError(
+      [error, rollbackError],
+      `${context} and exact-head rollback of ${branch} also failed`,
+    )
+  }
+  throw error
+}
+
+const recoverFailedPullUpdate = async ({ api, open, priorBody, error, root, group, headSha, restoreHead, rollbackTrusted, gitAuth, context }) => {
+  let current = null
+  let readError = null
+  try {
+    current = await api.getPull(open.item.number)
+  } catch (failure) {
+    readError = failure
+  }
+  const metadata = parseMetadata(current?.body)
+  const priorBodyProven = rollbackTrusted
+    && current?.number === open.item.number
+    && isOpen(current)
+    && hasModelEolLabel(current)
+    && current.head?.ref === group.branch
+    && current.head?.repo?.full_name === api.repo
+    && current.body === priorBody
+    && metadata?.head_sha === restoreHead
+  if (priorBodyProven) {
+    rollbackPushedBranchAndRethrow({
+      error,
+      root,
+      branch: group.branch,
+      headSha,
+      restoreHead,
+      gitAuth,
+      context,
+    })
+  }
+  cleanupPushedBranchAndRethrow({
+    error,
+    root,
+    branch: group.branch,
+    headSha,
+    gitAuth,
+    context: `${context} with ambiguous or changed pull-request state`,
+    relatedErrors: readError ? [readError] : [],
+  })
+}
+
+const closePullAtNewHead = async ({ api, open, body, root, branch, headSha, gitAuth }) => {
+  const closedBody = staleBodyFor(body)
+  try {
+    await api.updatePull(open.item.number, { state: 'closed', body: closedBody })
+  } catch (error) {
+    cleanupPushedBranchAndRethrow({
+      error,
+      root,
+      branch,
+      headSha,
+      gitAuth,
+      context: `pull request #${open.item.number} closure failed`,
+    })
+  }
+  return closedBody
+}
+
+const publicationBaseStandDownComment = (baseDecision, headSha) => baseDecision.reason === 'default-branch-unverifiable'
+  ? `model-eol is leaving this pull request closed because it could not re-verify the default branch after pushing evaluated migration head ${markdownCode(headSha)}. The new head is recorded as automated stale work and must be regenerated from a freshly evaluated base before reopening.`
+  : `model-eol is leaving this pull request closed because the default branch moved from evaluated commit ${markdownCode(baseDecision.expectedBaseHead)} to ${markdownCode(baseDecision.currentBaseHead || 'missing')} after pushing migration head ${markdownCode(headSha)}. The new head is recorded as automated stale work and must be reevaluated before reopening.`
+
+const closedBaseStandDownDecision = async ({ api, open, baseDecision, closedBody, headSha }) => {
+  await api.comment(open.item.number, publicationBaseStandDownComment(baseDecision, headSha))
+  return {
+    ...baseDecision,
+    number: open.item.number,
+    closedPullNumber: open.item.number,
+    body: closedBody,
+    headSha,
+  }
+}
+
 const closePullForEvalFailure = async ({ api, open, evalResult }) => {
   await api.comment(open.item.number, `model-eol is closing this bot-owned pull request because its configured migration eval no longer passes (${markdownCode(evalResult.status)}). The migration remains blocked and can be regenerated after the eval clears.`)
   await api.updatePull(open.item.number, {
@@ -977,7 +1099,29 @@ const processModel = async ({ api, pulls, issueRecords, group, source, base, bas
       return decision(group, 'stand-down', { number: open.item.number })
     }
     const body = buildPullBody({ group, headSha: patch.headSha, baseSha: baseHead, now, tokenKind, evalResult: externalEval, evalConfigHash })
-    await api.updatePull(open.item.number, { title: pullTitle(group), body })
+    const baseDecision = publicationBaseDecision({ group, root, base, baseHead, gitAuth, number: open.item.number })
+    if (baseDecision) {
+      const closedBody = await closePullAtNewHead({ api, open, body, root, branch: group.branch, headSha: patch.headSha, gitAuth })
+      return closedBaseStandDownDecision({ api, open, baseDecision, closedBody, headSha: patch.headSha })
+    }
+    const priorBody = open.item.body
+    try {
+      await api.updatePull(open.item.number, { title: pullTitle(group), body })
+    } catch (error) {
+      await recoverFailedPullUpdate({
+        api,
+        open,
+        priorBody,
+        error,
+        root,
+        group,
+        headSha: patch.headSha,
+        restoreHead: open.metadata.head_sha,
+        rollbackTrusted: true,
+        gitAuth,
+        context: `pull request #${open.item.number} update failed`,
+      })
+    }
     return decision(group, 'update', { number: open.item.number, body, headSha: patch.headSha })
   }
 
@@ -991,6 +1135,11 @@ const processModel = async ({ api, pulls, issueRecords, group, source, base, bas
 
   const previous = matches.find(record => record.metadata?.head_sha) ?? null
   const previousBotHead = previous?.metadata.head_sha ?? null
+  const previousRollbackHead = previousBotHead
+    && verifyBotBranch(root, group.branch, previousBotHead, gitAuth).safe
+    && isCommitAvailable(root, previousBotHead)
+    ? previousBotHead
+    : null
   if (!previousBotHead) {
     const occupied = verifyBotBranch(root, group.branch, null, gitAuth)
     if (occupied.error) throw new Error(occupied.error)
@@ -1026,19 +1175,58 @@ const processModel = async ({ api, pulls, issueRecords, group, source, base, bas
   if (latestConflict) return decision(group, 'conflict', { number: latestConflict.item.number })
   const latestOpen = latestMatches.find(record => isOpen(record.item))
   if (latestOpen) {
-    await api.updatePull(latestOpen.item.number, { title: pullTitle(group), body })
+    const baseDecision = publicationBaseDecision({ group, root, base, baseHead, gitAuth, number: latestOpen.item.number })
+    if (baseDecision) {
+      const closedBody = await closePullAtNewHead({ api, open: latestOpen, body, root, branch: group.branch, headSha: patch.headSha, gitAuth })
+      return closedBaseStandDownDecision({ api, open: latestOpen, baseDecision, closedBody, headSha: patch.headSha })
+    }
+    const priorBody = latestOpen.item.body
+    try {
+      await api.updatePull(latestOpen.item.number, { title: pullTitle(group), body })
+    } catch (error) {
+      await recoverFailedPullUpdate({
+        api,
+        open: latestOpen,
+        priorBody,
+        error,
+        root,
+        group,
+        headSha: patch.headSha,
+        restoreHead: previousRollbackHead,
+        rollbackTrusted: Boolean(previousRollbackHead && latestOpen.metadata.head_sha === previousRollbackHead),
+        gitAuth,
+        context: `concurrent pull request #${latestOpen.item.number} update failed`,
+      })
+    }
     return decision(group, 'update', { number: latestOpen.item.number, body, headSha: patch.headSha })
   }
   const latestUntrusted = latestPulls.find(item => pullOnExpectedBranch(item, group, api.repo) && !latestMatches.some(record => record.item.number === item.number))
   if (latestUntrusted) return decision(group, 'conflict', { number: latestUntrusted.number })
   const latestSuppressed = latestMatches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (latestSuppressed) return decision(group, 'skip-dismissed', { number: latestSuppressed.item.number })
-  const created = await api.createPull({
-    title: pullTitle(group),
-    head: group.branch,
-    base,
-    body,
-  })
+  const baseDecision = publicationBaseDecision({ group, root, base, baseHead, gitAuth })
+  if (baseDecision) {
+    deleteRemoteBranch(root, group.branch, patch.headSha, gitAuth)
+    return { ...baseDecision, headSha: patch.headSha, deletedBranch: group.branch }
+  }
+  let created
+  try {
+    created = await api.createPull({
+      title: pullTitle(group),
+      head: group.branch,
+      base,
+      body,
+    })
+  } catch (error) {
+    cleanupPushedBranchAndRethrow({
+      error,
+      root,
+      branch: group.branch,
+      headSha: patch.headSha,
+      gitAuth,
+      context: 'pull request creation failed',
+    })
+  }
   return decision(group, 'create', { number: created.number, body, headSha: patch.headSha })
 }
 

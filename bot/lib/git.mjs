@@ -105,6 +105,55 @@ export const verifyBotBranch = (cwd, branch, expectedHead, auth = null) => {
   }
 }
 
+export const verifyRemoteBranchHead = (cwd, branch, expectedHead, auth = null) => {
+  try {
+    run(cwd, ['fetch', 'origin', '--prune'], false, auth)
+  } catch (error) {
+    return { head: null, safe: false, error: error.message }
+  }
+  const head = run(cwd, ['rev-parse', '--verify', `refs/remotes/origin/${branch}`], true)
+  return {
+    head,
+    safe: head === expectedHead,
+    error: null,
+  }
+}
+
+const exactObjectId = value => typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value)
+
+const requireExactObjectId = (value, name) => {
+  if (!exactObjectId(value)) throw new Error(`refusing remote branch mutation without an exact ${name} commit`)
+}
+
+export const isCommitAvailable = (cwd, head) => exactObjectId(head)
+  && run(cwd, ['cat-file', '-e', `${head}^{commit}`], true) !== null
+
+export const deleteRemoteBranch = (cwd, branch, expectedHead, auth = null) => {
+  requireExactObjectId(expectedHead, 'expected')
+  const ref = `refs/heads/${branch}`
+  run(cwd, [
+    'push',
+    `--force-with-lease=${ref}:${expectedHead}`,
+    'origin',
+    `:${ref}`,
+  ], false, auth)
+}
+
+export const restoreRemoteBranch = (cwd, branch, expectedCurrentHead, restoreHead, auth = null) => {
+  requireExactObjectId(expectedCurrentHead, 'current')
+  requireExactObjectId(restoreHead, 'restore')
+  if (!isCommitAvailable(cwd, restoreHead)) {
+    throw new Error(`refusing remote branch rollback because restore commit ${restoreHead} is unavailable`)
+  }
+  const ref = `refs/heads/${branch}`
+  run(cwd, [
+    'push',
+    `--force-with-lease=${ref}:${expectedCurrentHead}`,
+    'origin',
+    `${restoreHead}:${ref}`,
+  ], false, auth)
+}
+
 export const pushBranch = (cwd, branch, expectedHead = null, auth = null, { allowMissing = false } = {}) => {
   const destination = `HEAD:refs/heads/${branch}`
   if (expectedHead !== null) {

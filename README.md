@@ -221,6 +221,11 @@ unless the path is explicitly ignored or `--allow-incomplete` is chosen. To
 inspect submodule contents, run model-eol against the checked-out submodule as a
 separate target/repository policy.
 
+Untracked nested Git repositories are handled the same way: the parent reports
+`nested-repository-skipped` and never recurses into the nested checkout. Ignore
+an intentional nested repository explicitly, allow incomplete coverage, or scan
+it separately with its own repository policy.
+
 Mixed-provider monorepos can keep those top-level values as repository defaults,
 then apply path policies and a lifecycle channel per reference:
 
