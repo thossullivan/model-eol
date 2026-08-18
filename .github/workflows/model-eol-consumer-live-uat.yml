@@ -27,14 +27,15 @@ jobs:
           node-version: 20
       - name: Build the versioned plan
         run: |
-          mkdir -p "$RUNNER_TEMP/model-eol-plan"
+          mkdir -p "$RUNNER_TEMP/model-eol-plan" "$RUNNER_TEMP/model-eol-npx"
           MODEL_EOL_VERSION="$(npm view "$MODEL_EOL_PACKAGE" version --json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const v=JSON.parse(s);const r=Array.isArray(v)?v.at(-1):v;if(typeof r!=="string")process.exit(1);process.stdout.write(r)})')"
           if [[ ! "$MODEL_EOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "refusing invalid resolved model-eol version: $MODEL_EOL_VERSION" >&2
             exit 1
           fi
           printf '%s\n' "$MODEL_EOL_VERSION" > "$RUNNER_TEMP/model-eol-plan/model-eol-version"
-          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol plan . \
+          npm exec --yes --prefix "$RUNNER_TEMP/model-eol-npx" \
+            --package="model-eol@$MODEL_EOL_VERSION" -- model-eol plan . \
             --config "$MODEL_EOL_CONFIG" \
             > "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json"
       - name: Upload plan
@@ -67,13 +68,14 @@ jobs:
           path: ${{ runner.temp }}/model-eol-plan
       - name: Apply and evaluate the migration
         run: |
-          mkdir -p "$RUNNER_TEMP/model-eol-eval"
+          mkdir -p "$RUNNER_TEMP/model-eol-eval" "$RUNNER_TEMP/model-eol-npx"
           MODEL_EOL_VERSION="$(cat "$RUNNER_TEMP/model-eol-plan/model-eol-version")"
           if [[ ! "$MODEL_EOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "refusing invalid resolved model-eol version: $MODEL_EOL_VERSION" >&2
             exit 1
           fi
-          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol-bot evaluate \
+          npm exec --yes --prefix "$RUNNER_TEMP/model-eol-npx" \
+            --package="model-eol@$MODEL_EOL_VERSION" -- model-eol-bot evaluate \
             --target-dir . \
             --config "$MODEL_EOL_CONFIG" \
             --plan-file "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json" \
@@ -118,12 +120,14 @@ jobs:
           MODEL_EOL_EVAL_RESULTS_FILE: ${{ runner.temp }}/model-eol-eval/model-eol-eval-results.json
           MODEL_EOL_TOKEN_KIND: github-token
         run: |
+          mkdir -p "$RUNNER_TEMP/model-eol-npx"
           MODEL_EOL_VERSION="$(cat "$RUNNER_TEMP/model-eol-plan/model-eol-version")"
           if [[ ! "$MODEL_EOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "refusing invalid resolved model-eol version: $MODEL_EOL_VERSION" >&2
             exit 1
           fi
-          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol-bot \
+          npm exec --yes --prefix "$RUNNER_TEMP/model-eol-npx" \
+            --package="model-eol@$MODEL_EOL_VERSION" -- model-eol-bot \
             --repo "${{ github.repository }}" \
             --target-dir . \
             --config "$MODEL_EOL_CONFIG"
