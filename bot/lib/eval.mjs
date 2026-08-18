@@ -9,6 +9,12 @@ const truncateReport = (bytes, limit, truncated) => {
   return Buffer.concat([bytes.subarray(0, limit - marker.length), marker]).subarray(0, limit).toString('utf8')
 }
 
+export const capReport = (report, limit) => {
+  if (report === null || report === undefined) return null
+  const bytes = Buffer.from(String(report), 'utf8')
+  return truncateReport(bytes, Math.max(0, limit), bytes.length > limit)
+}
+
 export const readReportCapped = (file, limit) => {
   const cap = Math.max(0, limit)
   let lstat

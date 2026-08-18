@@ -263,7 +263,9 @@ comes from the config unless the `MODEL_EOL_EVAL_COMMAND` repository variable is
 set as an explicit workflow override. Each patchable model is applied in an
 isolated checkout and evaluated independently with its own old/new IDs, timeout,
 bounded report, and explicitly allowed environment. The content-bound result
-manifest lets passing migrations proceed while a failing peer remains blocked.
+manifest is also pinned to the evaluated Git commit, letting passing migrations
+proceed while a failing peer remains blocked without publishing against a newer,
+unevaluated default branch.
 
 On its first actionable run, the bot creates the `model-eol` label. If repository
 policy prevents label creation or assignment, it fails closed rather than publish

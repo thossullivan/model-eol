@@ -70,17 +70,30 @@ bot adapter consuming versioned `plan --json`. Nothing stateful in the core.
 
 ### A3. Bot adapter (separate task, after A1/A2 integrate)
 
-- Cron workflow scans the default branch; per retiring model maintains exactly
-  one PR on a ref-safe slugged branch (`model-eol/<publisher>/<slug>`).
-- Lifecycle: refuse to force-push a branch that diverged from bot-only history;
-  workflow `concurrency` keyed per repo; machine-readable metadata block
-  (HTML comment JSON: canonical id, shutdown, feed digest) in the PR body plus a
-  `model-eol` label carry all state - the bot itself stays stateless.
+- Cron workflow scans the default branch; per retiring model and distributor
+  clock it maintains one open PR on a deterministic ref-safe branch
+  (`model-eol/<publisher>/<via?>/<slug>-<hash>`).
+- Lifecycle: trust work only when the `model-eol` label, valid metadata identity,
+  target repository, and expected branch agree. Malformed or user-authored
+  markers elsewhere never suppress findings. Before every skip or force-push,
+  independently fetch the branch and verify the recorded head, bot committer,
+  target default branch, and recorded base commit.
+- Reconciliation: valid labelled bot PRs and issues are commented and closed
+  when their findings disappear, become ignored/retracted, change clock or kind,
+  or issue publication is disabled. A previously merged migration does not
+  suppress a retired model that is later reintroduced; a deleted historical bot
+  branch may be safely recreated after its recorded lease is checked.
+- Workflow `concurrency` is keyed per repo. A machine-readable metadata block
+  (HTML comment JSON: canonical id, shutdown, replacement, clock, feed digest,
+  base/head commits) plus the label carries all state; the bot stays stateless.
 - Dismissal: closed-unmerged PR with matching metadata means "don't reopen for
   this (id, shutdown)"; a changed shutdown date reopens.
 - PR body: announced/shutdown dates, days remaining, sources, feed notes,
   distributor clock when configured, "replacement per feed as of <run date>"
   timestamp, explicit warning that checks may be skipped under `GITHUB_TOKEN`.
+- **Ownership label**: label creation and assignment are fail-closed. Publishing
+  unlabeled work would make future ownership decisions forgeable, so a label
+  policy failure produces a blocked non-zero outcome instead.
 - **Token reality**: PRs created with `GITHUB_TOKEN` do not trigger
   `on: pull_request` workflows. Document a fine-grained PAT / GitHub App token
   as the recommended path; degrade gracefully (PR still opens, body warns).
@@ -94,11 +107,24 @@ Contract: `{"eval": {"command": "..."}}` in `.model-eol.json`; env vars
 `MODEL_EOL_OLD_ID`, `MODEL_EOL_NEW_ID`, `MODEL_EOL_PLAN`; exit 0 = pass;
 optional markdown report via `MODEL_EOL_REPORT` path.
 
-Execution rules: the eval runs in a separate least-privilege job - no write
-token, no secrets beyond the provider API key, bounded runtime and output size,
-explicit opt-in. The report is untrusted content: capped and fenced when
-embedded in the PR body. Evals only run when the patch changed since the last
-bot push (they cost real API spend).
+Execution rules: the workflow resolves the moving npm major once, validates and
+records the exact version, and reuses it in all three jobs. The plan job emits a
+versioned plan. A separate least-privilege evaluate job independently verifies
+that plan, applies each migration in its own temporary checkout, then invokes
+the configured command with its own old/new IDs and selected plan. It has no
+write token; provider keys are forwarded only when named by `eval.pass_env`.
+Timeout and report-size limits apply per migration, and eval workspace/history
+drift turns that migration into a failure.
+
+The evaluate job always uploads one bounded result manifest containing an exact
+pass/fail/timeout record per migration. The manifest is bound to the evaluated
+Git commit plus stable plan and eval-configuration digests. The publish job
+refuses a newer default-branch head, receives no provider keys,
+independently regenerates the plan, verifies both artifacts before any GitHub
+operation, publishes passing migrations, records failed peers as blocked, and
+returns non-zero if any conflict, eval failure, lease stand-down, label failure,
+or degraded report-only decision remains. Reports are untrusted content: capped
+and fenced when embedded in PR bodies.
 
 ### Config - `.model-eol.json` in the consuming repo
 

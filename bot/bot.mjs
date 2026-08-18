@@ -20,12 +20,13 @@ import {
   parseMetadata,
   repoPath,
   sha256,
+  stableJson,
 } from './lib/common.mjs'
 import { validatePlanItems } from '../lib/apply.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
 import { loadConfig } from './lib/config.mjs'
 import { downloadFeeds } from './lib/feeds.mjs'
-import { readReportCapped, runEvalHook, reportForBody } from './lib/eval.mjs'
+import { capReport, readReportCapped, runEvalHook, reportForBody } from './lib/eval.mjs'
 import { GitHubClient, hasModelEolLabel } from './lib/github.mjs'
 import {
   cloneRepository,
@@ -36,6 +37,7 @@ import {
   originFor,
   prepareBranch,
   pushBranch,
+  verifyBotBranch,
 } from './lib/git.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
@@ -43,12 +45,15 @@ const CHECKER = path.join(ROOT, 'check.mjs')
 const VENDORED_FEEDS = path.join(ROOT, 'feeds')
 const PLAN_SCHEMA = 'model-eol.plan/0.1'
 const BOT_SCHEMA = 'model-eol.bot/0.1'
+const EVAL_SCHEMA = 'model-eol.eval/0.1'
+const EVAL_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
 const ISSUE_REASONS = new Set([
   'not-direct-api',
   'no-replacement',
   'replacement-choice',
   'replacement-unresolved',
   'replacement-retiring',
+  'shutdown-date-unavailable',
   'publisher-fallback',
   'unresolved-channel',
 ])
@@ -85,15 +90,44 @@ export const parseArgs = argv => {
   return options
 }
 
+export const parseEvaluateArgs = argv => {
+  const { values } = parseCliArgs({
+    args: argv,
+    options: {
+      'target-dir': { type: 'string' },
+      config: { type: 'string' },
+      'plan-file': { type: 'string' },
+      'output-file': { type: 'string' },
+      'feeds-url': { type: 'string', multiple: true },
+      help: { type: 'boolean', short: 'h' },
+    },
+    help: 'model-eol-bot evaluate --help',
+  })
+  const feedsUrls = []
+  for (const value of values['feeds-url'] ?? []) {
+    feedsUrls.push(...value.split(',').map(item => item.trim()).filter(Boolean))
+  }
+  return {
+    targetDir: values['target-dir'] ?? process.cwd(),
+    configPath: values.config ?? null,
+    planFile: values['plan-file'] ?? null,
+    outputFile: values['output-file'] ?? null,
+    feedsUrls,
+    help: values.help ?? false,
+  }
+}
+
 export const helpText = () => `model-eol bot
 
 Usage:
   node bot/bot.mjs [--repo owner/name] [--target-dir PATH] [--config PATH] [--dry-run] [--eval] [--feeds-url URL[,URL...]]
+  node bot/bot.mjs evaluate --target-dir PATH --plan-file PATH --output-file PATH [--config PATH] [--feeds-url URL[,URL...]]
 
 Environment:
   GITHUB_TOKEN            Required unless --dry-run; authenticates the API and HTTPS Git remotes.
   GITHUB_API_URL          GitHub API root, default https://api.github.com.
   MODEL_EOL_TOKEN_KIND    Set to github-token to add the checks warning to PRs.
+  MODEL_EOL_EVAL_COMMAND  Optional command override used by both evaluate and publish.
 `
 
 const validateRepo = repo => {
@@ -102,9 +136,12 @@ const validateRepo = repo => {
 }
 
 const spawnPlan = ({ workDir, config, configPath = null, feedsDir, checkerPath = CHECKER, warn = console.error }) => {
-  const args = [checkerPath, 'plan', '.', '--days', String(config.days), '--scope', config.scope]
-  if (config.via) args.push('--via', config.via)
+  const args = [checkerPath, 'plan', '.']
   if (configPath) args.push('--config', configPath)
+  else {
+    args.push('--days', String(config.days), '--scope', config.scope)
+    if (config.via) args.push('--via', config.via)
+  }
   if (feedsDir) args.push('--feeds', feedsDir)
   const result = spawnSync(process.execPath, args, {
     cwd: workDir,
@@ -213,6 +250,74 @@ const readEvalArtifact = (file, maxBytes, statusFile = null) => {
   return { status: exitCode === 0 ? 'pass' : 'fail', exit_code: exitCode, report: artifact.report || null }
 }
 
+const withoutGenerated = plan => {
+  const { generated, ...stable } = plan
+  return stable
+}
+
+const planDigest = plan => sha256(stableJson(withoutGenerated(plan)))
+
+const effectiveEval = (config, commandOverride = null) => ({
+  ...config.eval,
+  command: typeof commandOverride === 'string' && commandOverride.trim() ? commandOverride : config.eval.command,
+})
+
+const evalConfigDigest = settings => sha256(stableJson({
+  command: settings.command ?? null,
+  timeout_ms: settings.timeout_ms,
+  max_report_bytes: settings.max_report_bytes,
+  pass_env: settings.pass_env,
+}))
+
+const evalIdentity = (publisher, id, via) => `${publisher}\0${id}\0${via ?? ''}`
+
+const readJsonArtifact = (file, maxBytes, label) => {
+  const absolute = asAbsolute(file)
+  const artifact = readReportCapped(absolute, maxBytes + 1)
+  if (artifact.missing) throw new Error(`${label} is missing`)
+  if (Buffer.byteLength(artifact.report) > maxBytes) throw new Error(`${label} exceeds ${maxBytes} bytes`)
+  try {
+    return JSON.parse(artifact.report)
+  } catch (error) {
+    throw new Error(`${label} is malformed JSON: ${error.message}`)
+  }
+}
+
+const readEvalResults = ({ file, config, commandOverride, plan, groups, baseHead }) => {
+  const settings = effectiveEval(config, commandOverride)
+  const maxBytes = Math.min(EVAL_ARTIFACT_MAX_BYTES, Math.max(1024 * 1024, groups.length * (settings.max_report_bytes + 2048)))
+  const artifact = readJsonArtifact(file, maxBytes, 'eval results artifact')
+  if (artifact?.schema !== EVAL_SCHEMA) throw new Error(`refusing eval results schema ${artifact?.schema ?? 'missing'}; expected ${EVAL_SCHEMA}`)
+  if (artifact.plan_digest !== planDigest(plan)) throw new Error('refusing eval results artifact: plan digest does not match the independently verified plan')
+  if (artifact.eval_config_digest !== evalConfigDigest(settings)) throw new Error('refusing eval results artifact: eval configuration digest does not match')
+  if (typeof artifact.base_sha !== 'string' || !/^[0-9a-f]{40,64}$/.test(artifact.base_sha)) throw new Error('refusing eval results artifact: evaluated base commit is malformed or missing')
+  if (artifact.base_sha !== baseHead) throw new Error(`refusing eval results artifact: evaluated base commit ${artifact.base_sha} does not match current default-branch head ${baseHead}`)
+  const configured = Boolean(settings.command)
+  if (artifact.configured !== configured) throw new Error('refusing eval results artifact: configured state does not match eval.command')
+  if (!Array.isArray(artifact.results)) throw new Error('refusing eval results artifact: results must be an array')
+  if (artifact.results.length !== (configured ? groups.length : 0)) {
+    throw new Error('refusing eval results artifact: expected exactly one result for every planned migration')
+  }
+  const expected = new Map(groups.map(group => [evalIdentity(group.publisher, group.id, group.via), group]))
+  const results = new Map()
+  for (const result of artifact.results) {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('refusing eval results artifact: result must be an object')
+    if (typeof result.publisher !== 'string' || !result.publisher || typeof result.id !== 'string' || !result.id) throw new Error('refusing eval results artifact: result identity is malformed')
+    if (result.via !== null && typeof result.via !== 'string') throw new Error('refusing eval results artifact: result clock is malformed')
+    const key = evalIdentity(result.publisher, result.id, result.via)
+    const group = expected.get(key)
+    if (!group || results.has(key)) throw new Error('refusing eval results artifact: result identity is unexpected or duplicated')
+    if (result.feed_digest !== group.feedDigest) throw new Error(`refusing eval results artifact: feed digest mismatch for ${group.publisher}/${group.id}`)
+    if (!['pass', 'fail', 'timeout'].includes(result.status)) throw new Error(`refusing eval results artifact: invalid status for ${group.publisher}/${group.id}`)
+    if (result.exit_code !== null && !Number.isSafeInteger(result.exit_code)) throw new Error(`refusing eval results artifact: invalid exit code for ${group.publisher}/${group.id}`)
+    if (result.status === 'pass' && result.exit_code !== 0) throw new Error(`refusing eval results artifact: passing result has a non-zero exit code for ${group.publisher}/${group.id}`)
+    if (result.report !== null && typeof result.report !== 'string') throw new Error(`refusing eval results artifact: invalid report for ${group.publisher}/${group.id}`)
+    if (result.report !== null && Buffer.byteLength(result.report) > settings.max_report_bytes) throw new Error(`refusing eval results artifact: report exceeds configured cap for ${group.publisher}/${group.id}`)
+    results.set(key, { status: result.status, exit_code: result.exit_code, report: result.report })
+  }
+  return results
+}
+
 const feedContext = feedsDir => {
   const records = new Map()
   let files = []
@@ -270,16 +375,17 @@ const buildModelGroups = (plan, config, root, records) => {
   const groups = new Map()
   for (const item of plan.items) {
     if (isIgnored(item, root, config, ignoredIds)) continue
-    const key = `${item.publisher}\0${item.id}`
+    const via = Object.hasOwn(item, 'requested_via') ? item.requested_via : plan.via
+    const key = `${item.publisher}\0${item.id}\0${via ?? ''}`
     if (!groups.has(key)) {
       groups.set(key, {
         kind: 'model',
         id: item.id,
         publisher: item.publisher,
         items: [],
-        via: plan.via,
-        branch: branchFor(item.publisher, item.id, plan.via),
-        context: contextFor(records, item.publisher, item.id, plan.via),
+        via,
+        branch: branchFor(item.publisher, item.id, via),
+        context: contextFor(records, item.publisher, item.id, via),
       })
     }
     groups.get(key).items.push(item)
@@ -300,7 +406,8 @@ const buildIssueGroups = (plan, config, root, records) => {
     if (isIgnored(issue, root, config, ignoredIds)) continue
     const channel = issue.reason === 'unresolved-channel' ? (issue.provider || issue.matched || 'unresolved-channel') : null
     const subject = issue.id || channel || issue.matched || 'unresolved-model'
-    const key = `${issue.publisher || ''}\0${subject}\0${issue.shutdown ?? ''}`
+    const via = Object.hasOwn(issue, 'requested_via') ? issue.requested_via : (issue.via ?? plan.via)
+    const key = `${issue.publisher || ''}\0${subject}\0${issue.shutdown ?? ''}\0${via ?? ''}\0${channel ?? ''}`
     if (!groups.has(key)) {
       groups.set(key, {
         kind: 'issue',
@@ -309,10 +416,10 @@ const buildIssueGroups = (plan, config, root, records) => {
         channel,
         publisher: issue.publisher || 'unknown',
         shutdown: issue.shutdown ?? null,
-        via: issue.via ?? plan.via,
+        via,
         issues: [],
         root,
-        context: issue.id ? contextFor(records, issue.publisher, issue.id, issue.via ?? plan.via) : { announced: null, notes: [], entry: null },
+        context: issue.id ? contextFor(records, issue.publisher, issue.id, via) : { announced: null, notes: [], entry: null },
       })
     }
     groups.get(key).issues.push(issue)
@@ -377,7 +484,7 @@ const replacementSection = (item, now) => [
     : []),
 ]
 
-export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = null, evalResult = null }) => {
+export const buildPullBody = ({ group, headSha, baseSha = null, now = new Date(), tokenKind = null, evalResult = null }) => {
   const item = group.items[0]
   const announced = markdownText(group.context?.announced ?? 'not specified')
   const days = daysRemaining(item.shutdown, now)
@@ -390,6 +497,7 @@ export const buildPullBody = ({ group, headSha, now = new Date(), tokenKind = nu
     replacement: item.replacement,
     replacement_options: item.replacement_options,
     replacement_note: item.replacement_note,
+    base_sha: baseSha,
     head_sha: headSha,
     feed_digest: group.feedDigest,
   }
@@ -479,11 +587,19 @@ const issueTitle = group => `model-eol: investigate ${group.subject}${group.shut
 const isOpen = item => item.state === 'open'
 const isMerged = item => Boolean(item.merged_at || item.pull_request?.merged_at || item.merged === true)
 
-const matchingPulls = (pulls, group) => pulls
-  .filter(item => !item.labels || hasModelEolLabel(item) || item.head?.ref === group.branch || hasMetadataMarker(item.body))
+const pullFromTargetRepo = (item, repo) => !item.head?.repo?.full_name || item.head.repo.full_name === repo
+
+const pullOnExpectedBranch = (item, group, repo) => item.head?.ref === group.branch && pullFromTargetRepo(item, repo)
+
+const matchingPulls = (pulls, group, repo) => pulls
+  .filter(item => hasModelEolLabel(item) && pullOnExpectedBranch(item, group, repo))
   .map(item => {
     const metadata = parseMetadata(item.body)
-    return { item, metadata, conflict: hasMetadataMarker(item.body) && !metadata }
+    return {
+      item,
+      metadata,
+      conflict: hasMetadataMarker(item.body) && (!metadata || typeof metadata.head_sha !== 'string' || !metadata.head_sha),
+    }
   })
   .filter(record => record.conflict || (
     record.metadata?.id === group.id
@@ -492,13 +608,12 @@ const matchingPulls = (pulls, group) => pulls
   ))
 
 const matchingIssues = (issues, group) => issues
-  .filter(item => !item.labels || hasModelEolLabel(item) || hasMetadataMarker(item.body))
+  .filter(item => hasModelEolLabel(item))
   .map(item => {
     const metadata = parseMetadata(item.body)
-    return { item, metadata, conflict: hasMetadataMarker(item.body) && !metadata }
+    return { item, metadata, conflict: false }
   })
   .filter(record => {
-    if (record.conflict) return true
     if (!record.metadata) return false
     if (record.metadata.id !== (group.id || group.subject)) return false
     if (record.metadata.publisher !== group.publisher) return false
@@ -506,16 +621,77 @@ const matchingIssues = (issues, group) => issues
     return !group.channel || record.metadata.channel === group.channel || (record.metadata.id === group.channel && !record.metadata.channel)
   })
 
-const currentHeadFor = async (api, pull, group) => {
-  if (pull.head?.sha) return pull.head.sha
-  const branch = pull.head?.ref || group.branch
-  const encoded = branch.split('/').map(part => encodeURIComponent(part)).join('/')
-  const { data } = await api.request('GET', `/repos/${api.repo}/git/ref/heads/${encoded}`)
-  return data?.object?.sha ?? null
+const modelIdentity = (publisher, id, via) => `${publisher}\0${id}\0${via ?? ''}`
+const issueIdentity = (publisher, id, via, channel = null) => `${publisher}\0${id}\0${via ?? ''}\0${channel ?? ''}`
+
+const ownedPullRecords = (pulls, repo) => pulls
+  .filter(item => hasModelEolLabel(item) && pullFromTargetRepo(item, repo))
+  .map(item => ({ item, metadata: parseMetadata(item.body) }))
+  .filter(({ item, metadata }) => metadata
+    && typeof metadata.head_sha === 'string'
+    && metadata.head_sha
+    && item.head?.ref === branchFor(metadata.publisher, metadata.id, metadata.via ?? null))
+
+const ownedIssueRecords = issues => issues
+  .filter(item => hasModelEolLabel(item))
+  .map(item => ({ item, metadata: parseMetadata(item.body) }))
+  .filter(record => record.metadata)
+
+const staleWorkComment = kind => `model-eol is closing this bot-owned ${kind} because its finding is no longer actionable on the repository's current default branch. The reference may have been removed, ignored, retracted by the feed, moved to another clock, or disabled by repository configuration.`
+
+const staleClosedBody = (body, metadata) => {
+  const lines = String(body ?? '').split(/\r?\n/)
+  lines[0] = metadataLine({ ...metadata, stale_closed: true })
+  return lines.join('\n')
+}
+
+const groupFromMetadata = (kind, metadata) => ({
+  kind,
+  id: metadata.id,
+  subject: metadata.id,
+  publisher: metadata.publisher,
+  via: metadata.via ?? null,
+  branch: kind === 'model' ? branchFor(metadata.publisher, metadata.id, metadata.via ?? null) : undefined,
+})
+
+const reconcileStaleWork = async ({ api, pulls, issues, models, issueGroups }) => {
+  const activeModels = new Set(models.map(group => modelIdentity(group.publisher, group.id, group.via)))
+  const activeIssues = new Set(issueGroups.flatMap(group => [
+    issueIdentity(group.publisher, group.id || group.subject, group.via, group.channel),
+    issueIdentity(group.publisher, group.id || group.subject, group.via, null),
+  ]))
+  const decisions = []
+  for (const record of ownedPullRecords(pulls, api.repo)) {
+    if (!isOpen(record.item)) continue
+    const key = modelIdentity(record.metadata.publisher, record.metadata.id, record.metadata.via)
+    if (activeModels.has(key)) continue
+    await api.comment(record.item.number, staleWorkComment('pull request'))
+    await api.updatePull(record.item.number, {
+      state: 'closed',
+      body: staleClosedBody(record.item.body, record.metadata),
+    })
+    decisions.push(decision(groupFromMetadata('model', record.metadata), 'close-stale', { number: record.item.number }))
+  }
+  for (const record of ownedIssueRecords(issues)) {
+    if (!isOpen(record.item)) continue
+    const key = issueIdentity(record.metadata.publisher, record.metadata.id, record.metadata.via, record.metadata.channel)
+    const legacyKey = issueIdentity(record.metadata.publisher, record.metadata.id, record.metadata.via, null)
+    if (activeIssues.has(key) || activeIssues.has(legacyKey)) continue
+    await api.comment(record.item.number, staleWorkComment('issue'))
+    await api.updateIssue(record.item.number, {
+      state: 'closed',
+      body: staleClosedBody(record.item.body, record.metadata),
+    })
+    decisions.push(decision(groupFromMetadata('issue', record.metadata), 'close-stale', { number: record.item.number }))
+  }
+  return decisions
 }
 
 const standingDownComment = (group, metadata, currentHead) =>
   `model-eol is standing down for this branch. The branch head (${markdownCode(currentHead || 'unknown')}) no longer satisfies the bot lease checks for metadata head (${markdownCode(metadata?.head_sha || 'unknown')}), so a human change will not be overwritten. Please update or close this PR manually. An actor with push access can forge the configured identity.`
+
+const staleBaseComment = (metadata, base) =>
+  `model-eol is standing down because this bot-owned PR no longer targets the expected default branch. Expected ${markdownCode(base)}, but the PR targets ${markdownCode(metadata || 'unknown')}. Please retarget or close this PR manually.`
 
 const writeJson = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2))
 
@@ -563,7 +739,133 @@ const evalWorkspaceDrift = (root, planFiles, expectedHashes, expectedHead) => {
   return null
 }
 
-const makePatch = ({ source, base, branch, expectedHead, group, plan, config, checkerPath, evalEnabled, root, warn, gitAuth }) => {
+const writeJsonAtomic = (file, value) => {
+  const absolute = asAbsolute(file)
+  fs.mkdirSync(path.dirname(absolute), { recursive: true })
+  const temporary = `${absolute}.${process.pid}.${sha256(`${Date.now()}-${absolute}`).slice(0, 8)}.tmp`
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
+    fs.renameSync(temporary, absolute)
+  } finally {
+    fs.rmSync(temporary, { force: true })
+  }
+}
+
+export const evaluatePlan = async ({
+  targetDir = process.cwd(),
+  configPath = null,
+  planFile,
+  outputFile,
+  feedsUrls = [],
+  commandOverride = process.env.MODEL_EOL_EVAL_COMMAND || null,
+  fetchImpl = globalThis.fetch,
+  checkerPath = CHECKER,
+  vendoredFeeds = VENDORED_FEEDS,
+  warn = message => console.error(message),
+  now = new Date(),
+} = {}) => {
+  if (!planFile) throw new Error('--plan-file is required for evaluate')
+  if (!outputFile) throw new Error('--output-file is required for evaluate')
+  const targetPath = path.resolve(targetDir)
+  const configFile = configFileFor({ targetDir: targetPath, configPath, scanPath: targetPath })
+  if (configPath && !fs.existsSync(configFile)) throw new Error(`config file not found: ${configFile}`)
+  const config = loadConfig(configFile)
+  const settings = effectiveEval(config, commandOverride)
+  const planConfigPath = fs.existsSync(configFile) ? configFile : null
+  const feedSet = await downloadFeeds({
+    urls: feedsUrls,
+    fetchImpl,
+    vendoredDir: vendoredFeeds,
+    allowVendoredFallback: config.feeds.allow_vendored_fallback,
+    warn,
+  })
+  try {
+    const generatedPlan = runPlan({ workDir: targetPath, config, configPath: planConfigPath, feedsDir: feedSet.dir, checkerPath, warn })
+    const plan = verifiedPlanArtifact(planFile, generatedPlan)
+    const groups = buildModelGroups(plan, config, targetPath, feedContext(feedSet.dir))
+    const results = []
+    if (settings.command) {
+      for (const group of groups) {
+        const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-evaluate-'))
+        const clone = path.join(workRoot, 'repo')
+        const selectedPlanPath = path.join(workRoot, 'selected-plan.json')
+        const reportPath = path.join(workRoot, 'eval-report.md')
+        writeJson(selectedPlanPath, { ...plan, items: group.items, issues: [] })
+        const selectedPlanHash = sha256(fs.readFileSync(selectedPlanPath))
+        let result
+        try {
+          cloneRepository(targetPath, clone)
+          const applied = spawnSync(process.execPath, [checkerPath, 'apply', '--plan', selectedPlanPath], {
+            cwd: clone,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+          if (applied.status !== 0 || applied.error) {
+            throw new Error(`apply subprocess failed for ${group.publisher}/${group.id}: ${applied.error?.message || applied.stderr?.trim() || `exit ${applied.status}`}`)
+          }
+          const planFiles = [...new Set(group.items.map(item => repoPath(item.file, clone)))]
+          const postApplyHashes = hashFiles(clone, planFiles)
+          const postApplyHead = gitHead(clone)
+          try {
+            result = runEvalHook({
+              command: settings.command,
+              timeoutMs: settings.timeout_ms,
+              maxReportBytes: settings.max_report_bytes,
+              passEnv: settings.pass_env,
+              cwd: clone,
+              oldId: group.id,
+              newId: group.items[0].replacement,
+              planPath: selectedPlanPath,
+              reportPath,
+            })
+          } catch (error) {
+            result = { status: 'fail', exit_code: null, report: `eval runner error: ${error.message}` }
+          }
+          const drift = evalWorkspaceDrift(clone, planFiles, postApplyHashes, postApplyHead)
+          let planDrift = null
+          try {
+            if (sha256(fs.readFileSync(selectedPlanPath)) !== selectedPlanHash) planDrift = 'eval changed its selected plan artifact'
+          } catch (error) {
+            planDrift = `eval made its selected plan artifact unreadable (${error.message})`
+          }
+          if (drift || planDrift) {
+            result = {
+              ...result,
+              status: 'fail',
+              report: capReport([result.report, drift, planDrift].filter(Boolean).join('\n'), settings.max_report_bytes),
+            }
+          }
+        } finally {
+          fs.rmSync(workRoot, { recursive: true, force: true })
+        }
+        results.push({
+          publisher: group.publisher,
+          id: group.id,
+          via: group.via ?? null,
+          feed_digest: group.feedDigest,
+          status: result.status,
+          exit_code: result.exit_code,
+          report: capReport(result.report, settings.max_report_bytes),
+        })
+      }
+    }
+    const artifact = {
+      schema: EVAL_SCHEMA,
+      generated: now.toISOString(),
+      base_sha: gitHead(targetPath),
+      plan_digest: planDigest(plan),
+      eval_config_digest: evalConfigDigest(settings),
+      configured: Boolean(settings.command),
+      results,
+    }
+    writeJsonAtomic(outputFile, artifact)
+    return { artifact, plan, config: { ...config, eval: settings }, degraded: Boolean(feedSet.degraded) }
+  } finally {
+    feedSet.cleanup()
+  }
+}
+
+const makePatch = ({ source, base, branch, expectedHead, allowMissingBranch = false, group, plan, config, checkerPath, evalEnabled, root, warn, gitAuth }) => {
   const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-work-'))
   const planRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-plan-'))
   const clone = path.join(workRoot, 'repo')
@@ -612,7 +914,7 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
         evalResult = {
           ...evalResult,
           status: 'fail',
-          report: [evalResult.report, drift].filter(Boolean).join('\n'),
+          report: capReport([evalResult.report, drift].filter(Boolean).join('\n'), config.eval.max_report_bytes),
         }
       }
     }
@@ -627,7 +929,7 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
     const files = planFiles
     const message = `model-eol: migrate ${group.id} to ${group.items[0].replacement} (${group.feedDigest.slice(0, 8)})`
     const headSha = commitAll(clone, files, message)
-    pushBranch(clone, branch, expectedHead, gitAuth)
+    pushBranch(clone, branch, expectedHead, gitAuth, { allowMissing: allowMissingBranch })
     return { headSha, evalResult }
   } finally {
     fs.rmSync(workRoot, { recursive: true, force: true })
@@ -637,21 +939,27 @@ const makePatch = ({ source, base, branch, expectedHead, group, plan, config, ch
 
 const decision = (group, action, extra = {}) => ({ group, action, ...extra })
 
-const processModel = async ({ api, pulls, group, source, base, plan, config, checkerPath, evalEnabled, externalEval, root, now, tokenKind, warn, gitAuth }) => {
-  if (externalEval && externalEval.status !== 'pass') {
-    return decision(group, 'eval-failed', { evalResult: externalEval })
-  }
-  const matches = matchingPulls(pulls, group)
+const processModel = async ({ api, pulls, group, source, base, baseHead, plan, config, checkerPath, evalEnabled, externalEval, root, now, tokenKind, warn, gitAuth }) => {
+  const matches = matchingPulls(pulls, group, api.repo)
   const conflict = matches.find(record => record.conflict)
   if (conflict) return decision(group, 'conflict', { number: conflict.item.number })
   const open = matches.find(record => isOpen(record.item))
   const currentDigest = group.feedDigest
   if (open) {
-    if (open.metadata.feed_digest === currentDigest) return decision(group, 'skip-unchanged', { number: open.item.number })
-    const currentHead = await currentHeadFor(api, open.item, group)
-    if (!currentHead || currentHead !== open.metadata.head_sha) {
-      await api.comment(open.item.number, standingDownComment(group, open.metadata, currentHead))
+    if (open.item.base?.ref && open.item.base.ref !== base) {
+      await api.comment(open.item.number, staleBaseComment(open.item.base.ref, base))
       return decision(group, 'stand-down', { number: open.item.number })
+    }
+    const lease = verifyBotBranch(root, open.item.head?.ref || group.branch, open.metadata.head_sha, gitAuth)
+    if (!lease.safe) {
+      await api.comment(open.item.number, standingDownComment(group, open.metadata, lease.head))
+      return decision(group, 'stand-down', { number: open.item.number })
+    }
+    if (externalEval && externalEval.status !== 'pass') {
+      return decision(group, 'eval-failed', { number: open.item.number, evalResult: externalEval })
+    }
+    if (open.metadata.feed_digest === currentDigest && open.metadata.base_sha === baseHead) {
+      return decision(group, 'skip-unchanged', { number: open.item.number })
     }
     let patch
     try {
@@ -681,19 +989,29 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
       return decision(group, 'eval-failed', { number: open.item.number, evalResult: patch.evalResult })
     }
     if (!patch.evalResult && externalEval) patch.evalResult = externalEval
-    const body = buildPullBody({ group, headSha: patch.headSha, now, tokenKind, evalResult: patch.evalResult })
+    const body = buildPullBody({ group, headSha: patch.headSha, baseSha: baseHead, now, tokenKind, evalResult: patch.evalResult })
     await api.updatePull(open.item.number, { title: pullTitle(group), body })
     return decision(group, 'update', { number: open.item.number, body, headSha: patch.headSha })
   }
 
+  if (externalEval && externalEval.status !== 'pass') {
+    return decision(group, 'eval-failed', { evalResult: externalEval })
+  }
+
   const replacement = group.items[0].replacement
-  // Legacy metadata without replacement keeps shutdown-only suppression.
-  const merged = matches.find(record => !isOpen(record.item) && isMerged(record.item) && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
-  if (merged) return decision(group, 'skip-merged', { number: merged.item.number })
-  const dismissed = matches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  const dismissed = matches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (dismissed) return decision(group, 'skip-dismissed', { number: dismissed.item.number })
 
-  const previousBotHead = matches.find(record => record.metadata?.head_sha)?.metadata.head_sha ?? null
+  const previous = matches.find(record => record.metadata?.head_sha) ?? null
+  const previousBotHead = previous?.metadata.head_sha ?? null
+  if (!previousBotHead) {
+    const occupied = verifyBotBranch(root, group.branch, null, gitAuth)
+    if (occupied.error) throw new Error(occupied.error)
+    if (occupied.head) {
+      const occupant = pulls.find(item => pullOnExpectedBranch(item, group, api.repo))
+      return decision(group, 'conflict', { number: occupant?.number })
+    }
+  }
   let patch
   try {
     patch = makePatch({
@@ -701,6 +1019,7 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
       base,
       branch: group.branch,
       expectedHead: previousBotHead,
+      allowMissingBranch: Boolean(previousBotHead && !isOpen(previous.item)),
       group,
       plan,
       config,
@@ -723,8 +1042,9 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
     return decision(group, 'eval-failed', { evalResult: patch.evalResult })
   }
   if (!patch.evalResult && externalEval) patch.evalResult = externalEval
-  const body = buildPullBody({ group, headSha: patch.headSha, now, tokenKind, evalResult: patch.evalResult })
-  const latestMatches = matchingPulls(await api.listPullsByHead(group.branch), group)
+  const body = buildPullBody({ group, headSha: patch.headSha, baseSha: baseHead, now, tokenKind, evalResult: patch.evalResult })
+  const latestPulls = await api.listPullsByHead(group.branch)
+  const latestMatches = matchingPulls(latestPulls, group, api.repo)
   const latestConflict = latestMatches.find(record => record.conflict)
   if (latestConflict) return decision(group, 'conflict', { number: latestConflict.item.number })
   const latestOpen = latestMatches.find(record => isOpen(record.item))
@@ -732,8 +1052,10 @@ const processModel = async ({ api, pulls, group, source, base, plan, config, che
     await api.updatePull(latestOpen.item.number, { title: pullTitle(group), body })
     return decision(group, 'update', { number: latestOpen.item.number, body, headSha: patch.headSha })
   }
-  const latestSuppressed = latestMatches.find(record => !isOpen(record.item) && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
-  if (latestSuppressed) return decision(group, isMerged(latestSuppressed.item) ? 'skip-merged' : 'skip-dismissed', { number: latestSuppressed.item.number })
+  const latestUntrusted = latestPulls.find(item => pullOnExpectedBranch(item, group, api.repo) && !latestMatches.some(record => record.item.number === item.number))
+  if (latestUntrusted) return decision(group, 'conflict', { number: latestUntrusted.number })
+  const latestSuppressed = latestMatches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  if (latestSuppressed) return decision(group, 'skip-dismissed', { number: latestSuppressed.item.number })
   const created = await api.createPull({
     title: pullTitle(group),
     head: group.branch,
@@ -755,7 +1077,7 @@ const processIssue = async ({ api, issues, group, now }) => {
     return decision(group, 'update', { number: open.item.number, body })
   }
   const replacement = group.issues[0].replacement ?? null
-  const dismissed = matches.find(record => !isOpen(record.item) && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  const dismissed = matches.find(record => !isOpen(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (dismissed) return decision(group, 'skip-dismissed', { number: dismissed.item.number })
   const latestMatches = matchingIssues(await api.listIssues(), group)
   const latestConflict = latestMatches.find(record => record.conflict)
@@ -765,7 +1087,7 @@ const processIssue = async ({ api, issues, group, now }) => {
     await api.updateIssue(latestOpen.item.number, { title: issueTitle(group), body })
     return decision(group, 'update', { number: latestOpen.item.number, body })
   }
-  const latestDismissed = latestMatches.find(record => !isOpen(record.item) && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  const latestDismissed = latestMatches.find(record => !isOpen(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (latestDismissed) return decision(group, 'skip-dismissed', { number: latestDismissed.item.number })
   const created = await api.createIssue({ title: issueTitle(group), body, labels: ['model-eol'] })
   return decision(group, 'create', { number: created.number, body })
@@ -814,6 +1136,43 @@ export const formatDecisions = (decisions, { degraded = false } = {}) => {
   return lines.join('\n')
 }
 
+const BLOCKED_ACTIONS = new Set(['conflict', 'eval-failed', 'label-unavailable', 'report-only', 'stand-down'])
+
+const appendDecisionSummary = (file, decisions, { degraded = false } = {}) => {
+  if (!file) return
+  const blocked = degraded || decisions.some(record => BLOCKED_ACTIONS.has(record.action))
+  const lines = [
+    '## model-eol bot',
+    '',
+    `Outcome: **${blocked ? 'blocked' : 'success'}**${degraded ? ' (vendored feed fallback; no writes)' : ''}`,
+    '',
+    '| Action | Finding |',
+    '| --- | --- |',
+  ]
+  for (const record of decisions) {
+    const group = record.group
+    const label = group.kind === 'model' ? `${group.publisher}/${group.id}` : `${group.publisher}/${group.subject}`
+    lines.push(`| ${markdownText(record.action)} | ${markdownText(label)} |`)
+  }
+  if (!decisions.length) lines.push('| none | No actionable findings |')
+  fs.appendFileSync(file, `${lines.join('\n')}\n`)
+}
+
+const appendEvalSummary = (file, artifact) => {
+  if (!file) return
+  const lines = [
+    '## model-eol migration evals',
+    '',
+    artifact.configured ? 'Each migration was applied and evaluated in an isolated checkout.' : 'No eval command is configured.',
+    '',
+    '| Result | Migration |',
+    '| --- | --- |',
+  ]
+  for (const result of artifact.results) lines.push(`| ${markdownText(result.status)} | ${markdownText(`${result.publisher}/${result.id}`)} |`)
+  if (!artifact.results.length) lines.push('| not run | No configured migration evals |')
+  fs.appendFileSync(file, `${lines.join('\n')}\n`)
+}
+
 export const runBot = async ({
   repo,
   targetDir = process.cwd(),
@@ -831,6 +1190,8 @@ export const runBot = async ({
   planFile = null,
   evalReportFile = null,
   evalStatusFile = null,
+  evalResultsFile = null,
+  evalCommandOverride = null,
   now = new Date(),
   warn = message => console.error(message),
 } = {}) => {
@@ -874,6 +1235,7 @@ export const runBot = async ({
     baseClone = path.join(ownedBaseRoot, 'repo')
     cloneRepository(source, baseClone, gitAuth)
     const base = defaultBranch(baseClone, gitAuth)
+    const baseHead = gitHead(baseClone)
     const configFile = configFileFor({ targetDir, configPath, scanPath: baseClone })
     if (configPath && !fs.existsSync(configFile)) throw new Error(`config file not found: ${configFile}`)
     const config = loadConfig(configFile)
@@ -895,36 +1257,46 @@ export const runBot = async ({
       const decisions = [...models.map(report), ...issues.map(report)]
       return { plan, config, decisions, feedsDir: feedSet.dir, degraded: true }
     }
-    const externalEval = readEvalArtifact(
+    const externalEvalResults = evalResultsFile
+      ? readEvalResults({ file: evalResultsFile, config, commandOverride: evalCommandOverride, plan, groups: models, baseHead })
+      : null
+    const legacyExternalEval = externalEvalResults ? null : readEvalArtifact(
       evalReportFile ? asAbsolute(evalReportFile) : null,
       config.eval.max_report_bytes,
       evalStatusFile ? asAbsolute(evalStatusFile) : null,
     )
     const api = new GitHubClient({ repo, apiUrl, token, transport, warn })
-    if (models.length || issues.length) await api.ensureModelEolLabel()
-    const pulls = models.length ? await api.listPulls() : []
-    const issueRecords = issues.length ? await api.listIssues() : []
+    const labelReady = models.length || issues.length ? await api.ensureModelEolLabel() : true
+    const pulls = await api.listPulls()
+    const issueRecords = await api.listIssues()
     const decisions = []
-    for (const group of models) {
-      decisions.push(await processModel({
-        api,
-        pulls,
-        group,
-        source,
-        base,
-        plan,
-        config,
-        checkerPath,
-        evalEnabled,
-        externalEval,
-        root: baseClone,
-        now,
-        tokenKind,
-        warn,
-        gitAuth,
-      }))
+    if (!labelReady) {
+      for (const group of [...models, ...issues]) decisions.push(decision(group, 'label-unavailable'))
+    } else {
+      for (const group of models) {
+        const externalEval = externalEvalResults?.get(evalIdentity(group.publisher, group.id, group.via)) ?? legacyExternalEval
+        decisions.push(await processModel({
+          api,
+          pulls,
+          group,
+          source,
+          base,
+          baseHead,
+          plan,
+          config,
+          checkerPath,
+          evalEnabled,
+          externalEval,
+          root: baseClone,
+          now,
+          tokenKind,
+          warn,
+          gitAuth,
+        }))
+      }
+      for (const group of issues) decisions.push(await processIssue({ api, issues: issueRecords, group, now }))
     }
-    for (const group of issues) decisions.push(await processIssue({ api, issues: issueRecords, group, now }))
+    decisions.push(...await reconcileStaleWork({ api, pulls, issues: issueRecords, models, issueGroups: issues }))
     return { plan, config, decisions, feedsDir: feedSet.dir, degraded: false }
   } finally {
     scan?.cleanup()
@@ -934,6 +1306,24 @@ export const runBot = async ({
 }
 
 export const main = async (argv = process.argv.slice(2), env = process.env) => {
+  if (argv[0] === 'evaluate') {
+    const options = parseEvaluateArgs(argv.slice(1))
+    if (options.help) {
+      console.log(helpText())
+      return 0
+    }
+    const result = await evaluatePlan({
+      targetDir: options.targetDir,
+      configPath: options.configPath,
+      planFile: options.planFile,
+      outputFile: options.outputFile,
+      feedsUrls: options.feedsUrls,
+      commandOverride: env.MODEL_EOL_EVAL_COMMAND || null,
+    })
+    appendEvalSummary(env.GITHUB_STEP_SUMMARY, result.artifact)
+    for (const item of result.artifact.results) console.log(`${item.status} ${item.publisher}/${item.id}`)
+    return 0
+  }
   const options = parseArgs(argv)
   if (options.help) {
     console.log(helpText())
@@ -949,6 +1339,8 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
     planFile: env.MODEL_EOL_PLAN_FILE || null,
     evalReportFile: env.MODEL_EOL_EVAL_REPORT_FILE || null,
     evalStatusFile: env.MODEL_EOL_EVAL_STATUS_FILE || null,
+    evalResultsFile: env.MODEL_EOL_EVAL_RESULTS_FILE || null,
+    evalCommandOverride: env.MODEL_EOL_EVAL_COMMAND || null,
     token: env.GITHUB_TOKEN,
     apiUrl: env.GITHUB_API_URL || 'https://api.github.com',
     tokenKind: env.MODEL_EOL_TOKEN_KIND || null,
@@ -958,7 +1350,8 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
     if (result.degraded) console.log('model-eol status: degraded - vendored feed fallback enabled; no GitHub writes')
     for (const item of result.decisions) console.log(`${item.action} ${item.group.publisher}/${item.group.kind === 'model' ? item.group.id : item.group.subject}`)
   }
-  return 0
+  appendDecisionSummary(env.GITHUB_STEP_SUMMARY, result.decisions, { degraded: result.degraded })
+  return result.degraded || result.decisions.some(item => BLOCKED_ACTIONS.has(item.action)) ? 1 : 0
 }
 
 const invokedFile = (() => {

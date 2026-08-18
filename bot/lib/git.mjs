@@ -105,23 +105,26 @@ export const verifyBotBranch = (cwd, branch, expectedHead, auth = null) => {
   }
 }
 
-export const pushBranch = (cwd, branch, expectedHead = null, auth = null) => {
+export const pushBranch = (cwd, branch, expectedHead = null, auth = null, { allowMissing = false } = {}) => {
   const destination = `HEAD:refs/heads/${branch}`
   if (expectedHead !== null) {
     const state = verifyBotBranch(cwd, branch, expectedHead, auth)
-    if (!state.safe) {
+    if (!state.safe && !(allowMissing && !state.error && state.head === null)) {
       const error = new Error(state.error || `refusing force-push: branch head ${state.head || 'missing'} or committer email ${state.committerEmail || 'missing'} failed bot lease checks`)
       error.code = 'MODEL_EOL_BRANCH_STAND_DOWN'
       error.currentHead = state.head
       error.committerEmail = state.committerEmail
       throw error
     }
-    run(cwd, [
-      'push',
-      `--force-with-lease=refs/heads/${branch}:${expectedHead}`,
-      'origin',
-      destination,
-    ], false, auth)
+    if (state.head === null) run(cwd, ['push', 'origin', destination], false, auth)
+    else {
+      run(cwd, [
+        'push',
+        `--force-with-lease=refs/heads/${branch}:${expectedHead}`,
+        'origin',
+        destination,
+      ], false, auth)
+    }
   } else {
     run(cwd, ['push', 'origin', destination], false, auth)
   }
