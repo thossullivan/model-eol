@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-08-18T00:47:44.931Z",
+  "generated": "2026-08-18T12:06:03.442Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "policy": {
     "min_notice_days": 60,
@@ -45,6 +45,7 @@
           "via": "aws-bedrock",
           "announced": "2026-03-10",
           "shutdown": "2026-09-10",
+          "status": "extended-access",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
         }
       ],
@@ -74,6 +75,7 @@
           "via": "aws-bedrock",
           "announced": "2026-04-14",
           "shutdown": "2026-10-14",
+          "status": "extended-access",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
         }
       ],
@@ -103,6 +105,7 @@
           "via": "aws-bedrock",
           "announced": "2026-07-08",
           "shutdown": "2027-01-08",
+          "status": "extended-access",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
         }
       ],

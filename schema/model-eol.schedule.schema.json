@@ -1,31 +1,31 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://example.invalid/model-eol/0.1/schedule.schema.json",
+  "$id": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.schedule.schema.json",
   "title": "model-eol schedule output",
-  "description": "Machine-readable deprecation schedule emitted by `model-eol schedule --json`. Draft 0.1 - the $id is a placeholder until the repo is public.",
+  "description": "Machine-readable deprecation schedule emitted by `model-eol schedule --json`.",
   "type": "object",
   "required": ["schema", "generated", "threshold_days", "scope", "targets", "scanned_files", "scan_notes", "earliest_risk", "items", "candidate_model_references", "unresolved_integrations"],
   "properties": {
     "schema": { "const": "model-eol/schedule@0.1" },
     "generated": { "type": "string", "format": "date-time" },
-    "threshold_days": { "type": "number" },
-    "distributor": { "type": ["string", "null"] },
+    "threshold_days": { "type": "integer", "minimum": 0 },
+    "distributor": { "type": ["string", "null"], "minLength": 1 },
     "scope": { "enum": ["all", "direct"] },
-    "targets": { "type": "array", "items": { "type": "string" } },
+    "targets": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "scanned_files": { "type": "integer", "minimum": 0 },
-    "scan_notes": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/scanNote" } },
+    "scan_notes": { "type": "array", "items": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/scanNote" } },
     "earliest_risk": {
       "type": ["object", "null"],
       "required": ["safe_until", "id"],
       "properties": {
-        "safe_until": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "safe_until": { "type": "string", "format": "date" },
         "id": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": false
     },
-    "items": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/modelReference" } },
-    "candidate_model_references": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/candidateReference" } },
-    "unresolved_integrations": { "type": "array", "items": { "$ref": "model-eol.inventory.schema.json#/definitions/integrationHint" } }
+    "items": { "type": "array", "items": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/modelReference" } },
+    "candidate_model_references": { "type": "array", "items": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/candidateReference" } },
+    "unresolved_integrations": { "type": "array", "items": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/integrationHint" } }
   },
   "additionalProperties": false
 }

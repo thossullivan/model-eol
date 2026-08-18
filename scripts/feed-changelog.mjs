@@ -9,6 +9,7 @@ import { compareFeeds, renderSemanticDiff } from '../refresh/diff.mjs'
 
 const DEFAULT_LIMIT = 50
 const EMPTY_UPDATED = '1970-01-01T00:00:00Z'
+const PUBLIC_ATOM_URL = 'https://thossullivan.github.io/model-eol/changelog.atom'
 const repoRoot = path.resolve(import.meta.dirname, '..')
 
 function usageError(message) {
@@ -237,6 +238,9 @@ function renderAtom(commits, entries) {
 <feed xmlns="http://www.w3.org/2005/Atom">
   <id>tag:model-eol,${year}:feed-changelog</id>
   <title>model-eol feed changelog</title>
+  <author><name>model-eol maintainers</name></author>
+  <link rel="self" href="${PUBLIC_ATOM_URL}" />
+  <link rel="alternate" href="https://github.com/thossullivan/model-eol" />
   <updated>${escapeXml(updated)}</updated>${entryBlock}
 </feed>
 `

@@ -6,7 +6,7 @@
 [![feed refresh](https://github.com/thossullivan/model-eol/actions/workflows/feed-refresh.yml/badge.svg)](https://github.com/thossullivan/model-eol/actions/workflows/feed-refresh.yml)
 ![spec](https://img.shields.io/badge/spec-model--eol%2F0.1-blue)
 ![deps](https://img.shields.io/badge/runtime%20deps-zero-brightgreen)
-![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
+![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
 **A machine-readable deprecation feed format for AI models, plus the reference
@@ -14,9 +14,34 @@ tooling that turns it into a Dependabot for models.**
 
 ![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
 
+## Release line
+
+**0.4.1 - trusted migrations.** The 0.4 line made bot migrations independently
+evaluable and bound each result to the exact default-branch commit, plan, eval
+configuration, and feed digests. The workflow resolves the package version once
+and reuses that exact version across planning, evaluation, and publication. It added
+path-scoped policy and lifecycle routing for mixed-provider repositories,
+trusted PR/issue ownership, stale-work reconciliation, and fresh-work behavior
+when a retired model returns. The 0.4.1 patch moved the copy-ready workflows to
+the current Node-backed Actions and fixed Google models-endpoint pagination. The
+bundled feeds contain 313 entries across Amazon, Anthropic, Google, and OpenAI.
+
+**0.5.0 - public contract and trust.** This milestone makes the data contract public:
+canonical hosted schemas, a zero-dependency `validate` command, hosted feeds,
+an Atom changelog, and byte-exact refresh receipts whose digests must match the
+published data. It adds status-aware distributor refresh including Bedrock Public
+Extended Access, preserves structured replacement guidance across JSON reports
+and preserves channel-specific lifecycle clocks in CycloneDX,
+preflights multi-file apply plan-wide and rolls back later commit failures,
+fails explicitly on unapproved symlink coverage, and keeps configured eval
+failures as distinct durable issues. It also
+ships a repository-owned eval-harness starter, permanent exact-package consumer
+UAT, and a Node 22 support floor. The hosted URLs become authoritative only after
+the first green Pages deployment.
+
 ## The problem
 
-On July 23, 2026, OpenAI shut down 15 model snapshots on schedule. One of my
+On July 23, 2026, OpenAI shut down a scheduled wave of model snapshots. One of my
 tuned research workflows returned a model-not-found error that morning even though
 the retirement had been documented for months. A model ID is the one dependency
 my toolchain could not see. When an npm package is deprecated, the warning prints
@@ -36,14 +61,17 @@ second, so the existing trackers can converge instead of each scraping alone.
 - **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (29 entries), Google (86 entries) and OpenAI (194 entries), generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated 2026-08-18<!-- /feeds-status -->. Every
   dated entry carries a source URL.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
-  ML-BOM export, retirement schedule, alerts and badges, migration plan/apply.
+  ML-BOM export, retirement schedule, alerts and badges, migration plan/apply,
+  and public document validation.
 - **`refresh/`** - regenerates the feeds from provider pages, models endpoints, and
   distributor lifecycle pages, with a semantic diff for human review.
 - **`bot/`** - the Dependabot part: a cron GitHub workflow that maintains one
   migration PR or issue per retiring model, published as the `model-eol-bot`
   binary in the same npm package.
-- **`scripts/feed-changelog.mjs`** - the feeds' git history as Atom/markdown, so
-  "model retirements as they are announced" is a feed you can subscribe to.
+- **Public contract rollout** - the 0.5 Pages workflow publishes versioned
+  schemas, hosted feeds, refresh health, and an Atom changelog. Those URLs
+  become authoritative only after Pages is enabled and the exact-byte deployment
+  check passes.
 
 ## Try it
 
@@ -72,6 +100,9 @@ node check.mjs path/to/your/repo --via aws-bedrock
 # inventory, and a CycloneDX 1.6 ML-BOM for your SBOM pipeline
 node check.mjs inventory path/to/your/repo
 node check.mjs inventory path/to/your/repo --format cyclonedx > model-bom.json
+# the primary CI gate is also a schema-valid public report
+node check.mjs check path/to/your/repo --json > model-eol-check.json
+node check.mjs validate model-eol-check.json
 # retirement schedule with the repo-level worst case
 node check.mjs schedule path/to/your/repo
 # GitHub Actions annotations, Markdown, or a shields.io badge
@@ -80,6 +111,8 @@ node check.mjs alert path/to/your/repo --format badge > model-eol-badge.json
 # migration plan (only high-confidence direct API refs are patchable) and safe apply
 node check.mjs plan path/to/your/repo --days 90 > plan.json
 node check.mjs apply --plan plan.json --dry-run
+# validate provider feeds, repository policy, or model-eol machine reports
+node check.mjs validate feeds/openai.json .model-eol.json plan.json
 ```
 
 </details>
@@ -118,6 +151,10 @@ the `v0` line:
 - uses: actions/checkout@v7
   with:
     fetch-depth: 0 # --changed needs history to diff against the base ref
+- uses: actions/setup-node@v7
+  with:
+    node-version: 22
+    package-manager-cache: false
 - uses: thossullivan/model-eol@v0
   with:
     command: check
@@ -131,9 +168,15 @@ or retiring within the threshold. Add `via: aws-bedrock` (or `azure-ai-foundry`)
 to judge by a distributor's clock. The copy-paste version with both gates - PR
 diff plus a weekly full-repository check - is
 [`examples/workflows/model-eol.yml`](examples/workflows/model-eol.yml). The
-Action also exposes `inventory`, `schedule`, `alert`, and `plan`. Use
+Action also exposes `inventory`, `schedule`, `alert`, `plan`, and `validate`. Use
 `format: cyclonedx` for an ML-BOM, or `output-file` to retain any report as a
 workflow artifact while keeping the same output in the job log.
+
+CycloneDX exports use one machine-learning component per canonical model and
+lifecycle channel. Direct publisher (`publisher-direct`), Azure, Bedrock, and
+other routed references therefore retain their own status and shutdown clock
+under deterministic, channel-qualified `bom-ref` values; occurrences are sorted
+and scoped to the component whose clock they used.
 
 ## One repository policy
 
@@ -151,7 +194,7 @@ Git repository root. CLI flags or Action inputs override configured values, and
     "paths": ["test/fixtures/**", "vendor"]
   },
   "issues": { "enabled": true },
-  "eval": { "command": "npm test" }
+  "eval": { "command": "node scripts/model-eol-eval.mjs" }
 }
 ```
 
@@ -160,8 +203,23 @@ in `ignore.models` suppresses the whole alias family; `ignore.paths` uses
 repo-relative `*`, `**`, and `?` globs and excludes matching files before scan
 coverage limits are counted. With no config the CLI keeps its historical
 `scope: all`; once a config exists, omitted values use the shared bot defaults
-(`days: 90`, `scope: direct`, and the publisher clock). The complete contract is
-[`schema/model-eol.bot-config.schema.json`](schema/model-eol.bot-config.schema.json).
+(`days: 90`, `scope: direct`, and the publisher clock). Portable structure is
+defined by
+[`schema/model-eol.bot-config.schema.json`](schema/model-eol.bot-config.schema.json),
+while `model-eol validate` also enforces runtime semantic and safety checks that
+Draft-07 cannot express cleanly.
+
+For content-heavy repositories, start with `inventory`, then exclude caches,
+generated catalogs, archived fixtures, and documentation that are not live model
+dependencies. Published-repository UAT deliberately verifies both outcomes: the
+unconfigured scan reports evidence, while an explicit path policy produces a
+clean check and empty bot decision table without changing repository content.
+
+Parent-repository scans do not recurse into tracked Git submodules. A detected
+gitlink is reported as incomplete coverage, so `check` and `plan` fail closed
+unless the path is explicitly ignored or `--allow-incomplete` is chosen. To
+inspect submodule contents, run model-eol against the checked-out submodule as a
+separate target/repository policy.
 
 Mixed-provider monorepos can keep those top-level values as repository defaults,
 then apply path policies and a lifecycle channel per reference:
@@ -250,8 +308,9 @@ human. The workflow resolves `model-eol@0` from npm once and reuses that exact
 version across its plan, read-only evaluation, and write-token publication jobs;
 consumer repositories do not copy `check.mjs` or the `bot/` source directory.
 Dismissals are respected, reintroduced retired models create fresh work, and
-bot-owned PRs/issues close when their finding disappears. Preview everything with
-no GitHub calls and without adding a project dependency:
+bot-owned PRs/issues close when their finding disappears. In a repository without
+a configured eval, preview everything with no GitHub calls and without adding a
+project dependency:
 
 ```sh
 npx --yes --package=model-eol@0 model-eol-bot --dry-run --target-dir . --repo OWNER/REPO
@@ -262,31 +321,106 @@ it uses the bot defaults of 90 days and direct references. `eval.command` also
 comes from the config unless the `MODEL_EOL_EVAL_COMMAND` repository variable is
 set as an explicit workflow override. Each patchable model is applied in an
 isolated checkout and evaluated independently with its own old/new IDs, timeout,
-bounded report, and explicitly allowed environment. The content-bound result
+bounded report, and explicitly forwarded environment names. The content-bound result
 manifest is also pinned to the evaluated Git commit, letting passing migrations
 proceed while a failing peer remains blocked without publishing against a newer,
 unevaluated default branch.
+
+### Prove the swap works in your repository
+
+Model behavior is repository-specific, so model-eol never guesses which test is
+good enough to authorize a migration. Check a harness into the repository and
+name it explicitly in `.model-eol.json`. A non-empty
+`MODEL_EOL_EVAL_COMMAND` repository variable overrides that command; otherwise
+the config is authoritative. With neither configured, the result manifest says
+that evaluation was not configured.
+
+Start by copying [`examples/model-eol-eval.mjs`](examples/model-eol-eval.mjs) to
+`scripts/model-eol-eval.mjs`, then replace its `VERIFY` command with the smallest
+deterministic test that proves the behavior your application relies on. A useful
+harness checks response or tool-call shape, structured-output parsing, required
+capabilities, and a small golden task set. A generic build passing is supporting
+evidence, but it does not by itself prove model behavior. The starter invokes a
+dedicated `npm run eval:model-eol` script so adopting it requires an explicit
+repository test rather than accidentally treating an unrelated unit suite as an
+LLM-behavior eval.
+Point `eval:model-eol` at the underlying behavior test, not back at the harness
+itself.
+
+The harness runs after the proposed migration in an isolated checkout and gets:
+
+- `MODEL_EOL_OLD_ID` and `MODEL_EOL_NEW_ID` for the current migration.
+- `MODEL_EOL_PLAN`, a one-model plan containing the exact changed references.
+- `MODEL_EOL_REPORT`, the required path for a bounded, publishable Markdown receipt.
+
+Exit zero plus a regular report file means pass; any other exit, timeout, missing
+report, tracked workspace mutation, or checkout drift fails that migration. Test
+stdout and stderr are intentionally not published. Put only non-secret evidence
+in the report, and forward only credentials required by trusted eval code through
+`eval.pass_env`. That allowlist controls normal subprocess environment forwarding;
+it is not an OS sandbox and does not isolate code running as the same user. The
+workflow's security boundary is that this job has no repository write token and
+the publication job never executes repository-owned eval code.
+
+Before enabling the scheduled bot, commit the harness and policy on a clean
+branch and exercise the same isolated evaluator locally:
+
+```bash
+set -euo pipefail
+repo="$(pwd -P)"
+version="$(npm view model-eol@0 version --json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const v=JSON.parse(s);const r=Array.isArray(v)?v.at(-1):v;if(typeof r!=="string")process.exit(1);process.stdout.write(r)})')"
+tmp="$(mktemp -d)"
+trap 'rm -rf -- "$tmp"' EXIT
+cd "$tmp"
+if [ -f "$repo/.model-eol.json" ]; then
+  MODEL_EOL_UAT_REPO="$repo" npx --yes --package="model-eol@$version" \
+    -c 'cd "$MODEL_EOL_UAT_REPO" && model-eol plan .' > "$tmp/plan.json"
+else
+  MODEL_EOL_UAT_REPO="$repo" npx --yes --package="model-eol@$version" \
+    -c 'cd "$MODEL_EOL_UAT_REPO" && model-eol plan . --days 90 --scope direct' > "$tmp/plan.json"
+fi
+npx --yes --package="model-eol@$version" model-eol-bot evaluate \
+  --target-dir "$repo" \
+  --plan-file "$tmp/plan.json" \
+  --output-file "$tmp/eval.json"
+node -e 'const r=require(process.argv[1]); console.log(r.results)' "$tmp/eval.json"
+MODEL_EOL_EVAL_RESULTS_FILE="$tmp/eval.json" \
+  npx --yes --package="model-eol@$version" model-eol-bot \
+    --dry-run --target-dir "$repo" --repo OWNER/REPO
+```
+
+Each planned model is patched and evaluated independently. The cleanup trap
+removes the temporary artifacts when this shell exits; copy `eval.json` elsewhere
+after the dry run if you want to retain the receipt as UAT evidence. Then let
+`bot.yml.example` run the same contract with any explicitly opted-in provider
+keys available to its read-only evaluate job, not its write-capable publish job.
+
+Starting in 0.5, inline `model-eol-bot --eval` and the legacy unbound report/status
+artifacts are refused. A configured publication must consume the commit-bound
+manifest from `model-eol-bot evaluate`; missing results fail before GitHub API
+access.
 
 On its first actionable run, the bot creates the `model-eol` label. If repository
 policy prevents label creation or assignment, it fails closed rather than publish
 work whose ownership cannot be authenticated. Existing work is trusted only when
 the label, metadata, deterministic branch, repository, base, and Git lease agree.
-For HTTPS remotes—including private repositories—the bot passes `GITHUB_TOKEN` to
+For HTTPS remotes - including private repositories - the bot passes `GITHUB_TOKEN` to
 temporary Git processes as a host-scoped authorization header and never places it
 in a remote URL.
 
 Two operational notes the hard way teaches: PRs created with `GITHUB_TOKEN` do not
 trigger `pull_request` workflows (use a fine-grained PAT or GitHub App token when
 checks must run, stored as the optional `MODEL_EOL_BOT_TOKEN` secret), and the
-workflow splits privileges—provider keys live only in the read-only evaluation
-job, while write tokens live only in the reconciliation job.
+workflow splits privileges - only provider secrets explicitly added for the
+trusted eval live in the read-only evaluation job, while write tokens live only
+in the reconciliation job.
 
 ## Keeping the feeds honest
 
 ```sh
 node refresh/refresh.mjs --check                      # semantic diff vs live pages; exit 3 = PR-worthy
 node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai # distributor lifecycle clocks
-node scripts/feed-changelog.mjs                       # feeds' git history as an Atom feed
+node scripts/feed-changelog.mjs                       # local rendering of the hosted Atom feed
 ```
 
 Parse failures fail loudly and never emit a guessed feed. This runs automatically:
@@ -296,6 +430,14 @@ README freshness line - when anything material changed. The first live runs earn
 their keep: they caught the hand-compiled feeds drifting from Anthropic's
 recommendations within one week, and corrected a hand-compiled Bedrock date that
 was three months wrong.
+
+Every successful live refresh emits a byte-exact receipt. The Pages workflow
+publishes the [public contract](https://thossullivan.github.io/model-eol/) only
+when that receipt hashes the exact feeds on `main`: a no-change check can advance
+`last_checked` immediately, while a material-change run waits for its generated
+feed PR to merge. Feed `generated` remains semantic - it changes only when source
+data changes. The hosted contract contains canonical Draft-07 schemas, feeds
+with SHA-256 receipts, and the Atom changelog.
 
 The refresh also travels in the other direction. On August 3, Google removed the
 previously listed October 16 earliest shutdown dates for the Gemini 2.5 Pro,
@@ -322,6 +464,15 @@ move any of us can make here.
   CI runs the full suite on every push and PR. The copy-ready bot workflow ships
   as `bot.yml.example` and consumes the published package rather than local copies
   of the tooling.
+- The 0.5 Pages workflow publishes canonical schemas, feeds, refresh health, and
+  Atom at `thossullivan.github.io/model-eol`. Treat that host as authoritative
+  only after repository Pages is enabled and its first deployment passes the
+  exact-byte live check. `model-eol validate` checks feeds, repository policy,
+  check reports, inventories, schedules, alerts, and plans against the same zero-dependency
+  runtime contracts.
+  Maintainer rollout: set Pages source to GitHub Actions, dispatch `feed-refresh`
+  from `main`, and require the resulting `public-contract` deployment to pass
+  before releasing 0.5.
 - Current-model entries (and therefore policy-floor horizons) populate only when
   refresh runs with provider API keys for the models endpoints.
 - The checker matches known IDs only - it will not discover models absent from the
@@ -333,7 +484,7 @@ move any of us can make here.
   changes republish automatically as patch versions (trusted publishing with
   provenance), while manual code releases require an explicit stable version, so
   `npx model-eol` always checks against current dates.
-- Not yet: feed signing, gateway route resolvers.
+- Not yet: feed signing, authenticated account-level gateway/cloud resolvers.
 
 ## Contributing
 

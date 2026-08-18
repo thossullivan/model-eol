@@ -91,6 +91,11 @@ jobs:
             if (!matched.has(expected)) throw new Error(`inventory did not detect UAT reference: ${expected}`)
           }
           NODE
+      - name: UAT public document validation
+        uses: ./
+        with:
+          command: validate
+          paths: action-uat-inventory.json
       - name: UAT auto-discovered config and ignores
         uses: ./
         with:

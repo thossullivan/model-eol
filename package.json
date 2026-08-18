@@ -8,7 +8,7 @@
     "model-eol-bot": "bot/bot.mjs"
   },
   "scripts": {
-    "test": "node test/run.mjs && node refresh/test/run.mjs && node bot/test/run.mjs && node scripts/test-action-contract.mjs && node bot/test/package.mjs && node scripts/test-feed-changelog.mjs"
+    "test": "node test/run.mjs && node refresh/test/run.mjs && node bot/test/run.mjs && node scripts/test-action-contract.mjs && node scripts/test-document-validation.mjs && node scripts/test-eval-harness.mjs && node bot/test/package.mjs && node scripts/test-feed-changelog.mjs && node scripts/test-public-site.mjs"
   },
   "repository": {
     "type": "git",
@@ -38,12 +38,13 @@
     "bot/lib/",
     "feeds/",
     "schema/",
+    "examples/",
     "SPEC.md",
     "README.md",
     "LICENSE",
     "action.yml"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

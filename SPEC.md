@@ -1,6 +1,6 @@
-# model-eol - a machine-readable model deprecation feed (draft spec v0.1)
+# model-eol - a machine-readable model deprecation feed (public draft v0.1)
 
-> Status: sketch, 2026-07-25. The problem: model retirement dates live in HTML docs
+> Status: public draft, updated 2026-08-18. The problem: model retirement dates live in HTML docs
 > and emails, so every deprecation checker is a scraper with a private registry
 > format. Ordinary software solved this layer - endoflife.date for EOL data, OSV for
 > vulnerability feeds. This is the model version: small enough that a provider could
@@ -57,10 +57,20 @@ is data, which is exactly what scraping HTML can never give you.
 
 `distributions[].status`, when present, is one of `active`, `legacy`,
 `extended-access`, or `retired`. `legacy` means no new consumers but existing
-usage works; `extended-access` means availability continues past the stated
-`shutdown` under a paid or opt-in program (Bedrock offers this for some models) -
-the `shutdown` date stays the base retirement, and the status flags that a
-negotiated tail exists.
+usage works. `extended-access` means the distributor has announced or entered a
+distinct extended-access portion of that lifecycle; it does not imply availability
+after `shutdown`. On Amazon Bedrock, public extended access is a potentially
+higher-priced portion of the Legacy period for active users and ends at EOL, so
+`shutdown` remains the Bedrock EOL date. Bedrock still calls the encompassing
+state Legacy; `extended-access` is this feed's finer-grained channel signal.
+Private arrangements after EOL are not represented by this status. `retired`
+means the distributor explicitly reports the model as no longer generally
+available even when it does not publish an exact shutdown date.
+
+A model may contain at most one distribution for each `via`. Duplicate channel
+records are ambiguous and fail runtime semantic validation. Draft-07 can enforce
+whole-object uniqueness, but cannot express uniqueness keyed by the `via` field,
+so `model-eol validate` and feed loading enforce this constraint.
 
 ### Structured replacement contract
 
@@ -118,6 +128,11 @@ months early - or tell an OpenAI-direct shop they're fine because Azure says so.
   they don't.
 - **Consumers**: anything that can read JSON - a CI step, a dashboard, a Dependabot
   clone that opens migration PRs when `shutdown - today < threshold`.
+
+Repository tools that export CycloneDX SHOULD represent a canonical model once
+per lifecycle channel, with a deterministic channel-qualified `bom-ref`. This
+keeps direct publisher and distributor clocks distinct and binds each source
+occurrence to the lifecycle decision that evaluated it.
 
 ## Non-goals (v0.1)
 

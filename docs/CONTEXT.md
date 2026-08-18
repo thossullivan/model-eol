@@ -1,11 +1,11 @@
 # Context - read this first if you're picking the project up cold
 
-*Written 2026-07-25, the week the problem bit. Everything in this file is
-public-safe; the repo is private pre-publish but flips public later.*
+*Written 2026-07-25, the week the problem bit; updated 2026-08-18 after the
+public release and field UAT. Everything in this file is public-safe.*
 
 ## Origin
 
-On July 23, 2026, OpenAI shut down 18 models in one scheduled wave, including
+On July 23, 2026, OpenAI shut down a scheduled wave of models, including
 `o3-deep-research` - a model the author had a tuned research workflow on. The
 companion essay ("The Model BOM," forthcoming on tomsullivan.dev) argues that the
 model line in a software bill of materials is categorically different from every
@@ -101,9 +101,11 @@ competition - see the outreach issue.
 12. **Policy floors are stated policy, not contracts** - the wording in SPEC.md and
    the schedule output says exactly that, and feeds without a stated floor make no
    forward claim.
-13. **The eval hook is a security boundary.** Config-supplied command, so: separate
-   least-privilege job, scrubbed env namespace, bounded runtime and report size,
-   report treated as untrusted content in PR bodies.
+13. **The eval hook crosses a trust boundary.** Repository-owned code runs only in
+   the read-only evaluate job, with explicit normal environment forwarding,
+   bounded runtime/report size, and reports treated as untrusted content. The
+   forwarding allowlist is not an OS sandbox; the hard privilege boundary is no
+   repository write token, and publication never executes the eval command.
 14. **No model-attribution trailers on commits.** Implementation is a mix of Claude
    and Codex delegation; per-commit honesty lives in commit bodies ("Implemented by
    Codex (gpt-5.6-luna); reviewed by Claude"), never in Co-Authored-By trailers.
@@ -130,30 +132,35 @@ competition - see the outreach issue.
 4. Sweep this repo for anything non-public-safe (should be nothing; keep it that way
    - write every commit as if the repo were already public).
 
-## State as of 2026-08-01 (v0.1.0 tagged, v0.1.1 in progress)
+## State as of 2026-08-18
 
-Shipped and field-tested: hardened scanner (git ls-files traversal), plan/apply
-with strict gating, bot adapter (PR/issue lifecycle, sandboxed eval hook),
-refresh tooling (OpenAI + Anthropic pages, models endpoints, aws-bedrock
-distributor clocks), policy floors + safe_until/earliest-risk, --changed PR
-gate, CycloneDX export, badge + Atom changelog outputs, strict parseArgs CLIs
-with TTY colors, VHS demo, weekly feed-refresh workflow LIVE in this repo
-(verified green on GitHub runners).
+The direct-first product is shipped on npm and as a moving `v0` Action: bounded
+scanner, strict repository policy, mixed-repository overrides/routes, lifecycle
+reports, CycloneDX, safe plan/apply, and a stateless GitHub bot with trusted
+ownership, isolated per-migration evals, and stale-work reconciliation. Provider
+refresh covers OpenAI, Anthropic, and Google; distributor refresh covers Bedrock
+and Vertex. Weekly refresh, failure receipts, semantic PRs, trusted npm publishing,
+and exact-package consumer tests are live.
 
-Field-test receipts: found a model dead 47 days in a private repo's promptfoo
-config; a sweep across the maintainer's local repos found ~230 retired refs
-(most are pricing-table noise in one project - ignore-config material);
-feed drift caught within one week of hand compilation; a hand-compiled Bedrock
-date corrected by three months.
+The staged public-contract milestone gives every public schema a canonical ID, exposes
+`model-eol validate`, and adds a Pages publisher for hosted feeds, Atom, and
+`last_checked` health. The host becomes authoritative only after Pages is enabled
+and the exact-byte deployment UAT passes. The same milestone treats distributor
+status changes as material, preserves structured replacement guidance in
+machine-readable reports,
+and closes the remaining symlink false-clean edge. Node 22 is the supported floor;
+runtime and development dependencies remain zero.
 
-DONE since: npm publish (v0.2.2 live; npm-release.yml auto-publishes patch
-versions on material feed changes - caniuse-lite pattern, trusted publishing),
-CI workflow activated, provider API key secrets set, the public flip.
-Remaining, maintainer-side: configure the npm trusted publisher (package
-Settings -> Trusted publisher -> GitHub Actions, workflow npm-release.yml),
-activating the bot workflow from bot.yml.example, the essay/post.
-Remaining, backlog: Google/Vertex/Azure fetchers, gateway resolvers, monorepo
-ownership groups, feed signing, feeds-dir self-scan exclusion.
+Field-test receipts include a hosted plan/evaluate/publish run that created a
+one-line migration PR, owned-repository sweeps, a packed offline consumer, and an
+independent published `0.4.1` run against a content-heavy repository. The latter
+correctly found eight raw retired references, then went clean with an explicit
+policy excluding cached data, draft fixtures, and a reference catalog. That is
+the intended operating model: inventory first, then auditable repository policy.
+
+Expansion backlog: authenticated Azure/Bedrock/Vertex/gateway resolvers, more
+publisher feeds, waiver ownership/expiry, remote-feed trust/signing and overlay
+composition, and broader file-format coverage.
 
 ## Conventions
 

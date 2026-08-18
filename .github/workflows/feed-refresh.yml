@@ -61,6 +61,7 @@ jobs:
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "checked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           echo "providers=$providers" >> "$GITHUB_OUTPUT"
           echo "distributors=$distributors" >> "$GITHUB_OUTPUT"
 
@@ -101,6 +102,39 @@ jobs:
           fi
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
+      - name: Create byte-exact refresh receipt
+        if: success()
+        env:
+          CHECKED_AT: ${{ steps.check.outputs.checked_at }}
+          MATERIAL_CHANGES: ${{ steps.check.outputs.changed }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REFRESH_SHA: ${{ github.sha }}
+        run: |
+          args=(
+            create
+            --repo-dir .
+            --out _refresh-receipt/feed-refresh-receipt.json
+            --checked-at "$CHECKED_AT"
+            --refresh-run-url "$RUN_URL"
+            --refresh-sha "$REFRESH_SHA"
+          )
+          if [ "$MATERIAL_CHANGES" = 'true' ]; then
+            args+=(--state pending --pending-pr-url "$PR_URL")
+          else
+            args+=(--state clean)
+          fi
+          node scripts/feed-refresh-receipt.mjs "${args[@]}"
+
+      - name: Upload refresh receipt
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: feed-refresh-receipt
+          path: _refresh-receipt/feed-refresh-receipt.json
+          if-no-files-found: error
+          overwrite: true
+
       - name: Record successful refresh check
         if: success()
         env:
@@ -112,9 +146,11 @@ jobs:
             if [ "$MATERIAL_CHANGES" = "true" ]; then
               echo "Material feed changes were regenerated and validated."
               echo "Review PR: $PR_URL"
+              echo "The pending receipt hashes the regenerated PR feeds; it cannot mark the older main feeds clean."
             else
               echo "All configured live sources were checked successfully; no material feed changes were found."
               echo "The committed feed-generated date is intentionally unchanged because no feed data changed."
+              echo "The clean receipt hashes the exact feeds checked on main."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

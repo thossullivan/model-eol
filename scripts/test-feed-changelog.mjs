@@ -103,6 +103,8 @@ try {
   assert(atom.includes('<title>test: 1 shutdown change, 1 model added</title>'), 'entry title includes shutdown and added-model counts')
   assert(atom.includes('<title>initial import</title>'), 'initial feed import is represented')
   assert(atom.includes('&lt;pre&gt;') && !atom.includes('<pre>'), 'Atom content wrapper is XML-escaped')
+  assert(atom.includes('<author><name>model-eol maintainers</name></author>'), 'Atom feed identifies its author')
+  assert(atom.includes('<link rel="self" href="https://thossullivan.github.io/model-eol/changelog.atom" />'), 'Atom feed publishes its canonical subscription URL')
 
   for (const tag of ['feed', 'entry', 'title', 'updated']) {
     const opening = (atom.match(new RegExp(`<${tag}(?:\\s|>)`, 'g')) ?? []).length

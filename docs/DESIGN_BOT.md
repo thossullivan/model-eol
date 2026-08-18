@@ -1,11 +1,10 @@
 # Design - the model-eol bot ("Dependabot for models")
 
-*Status: agreed 2026-08-01 after two adversarial design reviews (Claude + Codex)
-and a first field test of the core against real repos. SHIPPED same day in
-v0.1.0: all tracks below are implemented (see docs/CONTEXT.md "State as of
-2026-08-01"). One deviation earned by field testing: retired generic
-model-references file issues too (reason not-direct-api) - the original issue
-allowlist accidentally made them invisible.*
+*Status 2026-08-18: the architecture below is shipped, adversarially reviewed,
+and proven through a hosted plan/evaluate/publish UAT. Current releases add
+commit-bound evaluator artifacts, trusted ownership leases, stale-work
+reconciliation, per-reference routing, and permanent published-consumer tests.
+Retired generic model references remain issue-only (`not-direct-api`).*
 
 ## Decisions locked
 
@@ -97,24 +96,41 @@ bot adapter consuming versioned `plan --json`. Nothing stateful in the core.
 - **Token reality**: PRs created with `GITHUB_TOKEN` do not trigger
   `on: pull_request` workflows. Document a fine-grained PAT / GitHub App token
   as the recommended path; degrade gracefully (PR still opens, body warns).
-- **Feed freshness**: the adapter fetches feeds from this repo's main branch at
-  runtime (schema-validated), with the vendored copy as offline fallback and
-  `--feeds` as override. A pinned action must not mean pinned data.
+- **Feed freshness**: the copy-ready workflow resolves the moving npm `0.x` line
+  once and carries that exact published package through all three jobs. Its
+  schema-validated bundled feeds are the default. Explicit remote feed URLs are
+  opt-in, fail closed, and may use a configured vendored fallback in degraded
+  report-only mode.
 
 ### A4. Eval hook (security boundary, per Codex review - critical finding)
 
 Contract: `{"eval": {"command": "..."}}` in `.model-eol.json`; env vars
 `MODEL_EOL_OLD_ID`, `MODEL_EOL_NEW_ID`, `MODEL_EOL_PLAN`; exit 0 = pass;
-optional markdown report via `MODEL_EOL_REPORT` path.
+a regular bounded Markdown report is required at the `MODEL_EOL_REPORT` path for
+an exit-zero run to count as passing.
+
+The command is intentionally explicit rather than inferred from package files:
+model-eol cannot know whether a unit suite proves tool calling, structured output,
+retrieval quality, or another repository-specific behavior. The checked-in
+[`examples/model-eol-eval.mjs`](../examples/model-eol-eval.mjs) is the
+dependency-free starter. Consumers should customize its verification command and
+semantic assertions, always write a non-secret receipt to `MODEL_EOL_REPORT`, and
+run the evaluator locally against a clean committed checkout before enabling the
+hosted workflow. A non-empty `MODEL_EOL_EVAL_COMMAND` workflow variable takes
+precedence over `eval.command`; an absent command is recorded as unconfigured,
+not silently treated as a passing eval.
 
 Execution rules: the workflow resolves the moving npm major once, validates and
 records the exact version, and reuses it in all three jobs. The plan job emits a
 versioned plan. A separate least-privilege evaluate job independently verifies
 that plan, applies each migration in its own temporary checkout, then invokes
 the configured command with its own old/new IDs and selected plan. It has no
-write token; provider keys are forwarded only when named by `eval.pass_env`.
-Timeout and report-size limits apply per migration, and eval workspace/history
-drift turns that migration into a failure.
+write token; consumers add only the provider secrets their trusted eval needs,
+and those names must also appear in `eval.pass_env`. Environment filtering controls
+normal child-process forwarding, not same-user OS isolation; repository code and
+its dependencies remain trusted inside the evaluate job. Timeout and report-size
+limits apply per migration, and tracked eval workspace/history drift turns that
+migration into a failure.
 
 The evaluate job always uploads one bounded result manifest containing an exact
 pass/fail/timeout record per migration. The manifest is bound to the evaluated
@@ -124,7 +140,14 @@ independently regenerates the plan, verifies both artifacts before any GitHub
 operation, publishes passing migrations, records failed peers as blocked, and
 returns non-zero if any conflict, eval failure, lease stand-down, label failure,
 or degraded report-only decision remains. Reports are untrusted content: capped
-and fenced when embedded in PR bodies.
+and fenced when embedded in PR bodies. The publish process never executes
+repository-owned eval code. When `eval.command` is configured, a missing bound
+result manifest fails before GitHub API access.
+
+The former inline `model-eol-bot --eval` mode and the unbound report/status
+artifacts are intentionally refused: process-level environment scrubbing is not a
+privilege boundary when evaluation and publication share a user and write token.
+Consumers migrate to the plan/evaluate/publish workflow in `bot.yml.example`.
 
 ### Config - `.model-eol.json` in the consuming repo
 

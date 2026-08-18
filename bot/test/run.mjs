@@ -38,6 +38,15 @@ const assert = (condition, message) => {
 const unknownFlag = spawnSync(process.execPath, [path.join(root, 'bot', 'bot.mjs'), '--dyas', '90'], { encoding: 'utf8' })
 assert(unknownFlag.status === 2 && unknownFlag.stderr.includes('--dyas') && unknownFlag.stderr.includes('--help'), 'unknown bot flags exit 2 with the bad flag and help hint')
 
+const deprecatedInlineEval = spawnSync(process.execPath, [path.join(root, 'bot', 'bot.mjs'), '--eval', '--dry-run'], { encoding: 'utf8' })
+assert(deprecatedInlineEval.status === 2 && deprecatedInlineEval.stderr.includes('inline --eval was removed') && deprecatedInlineEval.stderr.includes('MODEL_EOL_EVAL_RESULTS_FILE'), 'removed inline --eval fails with read-only evaluate migration guidance')
+
+const deprecatedEvalArtifacts = spawnSync(process.execPath, [path.join(root, 'bot', 'bot.mjs'), '--dry-run'], {
+  encoding: 'utf8',
+  env: { ...process.env, MODEL_EOL_EVAL_REPORT_FILE: 'legacy-report.md' },
+})
+assert(deprecatedEvalArtifacts.status === 2 && deprecatedEvalArtifacts.stderr.includes('not commit-bound') && deprecatedEvalArtifacts.stderr.includes('MODEL_EOL_EVAL_RESULTS_FILE'), 'removed unbound eval report/status contract fails with a bound-manifest migration hint')
+
 const git = (cwd, args) => {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
   if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`)
@@ -70,6 +79,44 @@ const makeRepo = ({ name = 'repo', files = {}, config = null } = {}) => {
   git(work, ['push', '-u', 'origin', 'main'])
   git(bare, ['symbolic-ref', 'HEAD', 'refs/heads/main'])
   return { bare, work }
+}
+
+let boundArtifactSequence = 0
+const evaluateForPublish = async ({
+  targetDir,
+  configPath = null,
+  vendoredFeeds = path.join(root, 'feeds'),
+  checkerPath,
+  commandOverride = null,
+  now = new Date('2026-08-01T00:00:00Z'),
+} = {}) => {
+  const selectedConfig = configPath ?? path.join(targetDir, '.model-eol.json')
+  const config = loadConfig(selectedConfig)
+  const planConfigPath = fs.existsSync(selectedConfig) ? selectedConfig : null
+  const plan = runPlan({
+    workDir: targetDir,
+    config,
+    configPath: planConfigPath,
+    feedsDir: vendoredFeeds,
+    checkerPath,
+    warn: () => {},
+  })
+  const suffix = ++boundArtifactSequence
+  const planFile = path.join(tempRoot, `bound-plan-${suffix}.json`)
+  const evalResultsFile = path.join(tempRoot, `bound-eval-${suffix}.json`)
+  write(planFile, JSON.stringify(plan, null, 2))
+  const evaluation = await evaluatePlan({
+    targetDir,
+    configPath,
+    planFile,
+    outputFile: evalResultsFile,
+    vendoredFeeds,
+    checkerPath,
+    commandOverride,
+    now,
+    warn: () => {},
+  })
+  return { plan, planFile, evalResultsFile, evaluation }
 }
 
 const bareBranchFile = (repo, branch, file) => git(repo.bare, ['show', `${branch}:${file}`])
@@ -174,6 +221,9 @@ const config = {
   days: 90,
   scope: 'direct',
   issues: { enabled: false },
+}
+const lifecycleConfig = {
+  ...config,
   eval: {
     command: 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "eval report with ```fence```")\'',
     timeout_ms: 1000,
@@ -181,19 +231,25 @@ const config = {
     pass_env: [],
   },
 }
-const repo = makeRepo({ name: 'lifecycle', files: baseFiles, config })
+const repo = makeRepo({ name: 'lifecycle', files: baseFiles, config: lifecycleConfig })
 const github = new FakeGitHub()
-const run = options => runBot({
-  repo: 'example/app',
-  targetDir: repo.work,
-  token: 'test-token',
-  transport: github.transport.bind(github),
-  vendoredFeeds: path.join(root, 'feeds'),
-  now: new Date('2026-08-01T00:00:00Z'),
-  ...options,
-})
+const run = async (options = {}) => {
+  const vendoredFeeds = options.vendoredFeeds ?? path.join(root, 'feeds')
+  const artifacts = await evaluateForPublish({ targetDir: repo.work, vendoredFeeds })
+  return runBot({
+    repo: 'example/app',
+    targetDir: repo.work,
+    token: 'test-token',
+    transport: github.transport.bind(github),
+    vendoredFeeds,
+    planFile: artifacts.planFile,
+    evalResultsFile: artifacts.evalResultsFile,
+    now: new Date('2026-08-01T00:00:00Z'),
+    ...options,
+  })
+}
 
-const first = await run({ evalEnabled: true, tokenKind: 'github-token' })
+const first = await run({ tokenKind: 'github-token' })
 const firstDecision = first.decisions.find(item => item.group.kind === 'model')
 const branch = branchFor('openai', 'o3-deep-research-2025-06-26')
 const createCall = github.callsFor('POST', '/pulls')[0]
@@ -302,7 +358,7 @@ assert(clockPublisherDecision?.action === 'create' && clockDistributorDecision?.
 assert(clockGithub.callsFor('POST', '/pulls').length === 2 && clockGithub.pulls[0].head.ref !== clockGithub.pulls[1].head.ref, 'clock-specific PR matching does not reuse the publisher-clock PR')
 
 const callsAfterCreate = github.calls.length
-const unchanged = await run({ evalEnabled: true })
+const unchanged = await run()
 assert(unchanged.decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'unchanged feed digest does nothing')
 assert(github.calls.length > callsAfterCreate && github.callsFor('PATCH', '/pulls').length === 0, 'unchanged state only performs discovery')
 
@@ -328,6 +384,31 @@ const baseFreshSecond = await baseFreshRun()
 const baseFreshSecondDecision = baseFreshSecond.decisions.find(item => item.group.kind === 'model')
 assert(baseFreshSecondDecision?.action === 'update', 'unchanged finding is regenerated when its recorded default-branch base is stale')
 assert(parseMetadata(baseFreshSecondDecision?.body)?.base_sha === headOf(baseFreshRepo, 'main'), 'refreshed PR metadata records the independently cloned default-branch head')
+
+const publishWindowRepo = makeRepo({ name: 'publish-window-drift', files: baseFiles, config: { issues: { enabled: false } } })
+const publishWindowGithub = new FakeGitHub()
+publishWindowGithub.beforeListPulls = (_api, count) => {
+  if (count !== 1) return
+  write(path.join(publishWindowRepo.work, 'README.md'), 'default branch moved after the publisher captured its base\n')
+  git(publishWindowRepo.work, ['add', 'README.md'])
+  git(publishWindowRepo.work, ['commit', '-m', 'move base during publish'])
+  git(publishWindowRepo.work, ['push', 'origin', 'main'])
+}
+let publishWindowError = null
+try {
+  await runBot({
+    repo: 'example/publish-window-drift',
+    targetDir: publishWindowRepo.work,
+    token: 'test-token',
+    transport: publishWindowGithub.transport.bind(publishWindowGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+} catch (error) {
+  publishWindowError = error
+}
+assert(publishWindowError?.message.includes('prepared base commit') && publishWindowError.message.includes('does not match evaluated base commit'), 'publisher refuses a patch checkout when the default branch moves after plan and eval verification')
+assert(publishWindowGithub.callsFor('POST', '/pulls').length === 0 && !gitTry(publishWindowRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'publish-window base drift fails before patch branch push or pull-request creation')
 
 const staleRepo = makeRepo({ name: 'stale-reconciliation', files: baseFiles, config: { issues: { enabled: false } } })
 const staleGithub = new FakeGitHub()
@@ -417,7 +498,7 @@ const replacementChanged = await replacementRun({ vendoredFeeds: replacementYFee
 assert(replacementChanged.decisions.find(item => item.group.kind === 'model')?.action === 'create' && replacementGithub.callsFor('POST', '/pulls').length === 2, 'changed replacement creates a fresh PR instead of reusing dismissal')
 
 const beforeUpdateHead = headOf(repo, branch)
-const updated = await run({ evalEnabled: true, vendoredFeeds: changedFeeds })
+const updated = await run({ vendoredFeeds: changedFeeds })
 const updateDecision = updated.decisions.find(item => item.group.kind === 'model')
 assert(updateDecision?.action === 'update', 'changed digest with intact bot head updates the PR')
 assert(headOf(repo, branch) !== beforeUpdateHead, 'changed digest force-pushes a regenerated branch')
@@ -732,30 +813,30 @@ if (fifoAvailable) {
   assert(true, 'FIFO eval test skipped because mkfifo is unavailable')
 }
 
-const externalEvalRepo = makeRepo({ name: 'external-eval-status', files: baseFiles, config: { issues: { enabled: false } } })
-const externalEvalGithub = new FakeGitHub()
-const externalReport = path.join(tempRoot, 'external-eval-report.md')
-const externalStatus = path.join(tempRoot, 'external-eval-status.txt')
-const externalRun = () => runBot({
-  repo: 'example/external-eval-status',
-  targetDir: externalEvalRepo.work,
-  token: 'test-token',
-  transport: externalEvalGithub.transport.bind(externalEvalGithub),
-  vendoredFeeds: path.join(root, 'feeds'),
-  evalReportFile: externalReport,
-  evalStatusFile: externalStatus,
-  now: new Date('2026-08-01T00:00:00Z'),
+const missingBoundRepo = makeRepo({
+  name: 'missing-bound-eval',
+  files: baseFiles,
+  config: {
+    issues: { enabled: false },
+    eval: { command: 'node scripts/model-eol-eval.mjs' },
+  },
 })
-write(externalReport, 'external report')
-write(externalStatus, '0garbage')
-const malformedExternal = await externalRun()
-assert(malformedExternal.decisions.find(item => item.group.kind === 'model')?.action === 'eval-failed', 'malformed external eval status fails closed')
-fs.rmSync(externalStatus, { force: true })
-const missingExternal = await externalRun()
-assert(missingExternal.decisions.find(item => item.group.kind === 'model')?.action === 'eval-failed', 'missing external eval status fails even with a report')
-write(externalStatus, '0')
-const cleanExternal = await externalRun()
-assert(cleanExternal.decisions.find(item => item.group.kind === 'model')?.action === 'create' && externalEvalGithub.callsFor('POST', '/pulls').length === 1, 'strict zero external eval status permits the patch')
+const missingBoundGithub = new FakeGitHub()
+let missingBoundError = null
+try {
+  await runBot({
+    repo: 'example/missing-bound-eval',
+    targetDir: missingBoundRepo.work,
+    token: 'test-token',
+    transport: missingBoundGithub.transport.bind(missingBoundGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+} catch (error) {
+  missingBoundError = error
+}
+assert(missingBoundError?.message.includes('configured eval requires MODEL_EOL_EVAL_RESULTS_FILE'), 'configured publication refuses to bypass the read-only evaluator')
+assert(missingBoundGithub.calls.length === 0 && !gitTry(missingBoundRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'missing bound eval results fail before GitHub API calls or patch pushes')
 
 const evalMissingRepo = makeRepo({
   name: 'eval-missing-report',
@@ -766,13 +847,15 @@ const evalMissingRepo = makeRepo({
   },
 })
 const evalMissingGithub = new FakeGitHub()
+const evalMissingArtifacts = await evaluateForPublish({ targetDir: evalMissingRepo.work })
 const evalMissingResult = await runBot({
   repo: 'example/eval-missing-report',
   targetDir: evalMissingRepo.work,
   token: 'test-token',
   transport: evalMissingGithub.transport.bind(evalMissingGithub),
   vendoredFeeds: path.join(root, 'feeds'),
-  evalEnabled: true,
+  planFile: evalMissingArtifacts.planFile,
+  evalResultsFile: evalMissingArtifacts.evalResultsFile,
   now: new Date('2026-08-01T00:00:00Z'),
 })
 const evalMissingDecision = evalMissingResult.decisions.find(item => item.group.kind === 'model')
@@ -788,13 +871,15 @@ const extraEvalRepo = makeRepo({
   },
 })
 const extraEvalGithub = new FakeGitHub()
+const extraEvalArtifacts = await evaluateForPublish({ targetDir: extraEvalRepo.work })
 const extraEvalResult = await runBot({
   repo: 'example/eval-extra-file',
   targetDir: extraEvalRepo.work,
   token: 'test-token',
   transport: extraEvalGithub.transport.bind(extraEvalGithub),
   vendoredFeeds: path.join(root, 'feeds'),
-  evalEnabled: true,
+  planFile: extraEvalArtifacts.planFile,
+  evalResultsFile: extraEvalArtifacts.evalResultsFile,
   now: new Date('2026-08-01T00:00:00Z'),
 })
 const extraEvalDecision = extraEvalResult.decisions.find(item => item.group.kind === 'model')
@@ -810,13 +895,15 @@ const mutatedEvalRepo = makeRepo({
   },
 })
 const mutatedEvalGithub = new FakeGitHub()
+const mutatedEvalArtifacts = await evaluateForPublish({ targetDir: mutatedEvalRepo.work })
 const mutatedEvalResult = await runBot({
   repo: 'example/eval-mutated-plan-file',
   targetDir: mutatedEvalRepo.work,
   token: 'test-token',
   transport: mutatedEvalGithub.transport.bind(mutatedEvalGithub),
   vendoredFeeds: path.join(root, 'feeds'),
-  evalEnabled: true,
+  planFile: mutatedEvalArtifacts.planFile,
+  evalResultsFile: mutatedEvalArtifacts.evalResultsFile,
   now: new Date('2026-08-01T00:00:00Z'),
 })
 const mutatedEvalDecision = mutatedEvalResult.decisions.find(item => item.group.kind === 'model')
@@ -831,16 +918,141 @@ const cleanRideRepo = makeRepo({
   },
 })
 const cleanRideGithub = new FakeGitHub()
+const cleanRideArtifacts = await evaluateForPublish({ targetDir: cleanRideRepo.work })
 const cleanRideResult = await runBot({
   repo: 'example/eval-clean-ride',
   targetDir: cleanRideRepo.work,
   token: 'test-token',
   transport: cleanRideGithub.transport.bind(cleanRideGithub),
   vendoredFeeds: path.join(root, 'feeds'),
-  evalEnabled: true,
+  planFile: cleanRideArtifacts.planFile,
+  evalResultsFile: cleanRideArtifacts.evalResultsFile,
   now: new Date('2026-08-01T00:00:00Z'),
 })
-assert(cleanRideResult.decisions.find(item => item.group.kind === 'model')?.action === 'create', 'clean eval ride-along still commits the patch')
+const cleanRideDecision = cleanRideResult.decisions.find(item => item.group.kind === 'model')
+const cleanRideMetadata = parseMetadata(cleanRideDecision?.body)
+assert(cleanRideDecision?.action === 'create', 'bound passing eval result permits the write-only publisher to commit the patch')
+assert(cleanRideDecision?.body.includes('Result: pass') && cleanRideDecision.body.includes('pass') && cleanRideMetadata?.eval_config_digest === cleanRideArtifacts.evaluation.artifact.eval_config_digest, 'published PR records the passing report and exact eval configuration digest')
+
+const durableEvalRepo = makeRepo({ name: 'durable-eval-failure', files: baseFiles })
+const durableEvalGithub = new FakeGitHub()
+const durableEvalConfigFile = path.join(tempRoot, 'durable-eval-config.json')
+const writeDurableEvalConfig = passing => write(durableEvalConfigFile, JSON.stringify({
+  issues: { enabled: true },
+  eval: {
+    command: passing
+      ? 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "durable eval passed")\''
+      : 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "durable eval failed with ```untrusted``` output");process.exit(7)\'',
+    timeout_ms: 1000,
+    max_report_bytes: 1024,
+    pass_env: [],
+  },
+}))
+const durableEvalRun = async () => {
+  const artifacts = await evaluateForPublish({
+    targetDir: durableEvalRepo.work,
+    configPath: durableEvalConfigFile,
+  })
+  return runBot({
+    repo: 'example/durable-eval-failure',
+    targetDir: durableEvalRepo.work,
+    configPath: durableEvalConfigFile,
+    token: 'test-token',
+    transport: durableEvalGithub.transport.bind(durableEvalGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    planFile: artifacts.planFile,
+    evalResultsFile: artifacts.evalResultsFile,
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+}
+writeDurableEvalConfig(false)
+const durableEvalFailed = await durableEvalRun()
+const durableEvalFailedDecision = durableEvalFailed.decisions.find(item => item.group.kind === 'model')
+const firstEvalIssue = durableEvalGithub.issues.find(item => item.state === 'open')
+const firstEvalIssueMetadata = parseMetadata(firstEvalIssue?.body)
+assert(durableEvalFailedDecision?.action === 'eval-failed' && durableEvalFailedDecision.issueAction === 'create', 'failed configured eval creates a durable issue decision')
+assert(durableEvalGithub.callsFor('POST', '/pulls').length === 0 && durableEvalGithub.callsFor('POST', '/issues').length === 1, 'failed configured eval opens an issue and never a pull request')
+assert(firstEvalIssue?.labels?.some(label => label === 'model-eol' || label.name === 'model-eol') && firstEvalIssueMetadata?.channel === 'configured-eval', 'eval failure issue is labelled and carries a distinct trusted metadata identity')
+assert(firstEvalIssue?.body.includes('Result: fail') && firstEvalIssue.body.includes('durable eval failed') && !firstEvalIssue.body.includes('```untrusted```'), 'eval failure issue records a safely fenced bounded report')
+const durableEvalStillFailed = await durableEvalRun()
+assert(durableEvalStillFailed.decisions.find(item => item.group.kind === 'model')?.issueAction === 'skip-unchanged' && durableEvalGithub.callsFor('POST', '/issues').length === 1, 'persistent eval failure maintains one unchanged durable issue')
+
+const durablePatchCallsBeforeLabelFailure = durableEvalGithub.calls.filter(call => call.method === 'PATCH').length
+durableEvalGithub.labelExists = false
+durableEvalGithub.labelCreateStatus = 403
+const durableLabelUnavailable = await durableEvalRun()
+assert(durableLabelUnavailable.decisions.some(item => item.action === 'label-unavailable'), 'transient label denial fails closed before processing configured eval work')
+assert(firstEvalIssue?.state === 'open' && durableEvalGithub.calls.filter(call => call.method === 'PATCH').length === durablePatchCallsBeforeLabelFailure, 'label denial preserves an active configured-eval issue without stale reconciliation writes')
+durableEvalGithub.labelExists = true
+durableEvalGithub.labelCreateStatus = 201
+
+writeDurableEvalConfig(true)
+const durableEvalCleared = await durableEvalRun()
+const durableEvalPull = durableEvalGithub.pulls.find(item => item.state === 'open')
+assert(durableEvalCleared.decisions.some(item => item.group.kind === 'model' && item.action === 'create') && durableEvalPull, 'cleared eval opens the migration pull request')
+assert(durableEvalCleared.decisions.some(item => item.group.kind === 'issue' && item.action === 'close-stale') && firstEvalIssue?.state === 'closed' && parseMetadata(firstEvalIssue?.body)?.stale_closed === true, 'cleared eval reconciles its durable issue as stale')
+
+writeDurableEvalConfig(false)
+const durableEvalReappeared = await durableEvalRun()
+const secondEvalIssue = durableEvalGithub.issues.find(item => item.state === 'open')
+assert(durableEvalReappeared.decisions.some(item => item.group.kind === 'model' && item.action === 'eval-failed') && secondEvalIssue?.number !== firstEvalIssue?.number, 'reappearing eval failure creates fresh durable work after automated closure')
+assert(durableEvalGithub.callsFor('POST', '/pulls').length === 1 && durableEvalPull?.state === 'closed' && parseMetadata(durableEvalPull?.body)?.stale_closed === true, 'reappearing eval failure closes the trusted bot PR and never opens a failing replacement PR')
+
+writeDurableEvalConfig(true)
+const durableEvalClearedAgain = await durableEvalRun()
+assert(durableEvalClearedAgain.decisions.some(item => item.group.kind === 'model' && item.action === 'create') && durableEvalGithub.callsFor('POST', '/pulls').length === 2, 'a second cleared eval safely regenerates a fresh migration PR')
+assert(secondEvalIssue?.state === 'closed' && parseMetadata(secondEvalIssue?.body)?.stale_closed === true, 'the reappeared eval issue reconciles when the eval clears again')
+
+const channelCollisionRepo = makeRepo({
+  name: 'eval-issue-channel-collision',
+  files: {
+    ...baseFiles,
+    'generic.py': 'MODEL = "o3-deep-research"\n',
+  },
+})
+const channelCollisionGithub = new FakeGitHub()
+const channelCollisionConfigFile = path.join(tempRoot, 'eval-issue-channel-collision.json')
+const writeChannelCollisionConfig = passing => write(channelCollisionConfigFile, JSON.stringify({
+  issues: { enabled: true },
+  eval: {
+    command: passing
+      ? 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "pass")\''
+      : 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "fail");process.exit(7)\'',
+    timeout_ms: 1000,
+    max_report_bytes: 1024,
+    pass_env: [],
+  },
+}))
+const channelCollisionRun = async () => {
+  const artifacts = await evaluateForPublish({
+    targetDir: channelCollisionRepo.work,
+    configPath: channelCollisionConfigFile,
+  })
+  return runBot({
+    repo: 'example/eval-issue-channel-collision',
+    targetDir: channelCollisionRepo.work,
+    configPath: channelCollisionConfigFile,
+    token: 'test-token',
+    transport: channelCollisionGithub.transport.bind(channelCollisionGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    planFile: artifacts.planFile,
+    evalResultsFile: artifacts.evalResultsFile,
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+}
+writeChannelCollisionConfig(false)
+await channelCollisionRun()
+const collisionEvalIssues = () => channelCollisionGithub.issues.filter(issue => parseMetadata(issue.body)?.channel === 'configured-eval')
+const collisionOrdinaryIssues = () => channelCollisionGithub.issues.filter(issue => (parseMetadata(issue.body)?.channel ?? null) === null)
+assert(collisionEvalIssues().length === 1 && collisionOrdinaryIssues().length === 1 && channelCollisionGithub.issues.every(issue => issue.state === 'open'), 'a failed eval and ordinary finding for the same model keep distinct issue identities')
+await channelCollisionRun()
+assert(channelCollisionGithub.issues.length === 2 && parseMetadata(collisionEvalIssues()[0].body)?.channel === 'configured-eval', 'persistent failure maintains both issue channels without overwriting metadata')
+writeChannelCollisionConfig(true)
+await channelCollisionRun()
+assert(collisionEvalIssues()[0].state === 'closed' && collisionOrdinaryIssues()[0].state === 'open', 'clearing eval closes only configured-eval work and preserves the ordinary finding')
+writeChannelCollisionConfig(false)
+await channelCollisionRun()
+assert(collisionEvalIssues().filter(issue => issue.state === 'open').length === 1 && collisionOrdinaryIssues().length === 1 && collisionOrdinaryIssues()[0].state === 'open', 'reappearing eval failure creates fresh eval work without duplicating or suppressing its ordinary sibling')
 
 const maliciousFeeds = path.join(tempRoot, 'malicious-feeds')
 fs.cpSync(path.join(root, 'feeds'), maliciousFeeds, { recursive: true })
@@ -952,14 +1164,18 @@ for (const name of envNames) {
 assert(reportForBody('```untrusted```') === 'untrusted', 'report embedding strips backticks')
 
 const transportCallsBeforeDry = github.calls.length
+const dryArtifacts = await evaluateForPublish({ targetDir: repo.work })
 const dry = await runBot({
   repo: 'example/app',
   targetDir: repo.work,
   dryRun: true,
   transport: async () => { throw new Error('dry-run must not call transport') },
   vendoredFeeds: path.join(root, 'feeds'),
+  planFile: dryArtifacts.planFile,
+  evalResultsFile: dryArtifacts.evalResultsFile,
 })
 assert(dry.decisions.some(item => item.action === 'create'), 'dry-run prints would-be create decisions')
+assert(dry.decisions.find(item => item.group.kind === 'model')?.body.includes('Result: pass'), 'dry-run consumes the same bound eval result instead of bypassing configured evaluation')
 assert(github.calls.length === transportCallsBeforeDry, 'dry-run makes zero GitHub transport calls')
 assert(!gitTry(repo.bare, ['show-ref', '--verify', `refs/heads/${branch}-dry-run`]), 'dry-run makes no push')
 
@@ -1019,7 +1235,7 @@ assert(tamperedArtifactError?.message.includes('does not match the independently
 assert(artifactGithub.calls.length === 0, 'tampered plan artifact is rejected before any GitHub reads or writes')
 
 const policyArgsChecker = path.join(tempRoot, 'policy-args-checker.mjs')
-write(policyArgsChecker, `const forbidden = process.argv.slice(2).filter(value => ["--days", "--scope", "--via"].includes(value)); if (forbidden.length) { console.error("config masked by " + forbidden.join(",")); process.exit(9) } console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:["config-only-policy"],items:[],issues:[]}))\n`)
+write(policyArgsChecker, `const forbidden = process.argv.slice(2).filter(value => ["--days", "--scope", "--via"].includes(value)); if (forbidden.length) { console.error("config masked by " + forbidden.join(",")); process.exit(9) } console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:[{reason:"config-only-policy"}],items:[],issues:[]}))\n`)
 const policyArgsRepo = makeRepo({
   name: 'policy-args',
   files: baseFiles,
@@ -1035,7 +1251,7 @@ const policyArgsResult = await runBot({
   checkerPath: policyArgsChecker,
   vendoredFeeds: path.join(root, 'feeds'),
 })
-assert(policyArgsResult.plan.scan_notes.includes('config-only-policy'), 'bot forwards config without top-level days/scope/via flags that would mask path routes and overrides')
+assert(policyArgsResult.plan.scan_notes.some(note => note.reason === 'config-only-policy'), 'bot forwards config without top-level days/scope/via flags that would mask path routes and overrides')
 
 const nullViaRepo = makeRepo({
   name: 'null-via',
@@ -1112,6 +1328,51 @@ assert(partitionEvaluation.artifact.results.length === 2 && partitionPass && par
 assert(partitionEvaluation.artifact.base_sha === headOf(partitionRepo, 'main'), 'eval manifest records the exact evaluated default-branch commit')
 assert(partitionPass.report.includes('true|explicit-pass-env|undefined|1'), 'per-group eval sees the patched migration, selected one-item plan, and explicit pass_env only')
 assert(Buffer.byteLength(partitionFail.report) <= 128 && partitionFail.report.includes('truncated'), 'per-group eval report honors the configured byte cap')
+
+const movingSourceCommand = 'node -e \'const fs=require("fs");const {spawnSync}=require("child_process");fs.writeFileSync(process.env.MODEL_EOL_REPORT,"pass");const r=spawnSync("git",["-C",process.env.MODEL_EOL_TEST_SOURCE,"commit","--allow-empty","-m","move source during eval"],{stdio:"ignore"});process.exit(r.status??1)\''
+const movingSourceRepo = makeRepo({
+  name: 'moving-eval-source',
+  files: baseFiles,
+  config: {
+    issues: { enabled: false },
+    eval: {
+      command: movingSourceCommand,
+      timeout_ms: 1000,
+      max_report_bytes: 128,
+      pass_env: ['MODEL_EOL_TEST_SOURCE'],
+    },
+  },
+})
+const movingSourceConfigFile = path.join(movingSourceRepo.work, '.model-eol.json')
+const movingSourcePlan = runPlan({
+  workDir: movingSourceRepo.work,
+  config: loadConfig(movingSourceConfigFile),
+  configPath: movingSourceConfigFile,
+  feedsDir: path.join(root, 'feeds'),
+  warn: () => {},
+})
+const movingSourcePlanFile = path.join(tempRoot, 'moving-source-plan.json')
+const movingSourceEvalFile = path.join(tempRoot, 'moving-source-eval.json')
+write(movingSourcePlanFile, JSON.stringify(movingSourcePlan, null, 2))
+const savedEvalSource = process.env.MODEL_EOL_TEST_SOURCE
+process.env.MODEL_EOL_TEST_SOURCE = movingSourceRepo.work
+let movingSourceError = null
+try {
+  await evaluatePlan({
+    targetDir: movingSourceRepo.work,
+    configPath: movingSourceConfigFile,
+    planFile: movingSourcePlanFile,
+    outputFile: movingSourceEvalFile,
+    vendoredFeeds: path.join(root, 'feeds'),
+    commandOverride: null,
+  })
+} catch (error) {
+  movingSourceError = error
+} finally {
+  if (savedEvalSource === undefined) delete process.env.MODEL_EOL_TEST_SOURCE
+  else process.env.MODEL_EOL_TEST_SOURCE = savedEvalSource
+}
+assert(movingSourceError?.message.includes('target commit changed during migration evaluation') && !fs.existsSync(movingSourceEvalFile), 'evaluator never labels earlier results with a base commit that moved during evaluation')
 
 const timeoutEvalFile = path.join(tempRoot, 'partition-timeout-eval.json')
 const timeoutEvaluation = await evaluatePlan({
@@ -1318,7 +1579,7 @@ assert(headOf(leaseRepo, leaseBranch) === leaseHeadBefore, 'committer identity m
 assert(leaseGithub.callsFor('POST', '/comments').some(call => call.body.body?.includes('forge the configured identity')), 'lease stand-down comment records the residual identity-forgery risk')
 
 const malformedChecker = path.join(tempRoot, 'malformed-plan-checker.mjs')
-write(malformedChecker, 'console.log(JSON.stringify({ plan_schema: "model-eol.plan/0.1", items: [{ file: "direct.py", line: 0, occurrence: 0, matched: "old", replacement: "new", expected_line_sha256: "' + '0'.repeat(64) + '" }], issues: [], scan_notes: [] }))\n')
+write(malformedChecker, 'console.log(JSON.stringify({ plan_schema: "model-eol.plan/0.1", generated: new Date().toISOString(), threshold_days: 90, via: null, items: [{ file: "direct.py", line: 0, occurrence: 0, matched: "old", replacement: "new", expected_line_sha256: "' + '0'.repeat(64) + '", id: "old", publisher: "openai", shutdown: "2026-07-01", days: -31, status: "retired", sources: [], notes: null }], issues: [], scan_notes: [] }))\n')
 let malformedPlanRefused = false
 try {
   await runBot({ repo: 'example/app', targetDir: repo.work, dryRun: true, checkerPath: malformedChecker, vendoredFeeds: path.join(root, 'feeds') })

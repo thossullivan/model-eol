@@ -214,6 +214,9 @@ export async function run(options) {
       markdown: renderSemanticDiff(item.committed, item.feed, diffOptions),
     }
   })
+  for (const [index, diff] of diffs.entries()) {
+    if (!diff.result.changed) generated[index].feed.generated = generated[index].committed.generated
+  }
   const changed = diffs.some(item => item.result.changed)
   const markdown = combinedDiff(diffs)
   process.stdout.write(markdown)

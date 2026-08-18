@@ -1,10 +1,12 @@
 # Product plan - direct-first model retirement inventory
 
-*Status 2026-08-01: the MVP scope below shipped in v0.1.0, plus the bot adapter,
-refresh automation, and the aws-bedrock distributor fetcher (feed-side clocks
-from AWS's lifecycle page - account-level deployment resolvers remain future
-work as described under "Next resolvers"). Current state lives in
-docs/CONTEXT.md.*
+*Status 2026-08-18: the direct-first product is shipped and live-UAT proven.
+The public-contract milestone stages canonical schema IDs and Pages publication,
+plus zero-dependency document validation, explicit refresh receipts, status-aware
+distributor diffs, and permanent published-consumer UAT. Hosted URLs become
+authoritative only after Pages is enabled and its first exact-byte deployment is
+green. Account-level resolvers remain deliberate expansion work under "Next
+resolvers." Current state lives in docs/CONTEXT.md.*
 
 ## Thesis
 
@@ -47,6 +49,7 @@ node check.mjs inventory . --json
 node check.mjs schedule . --days 90
 node check.mjs alert . --days 90 --scope direct
 node check.mjs . --days 90 --via azure-ai-foundry
+node check.mjs validate feeds/openai.json plan.json
 ```
 
 ## Mixed repositories and generated code
@@ -84,8 +87,15 @@ CLI flags still override repository and path policy. Machine reports carry the
 effective threshold, scope, requested channel, and matching rule indexes when a
 path rule or route changed behavior.
 
+The primary `check --json` report has its own public discriminator and Draft-07
+schema. CycloneDX exports identify components by canonical model plus requested
+lifecycle channel, using `publisher-direct` for the un-routed publisher clock so
+it cannot collide with a custom distributor named `publisher`. Azure, Bedrock,
+and other clocks for one model cannot overwrite each other; occurrences remain
+attached to the channel used.
+
 The scanner reads `.baml` source but skips conservative generated-code headers,
-BAML-generated clients, and model-eol inventory/schedule/alert/plan artifacts.
+BAML-generated clients, and model-eol check/inventory/schedule/alert/plan artifacts.
 CycloneDX is skipped only when its metadata carries model-eol generator
 provenance, so third-party BOMs stay visible. Intentional artifact skips are
 diagnostics, not incomplete-coverage warnings.
