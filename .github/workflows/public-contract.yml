@@ -1,0 +1,277 @@
+name: public-contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'feeds/**'
+      - 'schema/**'
+      - 'scripts/build-public-site.mjs'
+      - 'scripts/feed-changelog.mjs'
+      - 'scripts/feed-refresh-receipt.mjs'
+      - 'scripts/verify-public-site.mjs'
+      - 'lib/cli.mjs'
+      - 'lib/validate-feed.mjs'
+      - 'refresh/diff.mjs'
+      - '.github/workflows/public-contract.yml'
+  workflow_run:
+    workflows: [feed-refresh]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: public-contract
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.receipt.outputs.publish }}
+      published_sha: ${{ steps.source.outputs.sha }}
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Detect unresolved material feed work
+        id: pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pending_url=$(gh pr list --state open --limit 1000 --json headRefName,url,isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("feed-refresh/")))][0].url // ""')
+          echo "url=$pending_url" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse manual or push publication while a feed PR is unresolved
+        if: github.event_name != 'workflow_run' && steps.pending.outputs.url != ''
+        env:
+          PENDING_URL: ${{ steps.pending.outputs.url }}
+        run: |
+          echo "material feed work is still pending at $PENDING_URL; refusing to label main clean" >&2
+          exit 1
+
+      - name: Confirm this refresh event has not been superseded
+        if: github.event_name == 'workflow_run'
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          latest_file="$RUNNER_TEMP/model-eol-latest-refresh.json"
+          gh run list --workflow feed-refresh.yml --branch main --limit 1 \
+            --json databaseId,status,conclusion > "$latest_file"
+          LATEST_FILE="$latest_file" node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const runs = JSON.parse(fs.readFileSync(process.env.LATEST_FILE, 'utf8'))
+          if (!Array.isArray(runs) || runs.length !== 1) throw new Error('unable to resolve the newest feed-refresh run')
+          const latest = runs[0]
+          const current = String(latest.databaseId) === process.env.EVENT_RUN_ID
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `current=${current}\n`)
+          if (!current) {
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `This feed-refresh event was superseded by run ${latest.databaseId} (${latest.status}/${latest.conclusion ?? 'pending'}); it cannot roll the public contract back.\n`)
+          }
+          NODE
+
+      - name: Download this refresh run's exact receipt
+        if: github.event_name == 'workflow_run' && steps.current.outputs.current == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: feed-refresh-receipt
+          path: _refresh-receipt
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve newest receipt matching main feeds
+        if: github.event_name != 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/model-eol-refresh-receipts"
+          mkdir -p "$candidate_root" _refresh-receipt
+          found=false
+          runs_file="$candidate_root/successful-runs.tsv"
+          gh run list \
+            --workflow feed-refresh.yml \
+            --branch main \
+            --limit 100 \
+            --json databaseId,headSha,url,status,conclusion \
+            --jq '.[] | [.databaseId, .headSha, .url, .status, .conclusion] | @tsv' > "$runs_file"
+          while IFS=$'\t' read -r run_id refresh_sha run_url run_status run_conclusion; do
+            [ -n "$run_id" ] || continue
+            if ! git cat-file -e "$refresh_sha^{commit}" 2>/dev/null; then
+              echo "refresh run $run_id names unavailable commit $refresh_sha; refusing receipt fallback" >&2
+              exit 1
+            fi
+            if ! git cat-file -e "$refresh_sha:scripts/feed-refresh-receipt.mjs" 2>/dev/null; then
+              continue
+            fi
+            if [ "$run_status" != completed ] || [ "$run_conclusion" != success ]; then
+              echo "newest receipt-era refresh run $run_id is $run_status/$run_conclusion; refusing fallback until a newer refresh succeeds" >&2
+              exit 1
+            fi
+            candidate="$candidate_root/$run_id"
+            mkdir -p "$candidate"
+            if ! gh run download "$run_id" --name feed-refresh-receipt --dir "$candidate" >/dev/null 2>&1; then
+              echo "successful receipt-era refresh run $run_id has no downloadable receipt; refusing fallback" >&2
+              exit 1
+            fi
+            set +e
+            node scripts/feed-refresh-receipt.mjs verify \
+              --repo-dir . \
+              --receipt "$candidate/feed-refresh-receipt.json" \
+              --expected-run-url "$run_url" \
+              --expected-refresh-sha "$refresh_sha" \
+              --require-match
+            receipt_status=$?
+            set -e
+            if [ "$receipt_status" -eq 0 ]; then
+              cp "$candidate/feed-refresh-receipt.json" _refresh-receipt/feed-refresh-receipt.json
+              found=true
+              break
+            fi
+            if [ "$receipt_status" -eq 3 ]; then
+              state=$(node -e "const r=require(process.argv[1]); process.stdout.write(r.state)" "$candidate/feed-refresh-receipt.json")
+              if [ "$state" = 'pending' ]; then
+                echo "newest receipt-era run $run_id has pending feed changes that are not on main; refusing stale receipt fallback" >&2
+              else
+                echo "newest receipt-era run $run_id verified different feeds; refusing stale receipt fallback until feed-refresh runs again" >&2
+              fi
+              exit 1
+            fi
+            if [ "$receipt_status" -ne 3 ]; then
+              echo "invalid feed refresh receipt from run $run_id" >&2
+              exit "$receipt_status"
+            fi
+          done < "$runs_file"
+          if [ "$found" != true ]; then
+            echo 'no successful feed-refresh receipt matches every feed currently on main' >&2
+            exit 1
+          fi
+
+      - name: Verify selected receipt against the published inputs
+        if: github.event_name != 'workflow_run' || steps.current.outputs.current == 'true'
+        id: receipt
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          EVENT_REFRESH_SHA: ${{ github.event.workflow_run.head_sha }}
+          PENDING_REFRESH_PR: ${{ steps.pending.outputs.url }}
+        run: |
+          set -euo pipefail
+          args=(
+            verify
+            --repo-dir .
+            --receipt _refresh-receipt/feed-refresh-receipt.json
+            --github-output "$GITHUB_OUTPUT"
+            --require-match
+          )
+          if [ "$EVENT_NAME" = 'workflow_run' ]; then
+            args+=(--expected-run-url "$EVENT_RUN_URL" --expected-refresh-sha "$EVENT_REFRESH_SHA")
+          fi
+          set +e
+          node scripts/feed-refresh-receipt.mjs "${args[@]}"
+          receipt_status=$?
+          set -e
+          if [ "$receipt_status" -eq 0 ]; then
+            if [ -n "$PENDING_REFRESH_PR" ]; then
+              echo "material feed work is still pending at $PENDING_REFRESH_PR; refusing to advance last_checked" >&2
+              exit 1
+            fi
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          elif [ "$receipt_status" -eq 3 ] && [ "$EVENT_NAME" = 'workflow_run' ]; then
+            state=$(node -e "const r=require('./_refresh-receipt/feed-refresh-receipt.json'); process.stdout.write(r.state)")
+            if [ "$state" != 'pending' ]; then
+              echo 'a clean receipt does not match the feeds on main' >&2
+              exit 1
+            fi
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo 'The refresh found material changes, so its pending receipt cannot advance last_checked for the older main feeds.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            exit "$receipt_status"
+          fi
+
+      - name: Bind publication to main HEAD
+        if: steps.receipt.outputs.publish == 'true'
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build versioned public contract
+        if: steps.receipt.outputs.publish == 'true'
+        run: |
+          node scripts/build-public-site.mjs \
+            --out-dir _site \
+            --receipt _refresh-receipt/feed-refresh-receipt.json \
+            --source-sha "${{ steps.source.outputs.sha }}"
+
+      - name: Validate generated public contract
+        if: steps.receipt.outputs.publish == 'true'
+        run: |
+          node check.mjs validate _site/schema/0.1/*.json _site/feeds/*.json
+          node -e 'const fs=require("node:fs"); const h=require("./_site/health.json"); const i=require("./_site/index.json"); const schemas=fs.readdirSync("./_site/schema/0.1").filter(name=>name.endsWith(".json")); if (h.schema !== "model-eol/health@0.1" || !schemas.length || i.schemas.length !== schemas.length || h.published_commit !== i.published_commit) process.exit(1)'
+
+      - name: Upload exact deployment expectation
+        if: steps.receipt.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: public-contract-expectation
+          path: _site
+          if-no-files-found: error
+          overwrite: true
+
+      - if: steps.receipt.outputs.publish == 'true'
+        uses: actions/configure-pages@v6
+      - if: steps.receipt.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    if: needs.build.outputs.publish == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish public contract
+        id: deployment
+        uses: actions/deploy-pages@v5
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.published_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Download exact deployment expectation
+        uses: actions/download-artifact@v8
+        with:
+          name: public-contract-expectation
+          path: _expected-site
+      - name: Verify every live public contract asset
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: node scripts/verify-public-site.mjs --base-url "$PAGE_URL" --expected-dir _expected-site

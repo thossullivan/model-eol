@@ -5,7 +5,7 @@ branding:
   color: 'red'
 inputs:
   command:
-    description: 'Command to run: check, inventory, schedule, alert, or plan'
+    description: 'Command to run: check, inventory, schedule, alert, plan, or validate'
     required: false
     default: 'check'
   paths:
@@ -40,6 +40,10 @@ inputs:
     description: 'Path to a model-eol JSON config (defaults to repository config discovery)'
     required: false
     default: ''
+  document-type:
+    description: 'Optional validate document type: feed, config, check, inventory, schedule, alert, or plan'
+    required: false
+    default: ''
   include-docs:
     description: 'Scan documentation files in addition to the default source and config files'
     required: false
@@ -72,12 +76,19 @@ runs:
         MODEL_EOL_FORMAT: ${{ inputs.format }}
         MODEL_EOL_FEEDS: ${{ inputs.feeds }}
         MODEL_EOL_CONFIG: ${{ inputs.config }}
+        MODEL_EOL_DOCUMENT_TYPE: ${{ inputs['document-type'] }}
         MODEL_EOL_INCLUDE_DOCS: ${{ inputs['include-docs'] }}
         MODEL_EOL_ALLOW_INCOMPLETE: ${{ inputs['allow-incomplete'] }}
         MODEL_EOL_JSON: ${{ inputs.json }}
         MODEL_EOL_OUTPUT_FILE: ${{ inputs['output-file'] }}
       run: |
         set -euo pipefail
+
+        NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+        if ! [[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || [ "$NODE_MAJOR" -lt 22 ]; then
+          echo "model-eol action: Node 22 or newer is required; found $(node --version 2>/dev/null || echo unknown)" >&2
+          exit 2
+        fi
 
         split_model_eol_paths() {
           PATH_ARGS=()
@@ -92,9 +103,9 @@ runs:
         split_model_eol_paths
 
         case "$MODEL_EOL_COMMAND" in
-          check|inventory|schedule|alert|plan) ;;
+          check|inventory|schedule|alert|plan|validate) ;;
           *)
-            echo "model-eol action: command must be check, inventory, schedule, alert, or plan" >&2
+            echo "model-eol action: command must be check, inventory, schedule, alert, plan, or validate" >&2
             exit 2
             ;;
         esac
@@ -106,8 +117,12 @@ runs:
           echo "model-eol action: format is only supported by the inventory and alert commands" >&2
           exit 2
         fi
+        if [ -n "$MODEL_EOL_DOCUMENT_TYPE" ] && [ "$MODEL_EOL_COMMAND" != 'validate' ]; then
+          echo "model-eol action: document-type is only supported by the validate command" >&2
+          exit 2
+        fi
 
-        ARGS=("$MODEL_EOL_COMMAND" "${PATH_ARGS[@]}")
+        ARGS=("$MODEL_EOL_COMMAND")
         if [ -n "$MODEL_EOL_DAYS" ]; then ARGS+=(--days "$MODEL_EOL_DAYS"); fi
         if [ -n "$MODEL_EOL_VIA" ]; then ARGS+=(--via "$MODEL_EOL_VIA"); fi
         if [ -n "$MODEL_EOL_CHANGED" ]; then ARGS+=(--changed "$MODEL_EOL_CHANGED"); fi
@@ -115,6 +130,7 @@ runs:
         if [ -n "$MODEL_EOL_FORMAT" ]; then ARGS+=(--format "$MODEL_EOL_FORMAT"); fi
         if [ -n "$MODEL_EOL_FEEDS" ]; then ARGS+=(--feeds "$MODEL_EOL_FEEDS"); fi
         if [ -n "$MODEL_EOL_CONFIG" ]; then ARGS+=(--config "$MODEL_EOL_CONFIG"); fi
+        if [ -n "$MODEL_EOL_DOCUMENT_TYPE" ]; then ARGS+=(--type "$MODEL_EOL_DOCUMENT_TYPE"); fi
 
         append_boolean_flag() {
           local value="$1"
@@ -146,11 +162,13 @@ runs:
         esac
         case "$MODEL_EOL_JSON" in
           true)
-            if [ "$MODEL_EOL_COMMAND" = 'plan' ]; then
-              echo "model-eol action: json is only supported by the check, inventory, schedule, and alert commands" >&2
-              exit 2
-            fi
-            ARGS+=(--json)
+            case "$MODEL_EOL_COMMAND" in
+              check|inventory|schedule|alert) ARGS+=(--json) ;;
+              *)
+                echo "model-eol action: json is only supported by the check, inventory, schedule, and alert commands" >&2
+                exit 2
+                ;;
+            esac
             ;;
           false|'') ;;
           *)
@@ -158,6 +176,9 @@ runs:
             exit 2
             ;;
         esac
+
+        # Keep every consumer-controlled path after the option terminator.
+        ARGS+=(-- "${PATH_ARGS[@]}")
 
         if [ -z "$MODEL_EOL_OUTPUT_FILE" ]; then
           exec node "$MODEL_EOL_ACTION_PATH/check.mjs" "${ARGS[@]}"

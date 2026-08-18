@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://example.invalid/model-eol/0.1/bot-config.schema.json",
+  "$id": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.bot-config.schema.json",
   "title": "model-eol repository configuration",
   "description": "Optional strict .model-eol.json configuration shared by the zero-dependency CLI, Action, and GitHub bot adapter.",
   "type": "object",
@@ -86,7 +86,7 @@
           "type": ["string", "null"],
           "minLength": 1,
           "default": null,
-          "description": "Opt-in evaluation command. Direct bot --eval runs it per changed patch in a temporary clone; the split example workflow runs it once as a read-only plan preflight."
+          "description": "Opt-in repository-owned command run independently for each patchable migration only in the read-only evaluate phase. Write-capable publication consumes its commit-bound result manifest and never executes this command."
         },
         "timeout_ms": {
           "type": "integer",
@@ -102,9 +102,13 @@
         },
         "pass_env": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!(?:[Gg][Ii][Tt][Hh][Uu][Bb]_|[Gg][Hh]_|[Aa][Cc][Tt][Ii][Oo][Nn][Ss]_|[Ss][Ss][Hh]_|[Aa][Ww][Ss]_[Ss][Ee][Cc][Rr][Ee][Tt]|[\\s\\S]*(?:[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])))[\\s\\S]+$"
+          },
           "default": [],
-          "description": "Environment variable names explicitly passed to the eval command."
+          "description": "Environment variable names explicitly forwarded to trusted eval code. GitHub, Actions, SSH, AWS secret, token, secret, password, and credential name patterns are refused. This controls normal subprocess forwarding and is not an OS sandbox or same-user secret-isolation boundary."
         }
       },
       "default": { "command": null, "timeout_ms": 600000, "max_report_bytes": 65536, "pass_env": [] }

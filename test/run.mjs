@@ -8,10 +8,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { applyPlan } from '../lib/apply.mjs'
 import { color, colorEnabled } from '../lib/color.mjs'
 import { assertIsoDate, buildModelPattern, findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
 import { buildPlan } from '../lib/plan.mjs'
 import { formatCheck, formatSchedule } from '../lib/reports.mjs'
+import { parseDiffPath } from '../lib/scanner.mjs'
 
 const root = path.join(import.meta.dirname, '..')
 const run = (args, options = {}) => {
@@ -63,6 +65,11 @@ assert(help.code === 0 && help.out.includes('3  Output stream failure other than
 
 const unknownFlag = run([path.join(root, 'test/fixture'), '--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown check flags exit 2 with the bad flag and help hint')
+
+const emptyTarget = run(['inventory', '', '--json'])
+assert(emptyTarget.code === 2 && emptyTarget.out === '' && emptyTarget.err.includes('paths must be non-empty'), 'empty positional targets fail before emitting a schema-invalid report')
+const emptyVia = run(['inventory', path.join(root, 'test/fixture'), '--via=', '--json'])
+assert(emptyVia.code === 2 && emptyVia.out === '' && emptyVia.err.includes('--via must be a non-empty'), 'an explicitly empty lifecycle channel fails before emitting a schema-invalid report')
 
 const invalidDays = run([path.join(root, 'test/fixture'), '--days', 'banana'])
 assert(invalidDays.code === 2 && invalidDays.err.includes('finite non-negative integer'), 'non-numeric --days exits 2')
@@ -204,7 +211,10 @@ const cyclonedxComponent = cyclonedx.components.find(item => item.name === 'o3-d
 const property = (component, name) => component?.properties.find(item => item.name === name)?.value
 assert(cyclonedxRun.code === 0, 'CycloneDX inventory exits 0')
 assert(cyclonedx.bomFormat === 'CycloneDX' && cyclonedx.specVersion === '1.6' && cyclonedx.version === 1, 'CycloneDX required BOM keys emitted')
-assert(cyclonedx.components.length === new Set(cj.model_references.map(item => item.id)).size, 'CycloneDX has one component per unique tracked model id')
+assert(
+  cyclonedx.components.length === new Set(cj.model_references.map(item => JSON.stringify([item.publisher, item.id, item.requested_via]))).size,
+  'CycloneDX has one component per unique publisher, canonical model, and requested lifecycle channel',
+)
 assert(property(cyclonedxComponent, 'model-eol:status') === 'retired', 'CycloneDX carries model-eol status property')
 assert(cyclonedxComponent?.evidence?.occurrences.some(item => item.location.endsWith('direct.py#8')), 'CycloneDX carries model reference occurrences')
 assert(!cyclonedx.components.some(item => item.name === 'gpt-9-ultra-20990101'), 'CycloneDX omits candidate model references')
@@ -326,6 +336,19 @@ const invalidSharedConfig = path.join(tempRoot, 'invalid-shared-config.json')
 fs.writeFileSync(invalidSharedConfig, JSON.stringify({ ignore: { path: ['src/**'] } }))
 const invalidSharedConfigRun = run(['inventory', repositoryConfigDir, '--config', invalidSharedConfig, '--json'])
 assert(invalidSharedConfigRun.code === 2 && invalidSharedConfigRun.err.includes('ignore.path'), 'CLI preserves strict unknown-key validation for shared config')
+const invalidUtf8Config = path.join(tempRoot, 'invalid-utf8-config.json')
+fs.writeFileSync(invalidUtf8Config, Buffer.concat([
+  Buffer.from('{"ignore":{"paths":["noise-'),
+  Buffer.from([0xff]),
+  Buffer.from('"]}}\n'),
+]))
+const invalidUtf8ConfigRun = run(['inventory', repositoryConfigDir, '--config', invalidUtf8Config, '--json'])
+assert(
+  invalidUtf8ConfigRun.code === 2 &&
+    invalidUtf8ConfigRun.err.includes('invalid UTF-8') &&
+    invalidUtf8ConfigRun.err.includes(path.basename(invalidUtf8Config)),
+  'operational config loading rejects invalid UTF-8 with the selected filename',
+)
 
 const partialGlobDir = path.join(tempRoot, 'partial-glob')
 fs.mkdirSync(path.join(partialGlobDir, 'partial', 'nested'), { recursive: true })
@@ -554,6 +577,128 @@ assert(allowedPlan.code === 0 && JSON.parse(allowedPlan.out).scan_notes.length >
 const incompleteInventoryText = run(['inventory', incompleteDir, '--format', 'text'])
 assert(incompleteInventoryText.code === 0 && incompleteInventoryText.out.includes('WARNING: scan incomplete'), 'inventory human output warns about scan notes without failing')
 
+const invalidUtf8Dir = path.join(tempRoot, 'invalid-utf8-scan')
+fs.mkdirSync(invalidUtf8Dir)
+fs.writeFileSync(path.join(invalidUtf8Dir, 'app.py'), Buffer.concat([
+  Buffer.from('MODEL = "o3-deep-research"\n'),
+  Buffer.from([0xff, 0x0a]),
+]))
+const invalidUtf8Check = run([invalidUtf8Dir, '--json'])
+assert(invalidUtf8Check.code === 2 && invalidUtf8Check.err.includes('invalid-utf8'), 'invalid UTF-8 is coverage loss instead of being scanned through replacement characters')
+const invalidUtf8Allowed = run([invalidUtf8Dir, '--allow-incomplete', '--json'])
+const invalidUtf8AllowedJson = JSON.parse(invalidUtf8Allowed.out)
+assert(invalidUtf8Allowed.code === 0 && invalidUtf8AllowedJson.findings.length === 0 && invalidUtf8AllowedJson.scan_notes.some(note => note.reason === 'invalid-utf8'), 'allow-incomplete records invalid UTF-8 without emitting findings from lossy text')
+
+const symlinkTarget = path.join(tempRoot, 'symlink-outside.py')
+const explicitSymlink = path.join(tempRoot, 'explicit-link.py')
+fs.writeFileSync(symlinkTarget, 'MODEL = "o3-deep-research"\n')
+fs.symlinkSync(symlinkTarget, explicitSymlink)
+const explicitSymlinkCheck = run([explicitSymlink, '--json'])
+assert(explicitSymlinkCheck.code === 2 && explicitSymlinkCheck.err.includes('symlink-skipped'), 'an explicit symlink-only target fails check as incomplete coverage')
+const explicitSymlinkAllowed = run([explicitSymlink, '--allow-incomplete', '--json'])
+const explicitSymlinkAllowedJson = JSON.parse(explicitSymlinkAllowed.out)
+assert(explicitSymlinkAllowed.code === 0 && explicitSymlinkAllowedJson.findings.length === 0 && explicitSymlinkAllowedJson.scan_notes.some(note => note.reason === 'symlink-skipped'), 'allow-incomplete records an explicit symlink without following its target')
+const explicitSymlinkPlan = run(['plan', explicitSymlink])
+assert(explicitSymlinkPlan.code === 2 && explicitSymlinkPlan.err.includes('symlink-skipped'), 'an explicit symlink-only target fails plan as incomplete coverage')
+
+const trackedSymlinkRepo = path.join(tempRoot, 'tracked-symlink-repo')
+fs.mkdirSync(trackedSymlinkRepo)
+const trackedSymlinkGit = args => spawnSync('git', args, { cwd: trackedSymlinkRepo, encoding: 'utf8' })
+assert(trackedSymlinkGit(['init', '-q']).status === 0, 'tracked-symlink fixture initializes a git root')
+assert(trackedSymlinkGit(['config', 'user.email', 'model-eol-test@example.invalid']).status === 0, 'tracked-symlink fixture configures git email')
+assert(trackedSymlinkGit(['config', 'user.name', 'model-eol test']).status === 0, 'tracked-symlink fixture configures git name')
+fs.symlinkSync(symlinkTarget, path.join(trackedSymlinkRepo, 'tracked-link.py'))
+assert(trackedSymlinkGit(['add', 'tracked-link.py']).status === 0 && trackedSymlinkGit(['commit', '-qm', 'track symlink']).status === 0, 'tracked-symlink fixture commits the link itself')
+const trackedSymlinkCheck = run([trackedSymlinkRepo, '--json'])
+assert(trackedSymlinkCheck.code === 2 && trackedSymlinkCheck.err.includes('symlink-skipped'), 'a tracked symlink fails check as incomplete coverage')
+const trackedSymlinkAllowed = run([trackedSymlinkRepo, '--allow-incomplete', '--json'])
+const trackedSymlinkAllowedJson = JSON.parse(trackedSymlinkAllowed.out)
+assert(trackedSymlinkAllowed.code === 0 && trackedSymlinkAllowedJson.findings.length === 0 && trackedSymlinkAllowedJson.scan_notes.some(note => note.reason === 'symlink-skipped' && note.file.endsWith('tracked-link.py')), 'tracked symlink coverage loss is explicit and its outside target is never scanned')
+fs.writeFileSync(path.join(trackedSymlinkRepo, '.model-eol.json'), '{"ignore":{"paths":["tracked-link.py"]}}\n')
+assert(trackedSymlinkGit(['add', '.model-eol.json']).status === 0 && trackedSymlinkGit(['commit', '-qm', 'ignore intentional symlink']).status === 0, 'tracked-symlink fixture commits an explicit path policy')
+const ignoredTrackedSymlink = run([trackedSymlinkRepo, '--json'])
+assert(ignoredTrackedSymlink.code === 0 && JSON.parse(ignoredTrackedSymlink.out).scan_notes.every(note => note.reason !== 'symlink-skipped'), 'repository path policy can explicitly accept an intentional tracked symlink')
+
+const untrackedNestedRepo = path.join(tempRoot, 'untracked-nested-repo')
+const untrackedNestedPath = path.join(untrackedNestedRepo, 'nested')
+fs.mkdirSync(untrackedNestedPath, { recursive: true })
+const untrackedNestedGit = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' })
+assert(untrackedNestedGit(untrackedNestedRepo, ['init', '-q']).status === 0, 'untracked-nested fixture initializes the parent repository')
+assert(untrackedNestedGit(untrackedNestedPath, ['init', '-q']).status === 0, 'untracked-nested fixture initializes the embedded repository')
+fs.writeFileSync(path.join(untrackedNestedPath, 'app.py'), 'MODEL = "o3-deep-research"\n')
+const untrackedNestedCheck = run([untrackedNestedRepo, '--json'])
+assert(untrackedNestedCheck.code === 2 && untrackedNestedCheck.err.includes('nested-repository-skipped'), 'an untracked nested Git repository fails check as incomplete coverage')
+const untrackedNestedPlan = run(['plan', untrackedNestedRepo])
+assert(untrackedNestedPlan.code === 2 && untrackedNestedPlan.err.includes('nested-repository-skipped'), 'an untracked nested Git repository fails plan as incomplete coverage')
+const allowedUntrackedNested = run([untrackedNestedRepo, '--allow-incomplete', '--json'])
+const allowedUntrackedNestedJson = JSON.parse(allowedUntrackedNested.out)
+assert(
+  allowedUntrackedNested.code === 0 &&
+    allowedUntrackedNestedJson.findings.length === 0 &&
+    allowedUntrackedNestedJson.scan_notes.some(note => note.reason === 'nested-repository-skipped' && note.file.endsWith('/nested')),
+  'allow-incomplete records an untracked nested repository without recursively scanning its retired reference',
+)
+const untrackedNestedConfig = path.join(untrackedNestedRepo, '.model-eol.json')
+fs.writeFileSync(untrackedNestedConfig, '{"ignore":{"paths":["nested"]}}\n')
+const ignoredUntrackedNested = run([untrackedNestedRepo, '--json'])
+assert(
+  ignoredUntrackedNested.code === 0 &&
+    JSON.parse(ignoredUntrackedNested.out).scan_notes.every(note => note.reason !== 'nested-repository-skipped'),
+  'repository path policy can explicitly accept an intentional untracked nested repository',
+)
+
+const trackedSubmoduleRepo = path.join(tempRoot, 'tracked-submodule-repo')
+const trackedSubmodulePath = path.join(trackedSubmoduleRepo, 'sub')
+fs.mkdirSync(trackedSubmodulePath, { recursive: true })
+const trackedSubmoduleGit = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' })
+assert(trackedSubmoduleGit(trackedSubmodulePath, ['init', '-q']).status === 0, 'tracked-submodule fixture initializes the nested repository')
+assert(trackedSubmoduleGit(trackedSubmodulePath, ['config', 'user.email', 'model-eol-test@example.invalid']).status === 0, 'tracked-submodule fixture configures nested git email')
+assert(trackedSubmoduleGit(trackedSubmodulePath, ['config', 'user.name', 'model-eol test']).status === 0, 'tracked-submodule fixture configures nested git name')
+fs.writeFileSync(path.join(trackedSubmodulePath, 'app.py'), 'MODEL = "o3-deep-research"\n')
+assert(trackedSubmoduleGit(trackedSubmodulePath, ['add', 'app.py']).status === 0 && trackedSubmoduleGit(trackedSubmodulePath, ['commit', '-qm', 'submodule fixture']).status === 0, 'tracked-submodule fixture commits a retired reference in the nested repository')
+assert(trackedSubmoduleGit(trackedSubmoduleRepo, ['init', '-q']).status === 0, 'tracked-submodule fixture initializes the parent repository')
+assert(trackedSubmoduleGit(trackedSubmoduleRepo, ['config', 'user.email', 'model-eol-test@example.invalid']).status === 0, 'tracked-submodule fixture configures parent git email')
+assert(trackedSubmoduleGit(trackedSubmoduleRepo, ['config', 'user.name', 'model-eol test']).status === 0, 'tracked-submodule fixture configures parent git name')
+assert(trackedSubmoduleGit(trackedSubmoduleRepo, ['add', 'sub']).status === 0 && trackedSubmoduleGit(trackedSubmoduleRepo, ['commit', '-qm', 'track submodule']).status === 0, 'tracked-submodule fixture commits the nested repository as a gitlink')
+
+const initializedSubmoduleCheck = run([trackedSubmoduleRepo, '--json'])
+assert(initializedSubmoduleCheck.code === 2 && initializedSubmoduleCheck.err.includes('submodule-skipped'), 'a checked-out tracked submodule fails check as incomplete coverage')
+const initializedSubmodulePlan = run(['plan', trackedSubmoduleRepo])
+assert(initializedSubmodulePlan.code === 2 && initializedSubmodulePlan.err.includes('submodule-skipped'), 'a checked-out tracked submodule fails plan as incomplete coverage')
+const allowedInitializedSubmodule = run([trackedSubmoduleRepo, '--allow-incomplete', '--json'])
+const allowedInitializedSubmoduleJson = JSON.parse(allowedInitializedSubmodule.out)
+assert(
+  allowedInitializedSubmodule.code === 0 &&
+    allowedInitializedSubmoduleJson.findings.length === 0 &&
+    allowedInitializedSubmoduleJson.scan_notes.some(note => note.reason === 'submodule-skipped' && note.file.endsWith('/sub')),
+  'allow-incomplete records a checked-out submodule without recursively scanning its retired reference',
+)
+const allowedInitializedSubmodulePlan = run(['plan', trackedSubmoduleRepo, '--allow-incomplete'])
+const allowedInitializedSubmodulePlanJson = JSON.parse(allowedInitializedSubmodulePlan.out)
+assert(
+  allowedInitializedSubmodulePlan.code === 0 &&
+    allowedInitializedSubmodulePlanJson.items.length === 0 &&
+    allowedInitializedSubmodulePlanJson.scan_notes.some(note => note.reason === 'submodule-skipped'),
+  'allow-incomplete emits a plan receipt for a checked-out submodule without recursing into it',
+)
+
+const trackedSubmoduleConfig = path.join(trackedSubmoduleRepo, '.model-eol.json')
+fs.writeFileSync(trackedSubmoduleConfig, '{"ignore":{"paths":["sub"]}}\n')
+const ignoredTrackedSubmodule = run([trackedSubmoduleRepo, '--json'])
+assert(ignoredTrackedSubmodule.code === 0 && JSON.parse(ignoredTrackedSubmodule.out).scan_notes.every(note => note.reason !== 'submodule-skipped'), 'repository path policy can explicitly accept an intentional tracked submodule')
+const ignoredTrackedSubmodulePlan = run(['plan', trackedSubmoduleRepo])
+assert(ignoredTrackedSubmodulePlan.code === 0 && JSON.parse(ignoredTrackedSubmodulePlan.out).scan_notes.every(note => note.reason !== 'submodule-skipped'), 'an explicitly ignored tracked submodule does not block plan generation')
+fs.rmSync(trackedSubmoduleConfig)
+
+fs.rmSync(trackedSubmodulePath, { recursive: true, force: true })
+const uninitializedSubmoduleCheck = run([trackedSubmoduleRepo, '--json'])
+assert(uninitializedSubmoduleCheck.code === 2 && uninitializedSubmoduleCheck.err.includes('submodule-skipped') && !uninitializedSubmoduleCheck.err.includes('unreadable-file'), 'an uninitialized tracked submodule fails check with a precise incomplete-coverage reason')
+const uninitializedSubmodulePlan = run(['plan', trackedSubmoduleRepo])
+assert(uninitializedSubmodulePlan.code === 2 && uninitializedSubmodulePlan.err.includes('submodule-skipped'), 'an uninitialized tracked submodule fails plan as incomplete coverage')
+const allowedUninitializedSubmodule = run([trackedSubmoduleRepo, '--allow-incomplete', '--json'])
+const allowedUninitializedSubmoduleJson = JSON.parse(allowedUninitializedSubmodule.out)
+assert(allowedUninitializedSubmodule.code === 0 && allowedUninitializedSubmoduleJson.scan_notes.some(note => note.reason === 'submodule-skipped'), 'allow-incomplete records an uninitialized tracked submodule')
+
 const orangeBadgeDir = path.join(tempRoot, 'orange-badge')
 fs.mkdirSync(orangeBadgeDir)
 fs.writeFileSync(path.join(orangeBadgeDir, 'app.py'), 'MODEL = "badge-retiring-model"\n')
@@ -627,6 +772,23 @@ try {
   invalidControlMessage = error.message
 }
 assert(invalidControlMessage.includes('invalid-control.json') && invalidControlMessage.includes('replacement') && invalidControlMessage.includes('control characters'), 'loadFeeds rejects control characters in replacement fields')
+const invalidUtf8Feeds = path.join(tempRoot, 'invalid-utf8-feeds')
+const invalidUtf8Feed = path.join(invalidUtf8Feeds, 'invalid-utf8.json')
+fs.mkdirSync(invalidUtf8Feeds)
+fs.writeFileSync(invalidUtf8Feed, Buffer.concat([
+  Buffer.from('{"spec":"model-eol/0.1","publisher":"test","generated":"2026-08-01T00:00:00Z","source":"https://example.invalid/utf8","note":"bad-'),
+  Buffer.from([0xff]),
+  Buffer.from('","models":[{"id":"utf8-test-model"}]}\n'),
+]))
+let invalidUtf8FeedMessage = ''
+try {
+  loadFeeds(invalidUtf8Feeds)
+} catch (error) {
+  invalidUtf8FeedMessage = error.message
+}
+assert(invalidUtf8FeedMessage.includes('invalid-utf8.json') && invalidUtf8FeedMessage.includes('invalid UTF-8'), 'operational feed loading rejects invalid UTF-8 with the feed filename')
+const invalidUtf8FeedRun = run(['check', path.join(root, 'test/fixture'), '--feeds', invalidUtf8Feeds, '--json'])
+assert(invalidUtf8FeedRun.code === 2 && invalidUtf8FeedRun.err.includes('invalid-utf8.json') && invalidUtf8FeedRun.err.includes('invalid UTF-8'), 'check exits 2 instead of loading a replacement-decoded feed')
 
 const federationDir = path.join(tempRoot, 'federation')
 const federationFeeds = path.join(federationDir, 'feeds')
@@ -693,6 +855,9 @@ const git = args => spawnSync('git', args, { cwd: changedRepo, encoding: 'utf8' 
 assert(git(['init', '-q']).status === 0, 'diff test initializes a git repository')
 assert(git(['config', 'user.email', 'model-eol-test@example.invalid']).status === 0, 'diff test configures git email')
 assert(git(['config', 'user.name', 'model-eol test']).status === 0, 'diff test configures git name')
+assert(git(['config', 'diff.mnemonicPrefix', 'true']).status === 0, 'diff test enables hostile mnemonic prefixes')
+assert(git(['config', 'diff.noprefix', 'true']).status === 0, 'diff test enables hostile no-prefix output')
+assert(git(['config', 'color.diff', 'always']).status === 0, 'diff test enables hostile forced color output')
 fs.writeFileSync(changedFile, 'MODEL = "o3-deep-research"\n')
 assert(git(['add', 'app.py']).status === 0 && git(['commit', '-qm', 'base']).status === 0, 'diff test creates the base commit')
 fs.writeFileSync(changedFile, 'MODEL = "o3-deep-research"\nNEW_MODEL = "claude-opus-4-1-20250805"\n')
@@ -700,7 +865,77 @@ const changedRun = run(['check', changedRepo, '--days', '30', '--changed', 'HEAD
 assert(changedRun.out.trim().startsWith('{'), `--changed emits JSON (stderr: ${changedRun.err.trim()})`)
 const changedJson = JSON.parse(changedRun.out)
 assert(changedRun.code === 1, '--changed fails for an added bad model')
-assert(changedJson.findings.length === 1 && changedJson.findings[0].id === 'claude-opus-4-1-20250805', '--changed filters out unchanged bad model lines')
+assert(changedJson.findings.length === 1 && changedJson.findings[0].id === 'claude-opus-4-1-20250805', '--changed pins parseable prefixes and color despite hostile Git config')
+const changedExpressionRun = run(['check', changedRepo, '--days', '30', '--changed', 'HEAD~0', '--json'])
+assert(changedExpressionRun.code === 1 && JSON.parse(changedExpressionRun.out).findings.length === 1, '--changed resolves ordinary revision expressions to a commit')
+const injectedDiffOutput = path.join(changedRepo, 'injected.diff')
+const injectedChanged = run(['check', changedRepo, '--days', '30', `--changed=--output=${injectedDiffOutput}`, '--json'])
+assert(
+  injectedChanged.code === 2 &&
+    injectedChanged.err.includes('base ref must not begin') &&
+    !fs.existsSync(injectedDiffOutput),
+  '--changed rejects leading-option input without allowing Git to create an output file',
+)
+const missingChangedBase = run(['check', changedRepo, '--days', '30', '--changed', 'definitely-not-a-ref', '--json'])
+assert(missingChangedBase.code === 2 && missingChangedBase.err.includes('could not resolve base ref'), '--changed fails closed when its revision does not resolve to a commit')
+assert(parseDiffPath('"b/path with spaces.py"') === 'path with spaces.py', 'Git diff path parsing preserves ordinary quoted paths with spaces')
+assert(parseDiffPath('"b/\\303\\251.py"') === 'é.py', 'Git diff path parsing decodes octal UTF-8 bytes')
+let malformedDiffPathFailed = false
+try {
+  parseDiffPath('"b/unsupported\\q.py"')
+} catch {
+  malformedDiffPathFailed = true
+}
+assert(malformedDiffPathFailed, 'Git diff path parsing fails closed on unsupported quoted escapes')
+
+const noFinalNewlineRepo = path.join(tempRoot, 'changed-no-final-newline-repo')
+fs.mkdirSync(noFinalNewlineRepo)
+const noFinalNewlineGit = args => spawnSync('git', args, { cwd: noFinalNewlineRepo, encoding: 'utf8' })
+assert(noFinalNewlineGit(['init', '-q']).status === 0, 'no-final-newline diff test initializes a git repository')
+assert(noFinalNewlineGit(['config', 'user.email', 'model-eol-test@example.invalid']).status === 0, 'no-final-newline diff test configures git email')
+assert(noFinalNewlineGit(['config', 'user.name', 'model-eol test']).status === 0, 'no-final-newline diff test configures git name')
+const removedMarkerFile = path.join(noFinalNewlineRepo, 'removed-marker.py')
+const addedMarkerFile = path.join(noFinalNewlineRepo, 'added-marker.py')
+fs.writeFileSync(removedMarkerFile, 'MODEL = "gpt-5.6-sol"')
+fs.writeFileSync(addedMarkerFile, 'MODEL = "gpt-5.6-sol"\n')
+assert(noFinalNewlineGit(['add', '.']).status === 0 && noFinalNewlineGit(['commit', '-qm', 'base']).status === 0, 'no-final-newline diff test creates the base commit')
+fs.writeFileSync(removedMarkerFile, 'MODEL = "o3-deep-research"\n')
+fs.writeFileSync(addedMarkerFile, 'MODEL = "o3-deep-research"')
+const noFinalNewlineChanged = run(['check', noFinalNewlineRepo, '--days', '30', '--changed', 'HEAD', '--json'])
+const noFinalNewlineChangedJson = JSON.parse(noFinalNewlineChanged.out)
+const noFinalNewlineFindingFiles = new Set(noFinalNewlineChangedJson.findings.map(finding => path.basename(finding.file)))
+assert(noFinalNewlineChanged.code === 1, '--changed fails when no-final-newline metadata surrounds added retired models')
+assert(noFinalNewlineFindingFiles.has('removed-marker.py'), '--changed ignores a no-final-newline marker after the removed line')
+assert(noFinalNewlineFindingFiles.has('added-marker.py'), '--changed ignores a no-final-newline marker after the added line')
+
+const unicodeChangedRepo = path.join(tempRoot, 'changed-unicode-path-repo')
+fs.mkdirSync(unicodeChangedRepo)
+const unicodeChangedGit = args => spawnSync('git', args, { cwd: unicodeChangedRepo, encoding: 'utf8' })
+assert(unicodeChangedGit(['init', '-q']).status === 0, 'Unicode-path diff test initializes a git repository')
+assert(unicodeChangedGit(['config', 'user.email', 'model-eol-test@example.invalid']).status === 0, 'Unicode-path diff test configures git email')
+assert(unicodeChangedGit(['config', 'user.name', 'model-eol test']).status === 0, 'Unicode-path diff test configures git name')
+const unicodeChangedFile = path.join(unicodeChangedRepo, 'é.py')
+fs.writeFileSync(unicodeChangedFile, 'MODEL = "gpt-5.6-sol"\n')
+assert(unicodeChangedGit(['add', '.']).status === 0 && unicodeChangedGit(['commit', '-qm', 'base']).status === 0, 'Unicode-path diff test creates the base commit')
+fs.writeFileSync(unicodeChangedFile, 'MODEL = "o3-deep-research"\n')
+const unicodeChanged = run(['check', unicodeChangedRepo, '--days', '30', '--changed', 'HEAD', '--json'])
+const unicodeChangedJson = JSON.parse(unicodeChanged.out)
+assert(unicodeChanged.code === 1 && unicodeChangedJson.findings.some(finding => finding.file.endsWith('é.py')), '--changed maps Git octal UTF-8 paths back to scanned filenames')
+
+const disabledDiffRepo = path.join(tempRoot, 'changed-disabled-diff-repo')
+fs.mkdirSync(disabledDiffRepo)
+const disabledDiffGit = args => spawnSync('git', args, { cwd: disabledDiffRepo, encoding: 'utf8' })
+assert(disabledDiffGit(['init', '-q']).status === 0, 'disabled-diff test initializes a git repository')
+assert(disabledDiffGit(['config', 'user.email', 'model-eol-test@example.invalid']).status === 0, 'disabled-diff test configures git email')
+assert(disabledDiffGit(['config', 'user.name', 'model-eol test']).status === 0, 'disabled-diff test configures git name')
+const disabledDiffFile = path.join(disabledDiffRepo, 'app.py')
+fs.writeFileSync(disabledDiffFile, 'MODEL = "gpt-5.6-sol"\n')
+assert(disabledDiffGit(['add', '.']).status === 0 && disabledDiffGit(['commit', '-qm', 'base']).status === 0, 'disabled-diff test creates the base commit')
+fs.writeFileSync(path.join(disabledDiffRepo, '.gitattributes'), '*.py -diff\n')
+fs.writeFileSync(disabledDiffFile, 'MODEL = "o3-deep-research"\n')
+const disabledDiffChanged = run(['check', disabledDiffRepo, '--days', '30', '--changed', 'HEAD', '--json'])
+const disabledDiffChangedJson = JSON.parse(disabledDiffChanged.out)
+assert(disabledDiffChanged.code === 1 && disabledDiffChangedJson.findings.some(finding => finding.file.endsWith('app.py')), '--changed forces scannable files to text despite a PR-controlled -diff attribute')
 const nonGit = path.join(tempRoot, 'not-a-git-repo')
 fs.mkdirSync(nonGit)
 fs.writeFileSync(path.join(nonGit, 'app.py'), 'MODEL = "o3-deep-research"\n')
@@ -786,6 +1021,29 @@ const duplicate = run(['check', path.join(root, 'test/fixture'), '--feeds', dupl
 assert(duplicate.code === 2, 'duplicate feed key rejects the feed set')
 assert(duplicate.err.includes('duplicate-model') && duplicate.err.includes('one.json') && duplicate.err.includes('two.json'), 'duplicate feed error names key and both files')
 
+const duplicateDistributionFeeds = path.join(tempRoot, 'duplicate-distribution-feeds')
+fs.mkdirSync(duplicateDistributionFeeds)
+fs.writeFileSync(path.join(duplicateDistributionFeeds, 'duplicate-distribution.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'duplicate-distribution',
+  generated: '2026-08-01T00:00:00Z',
+  source: 'https://example.invalid/duplicate-distribution',
+  models: [{
+    id: 'duplicate-distribution-model',
+    distributions: [
+      { via: 'aws-bedrock', shutdown: '2026-09-01' },
+      { via: 'aws-bedrock', shutdown: '2027-09-01' },
+    ],
+  }],
+}))
+let duplicateDistributionLoadError = ''
+try {
+  loadFeeds(duplicateDistributionFeeds)
+} catch (error) {
+  duplicateDistributionLoadError = error.message
+}
+assert(duplicateDistributionLoadError.includes('duplicate distributor via "aws-bedrock"'), 'feed loading rejects duplicate lifecycle records for one distributor clock')
+
 const planRun = run(['plan', path.join(root, 'test/fixture'), '--days', '90'])
 const plan = JSON.parse(planRun.out)
 assert(planRun.code === 0, 'plan exits 0 and always emits JSON')
@@ -830,6 +1088,19 @@ const choicePlanRun = run(['plan', gateDir, '--feeds', gateFeeds, '--days', '90'
 const choicePlan = JSON.parse(choicePlanRun.out)
 const choiceIssue = choicePlan.issues.find(issue => issue.id === 'retired-with-options')
 assert(choiceIssue?.reason === 'replacement-choice' && JSON.stringify(choiceIssue.replacement_options) === JSON.stringify(['first-choice', 'second-choice']) && choiceIssue.replacement_note === 'verify the parameter profile', 'plan emits replacement-choice issues with options and notes')
+const choiceInventory = JSON.parse(run(['inventory', gateDir, '--feeds', gateFeeds, '--json']).out)
+const choiceInventoryRef = choiceInventory.model_references.find(item => item.id === 'retired-with-options')
+assert(JSON.stringify(choiceInventoryRef?.replacement_options) === JSON.stringify(['first-choice', 'second-choice']) && choiceInventoryRef?.replacement_note === 'verify the parameter profile', 'inventory preserves structured replacement options and notes')
+const choiceSchedule = JSON.parse(run(['schedule', gateDir, '--feeds', gateFeeds, '--json']).out)
+const choiceScheduleRef = choiceSchedule.items.find(item => item.id === 'retired-with-options')
+assert(JSON.stringify(choiceScheduleRef?.replacement_options) === JSON.stringify(['first-choice', 'second-choice']) && choiceScheduleRef?.replacement_note === 'verify the parameter profile', 'schedule preserves structured replacement options and notes')
+const choiceAlert = JSON.parse(run(['alert', gateDir, '--feeds', gateFeeds, '--json']).out)
+const choiceAlertRef = choiceAlert.errors.find(item => item.id === 'retired-with-options')
+assert(JSON.stringify(choiceAlertRef?.replacement_options) === JSON.stringify(['first-choice', 'second-choice']) && choiceAlertRef?.replacement_note === 'verify the parameter profile', 'alert preserves structured replacement options and notes')
+const choiceCycloneDx = JSON.parse(run(['inventory', gateDir, '--feeds', gateFeeds, '--format', 'cyclonedx']).out)
+const choiceCycloneDxComponent = choiceCycloneDx.components.find(item => item.name === 'retired-with-options')
+assert(property(choiceCycloneDxComponent, 'model-eol:replacement_options') === JSON.stringify(['first-choice', 'second-choice']), 'CycloneDX preserves ordered replacement options as JSON')
+assert(property(choiceCycloneDxComponent, 'model-eol:replacement_note') === 'verify the parameter profile', 'CycloneDX preserves replacement guidance notes')
 
 const ar6Dir = path.join(tempRoot, 'ar6-proximity')
 const ar6Feeds = path.join(tempRoot, 'ar6-feeds')
@@ -888,6 +1159,7 @@ const writeApplyPlan = item => fs.writeFileSync(applyPlanFile, JSON.stringify({
   generated: '2026-08-01T00:00:00Z',
   threshold_days: 90,
   via: null,
+  scan_notes: [],
   items: Array.isArray(item) ? item : [item],
   issues: [],
 }))
@@ -911,6 +1183,21 @@ assert(sharedApplied.code === 0 && fs.readFileSync(applyFile, 'utf8') === `${sha
 const sharedRerun = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
 assert(sharedRerun.code === 0 && sharedRerun.err === '' && (sharedRerun.out.match(/already-applied /g) ?? []).length === 2 && !sharedRerun.out.includes('failed'), 'grouped apply is idempotent for every item')
 
+const overlappingLine = 'abc'
+const overlappingItems = [
+  { ...applyItem, matched: 'abc', replacement: 'first', expected_line_sha256: hash(overlappingLine) },
+  { ...applyItem, matched: 'bc', replacement: 'second', expected_line_sha256: hash(overlappingLine) },
+]
+fs.writeFileSync(applyFile, `${overlappingLine}\n`)
+writeApplyPlan(overlappingItems)
+const overlappingApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  overlappingApply.code === 1 &&
+    overlappingApply.err.includes('replacement span overlaps another plan item') &&
+    fs.readFileSync(applyFile, 'utf8') === `${overlappingLine}\n`,
+  'overlapping same-line replacement spans refuse the whole plan without losing an item',
+)
+
 const mixedLine = 'FIRST = "new-one"; SECOND = "old-two"'
 fs.writeFileSync(applyFile, `${mixedLine}\n`)
 writeApplyPlan(sharedItems)
@@ -923,6 +1210,132 @@ const atomicApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
 const temporaryApplyFiles = fs.readdirSync(applyDir).filter(name => name.startsWith('.model-eol-'))
 assert(atomicApply.code === 0 && fs.readFileSync(applyFile, 'utf8') === `${sharedNewLine}\n`, 'atomic apply writes the complete final content')
 assert(temporaryApplyFiles.length === 0, 'atomic apply leaves no temporary file')
+
+const transactionFileA = path.join(applyDir, 'transaction-a.py')
+const transactionFileB = path.join(applyDir, 'transaction-b.py')
+const transactionOldA = 'MODEL = "old-a"'
+const transactionOldB = 'MODEL = "old-b"'
+const transactionNewA = 'MODEL = "new-a"'
+const transactionNewB = 'MODEL = "new-b"'
+const transactionItemA = {
+  ...applyItem,
+  file: transactionFileA,
+  matched: 'old-a',
+  replacement: 'new-a',
+  expected_line_sha256: hash(transactionOldA),
+}
+const transactionItemB = {
+  ...applyItem,
+  file: transactionFileB,
+  matched: 'old-b',
+  replacement: 'new-b',
+  expected_line_sha256: hash(transactionOldB),
+}
+const mismatchedTransactionItemB = {
+  ...transactionItemB,
+  expected_line_sha256: hash('MODEL = "not-old-b"'),
+}
+for (const [label, items] of [
+  ['good-then-bad', [transactionItemA, mismatchedTransactionItemB]],
+  ['bad-then-good', [mismatchedTransactionItemB, transactionItemA]],
+]) {
+  fs.writeFileSync(transactionFileA, `${transactionOldA}\n`)
+  fs.writeFileSync(transactionFileB, `${transactionOldB}\n`)
+  writeApplyPlan(items)
+  const result = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+  assert(
+    result.code === 1 &&
+      fs.readFileSync(transactionFileA, 'utf8') === `${transactionOldA}\n` &&
+      fs.readFileSync(transactionFileB, 'utf8') === `${transactionOldB}\n`,
+    `plan-wide preflight writes neither file for ${label}`,
+  )
+}
+
+fs.writeFileSync(transactionFileA, `${transactionOldA}\n`)
+writeApplyPlan([{ ...transactionItemB, file: '../escape.py' }, transactionItemA])
+const badPathTransaction = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  badPathTransaction.code === 1 && fs.readFileSync(transactionFileA, 'utf8') === `${transactionOldA}\n`,
+  'a bad plan path prevents a valid file from being written',
+)
+
+fs.writeFileSync(transactionFileA, `${transactionOldA}\n`)
+fs.writeFileSync(transactionFileB, `${transactionOldB}\n`)
+writeApplyPlan([transactionItemA, transactionItemB])
+const twoFileApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  twoFileApply.code === 0 &&
+    fs.readFileSync(transactionFileA, 'utf8') === `${transactionNewA}\n` &&
+    fs.readFileSync(transactionFileB, 'utf8') === `${transactionNewB}\n` &&
+    (twoFileApply.out.match(/applied /g) ?? []).length === 2,
+  'a valid two-file plan commits both staged outputs',
+)
+const twoFileRerun = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  twoFileRerun.code === 0 &&
+    (twoFileRerun.out.match(/already-applied /g) ?? []).length === 2 &&
+    fs.readFileSync(transactionFileA, 'utf8') === `${transactionNewA}\n` &&
+    fs.readFileSync(transactionFileB, 'utf8') === `${transactionNewB}\n`,
+  'a committed two-file plan is idempotent',
+)
+
+fs.writeFileSync(transactionFileA, `${transactionOldA}\n`)
+fs.writeFileSync(transactionFileB, `${transactionOldB}\n`)
+writeApplyPlan([transactionItemA, transactionItemB])
+let injectedCommitCount = 0
+const rollbackResult = applyPlan({
+  planPath: applyPlanFile,
+  rootDir: applyDir,
+  _test: {
+    renameSync: (source, target, context) => {
+      if (context.phase === 'commit') {
+        injectedCommitCount++
+        if (injectedCommitCount === 2) throw new Error('injected second commit failure')
+      }
+      fs.renameSync(source, target)
+    },
+  },
+})
+const rollbackTemporaryFiles = fs.readdirSync(applyDir).filter(name => name.startsWith('.model-eol-'))
+assert(
+  rollbackResult.failed > 0 &&
+    injectedCommitCount === 2 &&
+    fs.readFileSync(transactionFileA, 'utf8') === `${transactionOldA}\n` &&
+    fs.readFileSync(transactionFileB, 'utf8') === `${transactionOldB}\n` &&
+    rollbackTemporaryFiles.length === 0,
+  'a later commit rename failure rolls back earlier file commits and cleans its stages',
+)
+
+fs.writeFileSync(transactionFileA, `${transactionOldA}\n`)
+writeApplyPlan(transactionItemA)
+const cleanupErrors = []
+const originalConsoleError = console.error
+let cleanupResult
+try {
+  console.error = (...values) => cleanupErrors.push(values.join(' '))
+  cleanupResult = applyPlan({
+    planPath: applyPlanFile,
+    rootDir: applyDir,
+    _test: {
+      unlinkSync: temporaryFile => {
+        if (temporaryFile.includes('-backup-')) throw new Error('injected cleanup failure')
+        fs.unlinkSync(temporaryFile)
+      },
+    },
+  })
+} finally {
+  console.error = originalConsoleError
+}
+const retainedCleanupFiles = fs.readdirSync(applyDir).filter(name => name.startsWith('.model-eol-'))
+assert(
+  cleanupResult.failed > 0 &&
+    cleanupResult.applied === 1 &&
+    fs.readFileSync(transactionFileA, 'utf8') === `${transactionNewA}\n` &&
+    retainedCleanupFiles.length === 1 &&
+    cleanupErrors.some(message => message.includes('apply cleanup failed') && message.includes('injected cleanup failure')),
+  'a committed apply with an unlink failure reports non-success and names its retained temporary backup',
+)
+for (const temporaryFile of retainedCleanupFiles) fs.unlinkSync(path.join(applyDir, temporaryFile))
 
 const mismatchItem = { ...applyItem, expected_line_sha256: hash('MODEL = "different-model"') }
 fs.writeFileSync(applyFile, `${oldLine}\n`)
@@ -938,6 +1351,57 @@ const dryRun = run(['apply', '--plan', applyPlanFile, '--dry-run'], { cwd: apply
 assert(dryRun.code === 0 && dryRun.out.includes('would change'), 'apply dry-run reports the proposed change')
 assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'apply dry-run writes nothing')
 
+const invalidUtf8 = Buffer.concat([Buffer.from(`${oldLine}\n`), Buffer.from([0xff, 0x0a])])
+fs.writeFileSync(applyFile, invalidUtf8)
+writeApplyPlan(applyItem)
+const invalidUtf8Apply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  invalidUtf8Apply.code === 1 &&
+    invalidUtf8Apply.err.includes('target is not valid UTF-8') &&
+    fs.readFileSync(applyFile).equals(invalidUtf8),
+  'apply refuses invalid UTF-8 without re-encoding unrelated bytes',
+)
+
+fs.writeFileSync(applyFile, `${oldLine}\n`)
+writeApplyPlan({ ...applyItem, replacement: applyItem.matched })
+const noOpApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  noOpApply.code === 2 &&
+    noOpApply.err.includes('replacement must differ from matched') &&
+    fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`,
+  'apply rejects a semantic no-op plan instead of reporting it applied forever',
+)
+
+writeApplyPlan(applyItem)
+const invalidUtf8Plan = fs.readFileSync(applyPlanFile)
+const publisherMarker = invalidUtf8Plan.indexOf(Buffer.from('"publisher":"test"'))
+assert(publisherMarker >= 0, 'apply fixture contains its publisher marker')
+invalidUtf8Plan[publisherMarker + Buffer.byteLength('"publisher":"te')] = 0xff
+fs.writeFileSync(applyPlanFile, invalidUtf8Plan)
+const invalidUtf8PlanApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  invalidUtf8PlanApply.code === 2 &&
+    invalidUtf8PlanApply.err.includes('invalid UTF-8') &&
+    fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`,
+  'apply rejects an invalid UTF-8 plan before file use',
+)
+
+writeApplyPlan(applyItem)
+const invalidSchemaPlan = JSON.parse(fs.readFileSync(applyPlanFile, 'utf8'))
+invalidSchemaPlan.plan_schema = 'model-eol.plan/9.9'
+fs.writeFileSync(applyPlanFile, JSON.stringify(invalidSchemaPlan))
+const invalidSchemaApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(invalidSchemaApply.code === 2 && invalidSchemaApply.err.includes('plan_schema'), 'apply refuses an unsupported plan_schema before file use')
+assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'plan schema refusal writes nothing')
+
+writeApplyPlan(applyItem)
+const incompleteDocumentPlan = JSON.parse(fs.readFileSync(applyPlanFile, 'utf8'))
+delete incompleteDocumentPlan.scan_notes
+fs.writeFileSync(applyPlanFile, JSON.stringify(incompleteDocumentPlan))
+const incompleteDocumentApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(incompleteDocumentApply.code === 2 && incompleteDocumentApply.err.includes('scan_notes'), 'apply validates the full plan document against the public schema')
+assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'full-document schema refusal writes nothing')
+
 fs.writeFileSync(applyFile, `${oldLine}\n`)
 writeApplyPlan([applyItem, { ...applyItem, line: 0 }])
 const malformedPlan = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
@@ -948,6 +1412,36 @@ writeApplyPlan({ ...applyItem, file: '../escape.py' })
 const escapedPlan = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
 assert(escapedPlan.code === 1 && escapedPlan.err.includes('file path contains .. traversal'), 'apply refuses plan paths that escape rootDir')
 assert(fs.readFileSync(applyFile, 'utf8') === `${oldLine}\n`, 'escaped plan does not write the in-root file')
+
+const applySymlinkTarget = path.join(applyDir, 'apply-symlink-target.py')
+const applyFinalSymlink = path.join(applyDir, 'apply-final-link.py')
+fs.writeFileSync(applySymlinkTarget, `${oldLine}\n`)
+fs.symlinkSync(applySymlinkTarget, applyFinalSymlink)
+writeApplyPlan({ ...applyItem, file: applyFinalSymlink })
+const finalSymlinkApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  finalSymlinkApply.code === 1 &&
+    finalSymlinkApply.err.includes('symlink') &&
+    fs.lstatSync(applyFinalSymlink).isSymbolicLink() &&
+    fs.readFileSync(applySymlinkTarget, 'utf8') === `${oldLine}\n`,
+  'apply rejects a final symlink without replacing the link or changing its target',
+)
+
+const applyParentTarget = path.join(applyDir, 'apply-parent-target')
+const applyParentSymlink = path.join(applyDir, 'apply-parent-link')
+const applyParentTargetFile = path.join(applyParentTarget, 'fixture.py')
+fs.mkdirSync(applyParentTarget)
+fs.writeFileSync(applyParentTargetFile, `${oldLine}\n`)
+fs.symlinkSync(applyParentTarget, applyParentSymlink)
+writeApplyPlan({ ...applyItem, file: path.join(applyParentSymlink, 'fixture.py') })
+const parentSymlinkApply = run(['apply', '--plan', applyPlanFile], { cwd: applyDir })
+assert(
+  parentSymlinkApply.code === 1 &&
+    parentSymlinkApply.err.includes('symlink') &&
+    fs.lstatSync(applyParentSymlink).isSymbolicLink() &&
+    fs.readFileSync(applyParentTargetFile, 'utf8') === `${oldLine}\n`,
+  'apply rejects a symlinked parent without replacing the link or changing its target',
+)
 
 const manyRestoreOriginal = Array.from({ length: 17 }, (_, index) => `old-${index}`).join(' ')
 const manyRestorePost = Array.from({ length: 17 }, (_, index) => `new-${index}`).join(' ')
@@ -982,6 +1476,7 @@ assert(fs.readFileSync(applyFile, 'utf8') === `${boundedRestorePost}\n`, 'visite
 for (const schemaFile of [
   'schema/model-eol.schema.json',
   'schema/model-eol.bot-config.schema.json',
+  'schema/model-eol.check.schema.json',
   'schema/model-eol.inventory.schema.json',
   'schema/model-eol.schedule.schema.json',
   'schema/model-eol.alert.schema.json',
@@ -992,11 +1487,9 @@ for (const schemaFile of [
 }
 
 const inventorySchema = JSON.parse(fs.readFileSync(path.join(root, 'schema/model-eol.inventory.schema.json'), 'utf8'))
-const inventoryReferenceKeys = new Set([
-  ...Object.keys(inventorySchema.definitions.location.properties),
-  ...Object.keys(inventorySchema.definitions.modelReference.allOf[1].properties),
-])
+const inventoryReferenceKeys = new Set(Object.keys(inventorySchema.definitions.modelReference.properties))
 assert(bedrockRef && Object.keys(bedrockRef).every(key => inventoryReferenceKeys.has(key)), 'inventory schema recognizes every emitted routed-reference field')
+assert(inventorySchema.definitions.modelReference.additionalProperties === false && inventorySchema.definitions.candidateReference.additionalProperties === false && inventorySchema.definitions.integrationHint.additionalProperties === false, 'inventory schema makes every emitted nested reference shape strict')
 assert(Array.isArray(bedrockRef?.policy_provenance?.override_indexes) && Number.isInteger(bedrockRef?.policy_provenance?.route_index), 'emitted inventory policy provenance has the schema-defined shape')
 const planSchema = JSON.parse(fs.readFileSync(path.join(root, 'schema/model-eol.plan.schema.json'), 'utf8'))
 const routedPlanIssue = mixedPlan.issues.find(item => item.mapped_from === 'bedrock-prod')

@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.check.schema.json",
+  "title": "model-eol check output",
+  "description": "Machine-readable CI gate output emitted by `model-eol check --json`.",
+  "type": "object",
+  "required": ["schema", "threshold_days", "distributor", "scope", "scan_notes", "findings"],
+  "properties": {
+    "schema": { "const": "model-eol/check@0.1" },
+    "threshold_days": { "type": "integer", "minimum": 0 },
+    "distributor": { "type": ["string", "null"], "minLength": 1 },
+    "scope": { "enum": ["all", "direct"] },
+    "scan_notes": {
+      "type": "array",
+      "items": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/scanNote" }
+    },
+    "findings": { "type": "array", "items": { "$ref": "#/definitions/finding" } }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "finding": {
+      "type": "object",
+      "required": ["file", "line", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "status", "shutdown", "date_precision", "distribution_status", "via", "days", "safe_until", "replacement", "replacement_options", "replacement_note", "threshold_days", "effective_scope", "requested_via"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 },
+        "matched": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "publisher": { "type": "string", "minLength": 1 },
+        "usage": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/usage" },
+        "resolved_provider": { "type": "string", "minLength": 1 },
+        "confidence": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/confidence" },
+        "status": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/status" },
+        "shutdown": { "type": ["string", "null"], "format": "date" },
+        "date_precision": { "enum": ["exact", "earliest", null] },
+        "distribution_status": { "enum": ["active", "legacy", "extended-access", "retired", null] },
+        "via": { "type": ["string", "null"], "minLength": 1 },
+        "days": { "type": ["integer", "null"] },
+        "safe_until": { "type": ["string", "null"], "format": "date" },
+        "replacement": { "type": ["string", "null"], "minLength": 1 },
+        "replacement_options": {
+          "type": ["array", "null"],
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+        },
+        "replacement_note": { "type": ["string", "null"], "minLength": 1 },
+        "threshold_days": { "type": "integer", "minimum": 0 },
+        "effective_scope": { "enum": ["all", "direct"] },
+        "requested_via": { "type": ["string", "null"], "minLength": 1 },
+        "policy_provenance": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/policyProvenance" },
+        "mapped_from": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

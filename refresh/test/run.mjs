@@ -35,16 +35,20 @@ import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
 import { validateGeneratedFeeds } from '../refresh.mjs'
 import { classifyFeedReleasePaths } from '../../scripts/feed-release-guard.mjs'
 import { validateReleaseVersion } from '../../scripts/validate-release-version.mjs'
+import { resolveReleaseState, targetReleaseVersion } from '../../scripts/release-state.mjs'
+import { createReleaseReceipt, validateReleaseReceipt } from '../../scripts/release-receipt.mjs'
+import { assertSha512Integrity, sha512Integrity } from '../../scripts/package-integrity.mjs'
+import { stableGithubReleaseExists } from '../../scripts/github-release-state.mjs'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const refresh = path.join(root, 'refresh', 'refresh.mjs')
 const fixtures = path.join(root, 'refresh', 'test', 'fixture')
 
-function run(args) {
+function run(args, { env = process.env } = {}) {
   try {
     return {
       code: 0,
-      out: execFileSync(process.execPath, [refresh, ...args], { encoding: 'utf8' }),
+      out: execFileSync(process.execPath, [refresh, ...args], { encoding: 'utf8', env }),
     }
   } catch (error) {
     return {
@@ -136,6 +140,7 @@ const endpointLookalikeHtml = fs.readFileSync(path.join(fixtures, 'anthropic-end
 const openaiEntries = parseOpenAIDeprecations(openaiHtml)
 const anthropicEntries = parseAnthropicDeprecations(anthropicHtml)
 const bedrockEntries = parseBedrockLifecycleHtml(bedrockHtml)
+const bedrockById = new Map(bedrockEntries.map(entry => [entry.bedrockId, entry]))
 const googleEntries = parseGoogleDeprecations(googleHtml)
 const vertexEntries = parseVertexModelVersionsHtml(vertexHtml)
 const openaiIds = parseOpenAIModels(fs.readFileSync(path.join(fixtures, 'openai-models.json'), 'utf8'))
@@ -220,14 +225,64 @@ assert(normalizeVertexId('publishers/google/models/gemini-2.5-pro') === 'gemini-
 assert(bedrockEntries.length === 17, 'Bedrock lifecycle fixture parses and deduplicates logical model rows')
 assert(bedrockEntries.find(entry => entry.bedrockId === 'anthropic.claude-3-haiku-20240307-v1:0')?.eol === '2026-09-10', 'Bedrock parser handles rowspan model rows')
 assert(bedrockEntries.find(entry => entry.bedrockId === 'amazon.nova-canvas-v1:0')?.legacy === '2026-03-30', 'Bedrock parser reads human legacy dates')
-assert(bedrockEntries.every(entry => entry.legacy && entry.eol), 'Bedrock lifecycle records contain only parsed lifecycle dates')
+assert(bedrockEntries.every(entry => entry.legacy && entry.eol), 'Bedrock lifecycle records preserve parsed Legacy and EOL dates')
+assert(bedrockById.get('amazon.nova-canvas-v1:0')?.status === 'legacy', 'Bedrock parser marks rows without a public Extended Access date as Legacy')
+assert(bedrockById.get('anthropic.claude-3-haiku-20240307-v1:0')?.status === 'extended-access', 'Bedrock parser ingests the public Extended Access lifecycle phase')
+assert(bedrockById.get('anthropic.claude-3-sonnet-20240229-v1:0')?.status === 'extended-access', 'Bedrock parser conservatively combines regional Legacy and Extended Access rows')
 const shiftedBedrockRow = parseBedrockLifecycleHtml(`
   <table>
     <tr><th>Provider</th><th>Model</th><th>Model ID</th><th>Regions</th><th>Legacy date</th><th>EOL date</th><th>Public extended access date</th></tr>
     <tr><td>Command R</td><td>cohere.command-r-v1:0</td><td>us-east-1, us-west-2</td><td>February 19, 2026</td><td>August 19, 2026</td><td>May 19, 2026</td></tr>
   </table>
 `)
-assert(shiftedBedrockRow[0]?.bedrockId === 'cohere.command-r-v1:0' && shiftedBedrockRow[0]?.eol === '2026-08-19', 'Bedrock parser realigns rows whose provider cell is omitted')
+assert(shiftedBedrockRow[0]?.bedrockId === 'cohere.command-r-v1:0' && shiftedBedrockRow[0]?.eol === '2026-08-19' && shiftedBedrockRow[0]?.status === 'extended-access', 'Bedrock parser realigns rows whose provider cell is omitted')
+const explicitBedrockStatuses = parseBedrockLifecycleHtml(`
+  <table>
+    <tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th><th>Lifecycle status</th></tr>
+    <tr><td>amazon.legacy-model-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>—</td><td>Legacy</td></tr>
+    <tr><td>amazon.extended-model-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>June 1, 2026</td><td>Public Extended Access</td></tr>
+    <tr><td>amazon.eol-model-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>June 1, 2026</td><td>End-of-Life (EOL)</td></tr>
+  </table>
+`)
+assert(JSON.stringify(explicitBedrockStatuses.map(entry => entry.status)) === JSON.stringify(['legacy', 'extended-access', 'retired']), 'Bedrock parser normalizes explicit official lifecycle statuses')
+for (const [label, value] of [['unknown', 'Deprecated'], ['empty', '']]) {
+  let reason = ''
+  try {
+    parseBedrockLifecycleHtml(`
+      <table>
+        <tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th><th>Status</th></tr>
+        <tr><td>amazon.bad-status-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>—</td><td>${value}</td></tr>
+      </table>
+    `)
+  } catch (error) {
+    reason = error.message
+  }
+  assert(reason.includes('unsupported lifecycle status'), `Bedrock parser fails closed on ${label} lifecycle status values`)
+}
+let malformedExtendedAccessReason = ''
+try {
+  parseBedrockLifecycleHtml(`
+    <table>
+      <tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th></tr>
+      <tr><td>amazon.bad-extended-date-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>Eventually</td></tr>
+    </table>
+  `)
+} catch (error) {
+  malformedExtendedAccessReason = error.message
+}
+assert(malformedExtendedAccessReason.includes('unrecognised public extended access date'), 'Bedrock parser fails closed on malformed public Extended Access dates')
+let missingExtendedAccessColumnReason = ''
+try {
+  parseBedrockLifecycleHtml(`
+    <table>
+      <tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th></tr>
+      <tr><td>amazon.schema-drift-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td></tr>
+    </table>
+  `)
+} catch (error) {
+  missingExtendedAccessColumnReason = error.message
+}
+assert(missingExtendedAccessColumnReason.includes('missing the Public extended access start date column'), 'Bedrock parser fails closed when the official table schema drops the Extended Access column')
 assert(openaiEntries.length === 43, 'OpenAI real-structure fixture parses all selected model entries')
 assert(openaiEntries.filter(entry => entry.announced === '2026-04-22').length >= 20, 'OpenAI announcement date is inherited across a section')
 assert(openaiById.get('o3-deep-research-2025-06-26')?.announced === '2026-04-22', 'OpenAI July wave inherits its April announcement date')
@@ -421,7 +476,7 @@ const distributorMerge = mergeBedrockDistributions([distributorCommitted], {
   sourceUrl: BEDROCK_LIFECYCLE_URL,
   records: [
     { bedrockId: 'anthropic.publisher-alias-v1:0', legacy: '2026-08-01', eol: '2027-02-01' },
-    { bedrockId: 'anthropic.existing-model-20250101-v2:0', legacy: '2026-02-01', eol: '2027-01-01' },
+    { bedrockId: 'anthropic.existing-model-20250101-v2:0', legacy: '2026-02-01', eol: '2027-01-01', status: 'extended-access' },
     { bedrockId: 'meta.llama3-1-405b-instruct-v1:0', legacy: '2026-08-01', eol: '2027-02-01' },
   ],
 })
@@ -430,11 +485,12 @@ const publisherModel = distributorFeed.models.find(model => model.id === 'publis
 assert(publisherModel.distributions?.[0]?.via === 'aws-bedrock' && publisherModel.distributions[0].shutdown === '2027-02-01', 'Bedrock merge upserts a distribution through a publisher alias')
 const existingModel = distributorFeed.models.find(model => model.id === 'existing-model-20250101')
 assert(existingModel.distributions[1].shutdown === '2027-01-01', 'Bedrock merge updates a changed EOL date in place')
+assert(existingModel.distributions[1].status === 'extended-access', 'Bedrock merge carries a normalized Extended Access status')
 assert(JSON.stringify(existingModel.distributions[0]) === existingBeforeForeign, 'Bedrock merge preserves foreign-via distributions')
 const existingAfterFields = { ...existingModel }
 delete existingAfterFields.distributions
 assert(JSON.stringify(existingAfterFields) === JSON.stringify(existingBeforeFields), 'Bedrock merge preserves entry-level lifecycle and replacement fields')
-assert(JSON.stringify(Object.keys(existingModel.distributions[1])) === JSON.stringify(['via', 'announced', 'shutdown', 'source']), 'Bedrock distribution fields retain canonical order')
+assert(JSON.stringify(Object.keys(existingModel.distributions[1])) === JSON.stringify(['via', 'announced', 'shutdown', 'status', 'source']), 'Bedrock distribution fields retain canonical order')
 assert(distributorMerge.unconfirmedDistributions.some(item => item.id === 'stale-model'), 'Bedrock merge reports an unconfirmed existing distribution')
 assert(distributorMerge.noPublisherFeed.some(item => item.bedrockId === 'meta.llama3-1-405b-instruct-v1:0'), 'Bedrock merge reports unmatched models without inventing entries')
 assert(!distributorFeed.models.some(model => model.id === 'llama3-1-405b-instruct'), 'Bedrock merge does not create an unmatched publisher entry')
@@ -455,6 +511,16 @@ const unknownNamespaceMerge = mergeBedrockDistributions([{ publisher: 'openai', 
   records: [{ bedrockId: 'future-provider.unknown-model:0', legacy: '2026-08-01', eol: '2027-02-01' }],
 })
 assert(unknownNamespaceMerge.noPublisherFeed.some(item => item.bedrockId === 'future-provider.unknown-model:0') && !unknownNamespaceMerge.feeds[0].models[0].distributions, 'unknown Bedrock namespaces remain skipped with a note')
+let invalidBedrockRecordStatus = ''
+try {
+  mergeBedrockDistributions([{ publisher: 'anthropic', models: [{ id: 'invalid-status-model' }] }], {
+    sourceUrl: BEDROCK_LIFECYCLE_URL,
+    records: [{ bedrockId: 'anthropic.invalid-status-model-v1:0', legacy: '2026-08-01', eol: '2027-02-01', status: 'deprecated' }],
+  })
+} catch (error) {
+  invalidBedrockRecordStatus = error.message
+}
+assert(invalidBedrockRecordStatus.includes('invalid status'), 'Bedrock merge refuses unknown parser status values before feed generation')
 
 const vertexMerge = mergeVertexDistributions([googleFeed, anthropicFeed], {
   records: vertexEntries,
@@ -524,6 +590,41 @@ assert(!compareFeeds(oldFeed, oldFeed).changed, 'semantic diff ignores generated
 const precisionFeed = { ...oldFeed, models: [{ id: 'precision', shutdown: '2026-10-01', date_precision: 'earliest' }] }
 const precisionDiff = renderSemanticDiff({ ...oldFeed, models: [{ id: 'precision', shutdown: '2026-10-01' }] }, precisionFeed)
 assert(precisionDiff.includes('2026-10-01') && precisionDiff.includes('(earliest)'), 'semantic diff renders earliest date precision')
+
+const statusOld = { ...oldFeed, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', announced: '2026-03-01', shutdown: '2026-09-01', status: 'legacy' }] }] }
+const statusNew = { ...statusOld, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', announced: '2026-03-01', shutdown: '2026-09-01', status: 'extended-access' }] }] }
+const statusDiff = compareFeeds(statusOld, statusNew)
+const statusMarkdown = renderSemanticDiff(statusOld, statusNew)
+assert(statusDiff.changed && statusDiff.distributionChanges.length === 1, 'semantic diff treats a distribution status-only transition as material')
+assert(statusMarkdown.includes('status changed `legacy` -> `extended-access`'), 'semantic diff renders status-only transitions for refresh PR and Atom inputs')
+const statusAdded = compareFeeds(
+  { ...statusOld, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', shutdown: '2026-09-01' }] }] },
+  { ...statusOld, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', shutdown: '2026-09-01', status: 'legacy' }] }] },
+)
+const statusAddedMarkdown = renderSemanticDiff(
+  { ...statusOld, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', shutdown: '2026-09-01' }] }] },
+  { ...statusOld, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', shutdown: '2026-09-01', status: 'legacy' }] }] },
+)
+const statusRemovedMarkdown = renderSemanticDiff(
+  { ...statusOld, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', shutdown: '2026-09-01', status: 'legacy' }] }] },
+  { ...statusOld, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', shutdown: '2026-09-01' }] }] },
+)
+assert(statusAdded.changed && statusAdded.distributionChanges.length === 1 && statusAddedMarkdown.includes('status changed `not set` -> `legacy`'), 'semantic diff treats adding a distribution status as material and rendered')
+assert(statusRemovedMarkdown.includes('status changed `legacy` -> `not set`'), 'semantic diff treats removing a distribution status as material and rendered')
+const distributionAdded = compareFeeds(
+  { ...oldFeed, models: [{ id: 'distribution-membership' }] },
+  { ...oldFeed, models: [{ id: 'distribution-membership', distributions: [{ via: 'aws-bedrock', status: 'legacy' }] }] },
+)
+const distributionAddedMarkdown = renderSemanticDiff(
+  { ...oldFeed, models: [{ id: 'distribution-membership' }] },
+  { ...oldFeed, models: [{ id: 'distribution-membership', distributions: [{ via: 'aws-bedrock', status: 'legacy' }] }] },
+)
+const distributionRemovedMarkdown = renderSemanticDiff(
+  { ...oldFeed, models: [{ id: 'distribution-membership', distributions: [{ via: 'aws-bedrock', status: 'legacy' }] }] },
+  { ...oldFeed, models: [{ id: 'distribution-membership' }] },
+)
+assert(distributionAdded.changed && distributionAdded.distributionChanges[0]?.kind === 'added' && distributionAddedMarkdown.includes('distribution added') && distributionAddedMarkdown.includes('status: `legacy`'), 'semantic diff keeps distribution additions material and renders status')
+assert(distributionRemovedMarkdown.includes('distribution removed'), 'semantic diff keeps distribution removals material and rendered')
 
 const aliasDiffOld = { ...oldFeed, models: [{ id: 'alias-model', aliases: ['old-alias'], shutdown: '2026-10-01' }] }
 const aliasDiffNew = { ...aliasDiffOld, models: [{ id: 'alias-model', aliases: ['new-alias'], shutdown: '2026-10-01' }] }
@@ -761,6 +862,25 @@ assert(vertexCheck.out.includes('no publisher feed'), 'Vertex --check reports un
 const bothDistributorsCheck = run(['--distributor', 'aws-bedrock,vertex-ai', '--check', '--fixtures', fixtures])
 assert(bothDistributorsCheck.code === 3 && bothDistributorsCheck.out.includes('vertex-ai'), 'refresh accepts comma-separated distributors')
 
+const mixedDistributorOut = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-mixed-distributors-'))
+const mixedGenerated = '2099-01-02T03:04:05Z'
+const mixedDistributorWrite = run([
+  '--distributor', 'aws-bedrock,vertex-ai',
+  '--out', mixedDistributorOut,
+  '--fixtures', fixtures,
+], { env: { ...process.env, MODEL_EOL_GENERATED: mixedGenerated } })
+assert(mixedDistributorWrite.code === 0, 'mixed distributor refresh writes successfully')
+const mixedOutputs = Object.fromEntries(['amazon', 'anthropic', 'google', 'openai'].map(publisher => [
+  publisher,
+  JSON.parse(fs.readFileSync(path.join(mixedDistributorOut, `${publisher}.json`), 'utf8')),
+]))
+const mixedCommitted = Object.fromEntries(['amazon', 'anthropic', 'google', 'openai'].map(publisher => [
+  publisher,
+  JSON.parse(fs.readFileSync(path.join(root, 'feeds', `${publisher}.json`), 'utf8')),
+]))
+assert(mixedOutputs.anthropic.generated === mixedGenerated && mixedOutputs.anthropic.generated !== mixedCommitted.anthropic.generated, 'mixed distributor write advances generated for the publisher with material distribution changes')
+assert(['amazon', 'google', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
+
 const refreshWorkflow = fs.readFileSync(path.join(root, '.github/workflows/feed-refresh.yml'), 'utf8')
 assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && refreshWorkflow.includes('exit code $providers'), 'workflow fails explicitly on unexpected provider refresh exit codes')
 assert(refreshWorkflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]') && refreshWorkflow.includes('exit code $distributors'), 'workflow fails explicitly on unexpected distributor refresh exit codes')
@@ -770,6 +890,8 @@ assert(refreshWorkflow.includes('issues: write') && refreshWorkflow.includes('if
 assert(refreshWorkflow.includes('gh issue comment "$issue" --body "$body"') && refreshWorkflow.includes('gh issue create --title "$title"'), 'workflow updates one failure issue instead of silently repeating failures')
 assert(refreshWorkflow.includes('Resolve prior feed refresh failure') && refreshWorkflow.includes('gh issue close "$issue" --reason completed'), 'a successful refresh resolves the prior failure issue')
 assert(refreshWorkflow.includes('$GITHUB_STEP_SUMMARY') && refreshWorkflow.includes('no material feed changes were found') && refreshWorkflow.includes('feed-generated date is intentionally unchanged'), 'a successful no-change refresh records an honest result without changing feed freshness')
+assert(refreshWorkflow.includes('node scripts/feed-refresh-receipt.mjs "${args[@]}"') && refreshWorkflow.includes('name: feed-refresh-receipt'), 'every successful refresh uploads a dependency-free receipt artifact')
+assert(refreshWorkflow.includes('--state pending --pending-pr-url "$PR_URL"') && refreshWorkflow.includes('--state clean'), 'refresh receipts distinguish pending material changes from clean committed feeds')
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
 assert(readme.includes('actions/workflows/feed-refresh.yml/badge.svg'), 'README exposes feed-refresh workflow health')
 const releaseWorkflow = fs.readFileSync(path.join(root, '.github/workflows/npm-release.yml'), 'utf8')
@@ -791,10 +913,161 @@ try {
   publishedReleaseRejected = true
 }
 assert(publishedReleaseRejected, 'release validation refuses a version already published to npm')
-assert(releaseWorkflow.includes('npm view model-eol versions --json') && releaseWorkflow.includes('tag v$RELEASE_VERSION already exists') && releaseWorkflow.includes('GitHub release v$RELEASE_VERSION already exists'), 'manual releases refuse existing npm versions, tags, and GitHub releases')
+assert(targetReleaseVersion({ eventName: 'push', sourceVersion: '0.4.1' }) === '0.4.2', 'automatic feed release state resolves the exact next patch')
+assert(targetReleaseVersion({ eventName: 'workflow_dispatch', sourceVersion: '0.4.1', requestedVersion: '0.5.0' }) === '0.5.0', 'manual release state preserves the exact requested version')
+const releaseSource = 'a'.repeat(40)
+const releaseCommit = 'b'.repeat(40)
+const releaseIntegrity = sha512Integrity(Buffer.from('model-eol@0.5.0'))
+assert(assertSha512Integrity(releaseIntegrity) === releaseIntegrity, 'release package integrity accepts one canonical SHA-512 SRI digest')
+const stableReleaseApiEntry = { tag_name: 'v0.5.0', draft: false, prerelease: false }
+assert(stableGithubReleaseExists({ pages: [[stableReleaseApiEntry]], tag: 'v0.5.0' }), 'release recovery recognizes an exact published stable GitHub release from paginated API state')
+assert(!stableGithubReleaseExists({ pages: [[{ tag_name: 'v0.4.1', draft: false, prerelease: false }]], tag: 'v0.5.0' }), 'release recovery recognizes an absent exact GitHub release')
+for (const candidate of [
+  { ...stableReleaseApiEntry, draft: true },
+  { ...stableReleaseApiEntry, prerelease: true },
+]) {
+  let unstableReleaseRejected = false
+  try {
+    stableGithubReleaseExists({ pages: [[candidate]], tag: 'v0.5.0' })
+  } catch {
+    unstableReleaseRejected = true
+  }
+  assert(unstableReleaseRejected, `release recovery rejects a matching ${candidate.draft ? 'draft' : 'prerelease'} GitHub release`)
+}
+let malformedReleaseApiRejected = false
+try {
+  stableGithubReleaseExists({ pages: [{ tag_name: 'v0.5.0', draft: false, prerelease: false }], tag: 'v0.5.0' })
+} catch {
+  malformedReleaseApiRejected = true
+}
+assert(malformedReleaseApiRejected, 'release recovery fails closed on malformed paginated GitHub API state')
+const newReleaseState = resolveReleaseState({
+  eventName: 'workflow_dispatch',
+  sourceVersion: '0.4.1',
+  requestedVersion: '0.5.0',
+  sourceCommit: releaseSource,
+  mainCommit: releaseSource,
+  publishedVersions: ['0.4.1'],
+  githubReleaseExists: false,
+})
+assert(newReleaseState.mode === 'create' && newReleaseState.publish && newReleaseState.createGithubRelease, 'release state creates a wholly missing exact release')
+const resumableTag = {
+  commit: releaseCommit,
+  parent: releaseSource,
+  version: '0.5.0',
+  movingCommit: releaseCommit,
+  mainContainsRelease: true,
+  changedPaths: ['package.json'],
+}
+const tagOnlyState = resolveReleaseState({
+  eventName: 'workflow_dispatch',
+  sourceVersion: '0.4.1',
+  requestedVersion: '0.5.0',
+  sourceCommit: releaseSource,
+  mainCommit: releaseCommit,
+  publishedVersions: ['0.4.1'],
+  githubReleaseExists: false,
+  tag: resumableTag,
+})
+assert(tagOnlyState.mode === 'resume' && tagOnlyState.publish && tagOnlyState.createGithubRelease, 'same-event workflow rerun resumes after tags were pushed but npm is missing')
+const registryOnlyState = resolveReleaseState({
+  eventName: 'workflow_dispatch',
+  sourceVersion: '0.4.1',
+  requestedVersion: '0.5.0',
+  sourceCommit: releaseSource,
+  mainCommit: releaseCommit,
+  publishedVersions: ['0.4.1', '0.5.0'],
+  githubReleaseExists: false,
+  tag: resumableTag,
+})
+assert(registryOnlyState.mode === 'resume' && !registryOnlyState.publish && registryOnlyState.createGithubRelease, 'same-event workflow rerun resumes after npm publish when the GitHub release is missing')
+const completeReleaseState = resolveReleaseState({
+  eventName: 'workflow_dispatch',
+  sourceVersion: '0.4.1',
+  requestedVersion: '0.5.0',
+  sourceCommit: releaseSource,
+  mainCommit: releaseCommit,
+  publishedVersions: ['0.4.1', '0.5.0'],
+  githubReleaseExists: true,
+  tag: resumableTag,
+})
+assert(completeReleaseState.mode === 'resume' && !completeReleaseState.publish && !completeReleaseState.createGithubRelease, 'release state recognizes an already complete release without repeating publication')
+let orphanRegistryRejected = false
+try {
+  resolveReleaseState({
+    eventName: 'workflow_dispatch',
+    sourceVersion: '0.4.1',
+    requestedVersion: '0.5.0',
+    sourceCommit: releaseSource,
+    mainCommit: releaseSource,
+    publishedVersions: ['0.5.0'],
+    githubReleaseExists: false,
+  })
+} catch {
+  orphanRegistryRejected = true
+}
+assert(orphanRegistryRejected, 'release state refuses an npm version without an immutable release tag')
+let movingTagMismatchRejected = false
+try {
+  resolveReleaseState({
+    eventName: 'workflow_dispatch',
+    sourceVersion: '0.4.1',
+    requestedVersion: '0.5.0',
+    sourceCommit: releaseSource,
+    mainCommit: releaseCommit,
+    publishedVersions: ['0.4.1'],
+    githubReleaseExists: false,
+    tag: { ...resumableTag, movingCommit: 'c'.repeat(40) },
+  })
+} catch {
+  movingTagMismatchRejected = true
+}
+assert(movingTagMismatchRejected, 'release state refuses recovery when moving v0 and the immutable tag diverge')
+let wrongReleaseParentRejected = false
+try {
+  resolveReleaseState({
+    eventName: 'workflow_dispatch',
+    sourceVersion: '0.4.1',
+    requestedVersion: '0.5.0',
+    sourceCommit: releaseSource,
+    mainCommit: releaseCommit,
+    publishedVersions: ['0.4.1'],
+    githubReleaseExists: false,
+    tag: { ...resumableTag, parent: 'c'.repeat(40) },
+  })
+} catch {
+  wrongReleaseParentRejected = true
+}
+assert(wrongReleaseParentRejected, 'release state refuses a version tag whose release commit has the wrong source parent')
+let mainDriftRejected = false
+try {
+  resolveReleaseState({
+    eventName: 'workflow_dispatch',
+    sourceVersion: '0.4.1',
+    requestedVersion: '0.5.0',
+    sourceCommit: releaseSource,
+    mainCommit: 'c'.repeat(40),
+    publishedVersions: ['0.4.1'],
+    githubReleaseExists: false,
+  })
+} catch {
+  mainDriftRejected = true
+}
+assert(mainDriftRejected, 'new release state refuses to push after origin/main drifts from the workflow source')
+const releasedReceipt = createReleaseReceipt({ sourceCommit: releaseSource, version: '0.5.0', releaseCommit, registryIntegrity: releaseIntegrity })
+const validatedReleaseReceipt = validateReleaseReceipt(releasedReceipt, { expectedSourceCommit: releaseSource })
+assert(validatedReleaseReceipt.release_commit === releaseCommit && validatedReleaseReceipt.registry_integrity === releaseIntegrity, 'release receipt binds the workflow source, exact version, release commit, and registry tarball integrity')
+let invalidReleaseIntegrityRejected = false
+try {
+  validateReleaseReceipt({ ...releasedReceipt, registry_integrity: 'sha512-not-base64' })
+} catch {
+  invalidReleaseIntegrityRejected = true
+}
+assert(invalidReleaseIntegrityRejected, 'release receipt rejects malformed registry integrity')
+assert(!validateReleaseReceipt(createReleaseReceipt({ sourceCommit: releaseSource })).released, 'release receipt represents intentional no-op runs without guessing a version')
 assert(releaseWorkflow.includes('node scripts/validate-release-version.mjs "$current" "$RELEASE_VERSION" "$published"'), 'manual releases run the tested release-version validator')
 assert(releaseWorkflow.includes('npm version "$RELEASE_VERSION"'), 'manual releases apply the exact requested version')
-assert(releaseWorkflow.includes('npm version patch -m "model-eol v%s - automated feed-data release"'), 'automated feed releases remain patch-only')
+assert(releaseWorkflow.includes("npm version patch -m 'model-eol v%s - automated feed-data release'"), 'automated feed releases remain patch-only')
 const feedOnlyRelease = classifyFeedReleasePaths(['feeds/openai.json', 'feeds/google.json', 'README.md'])
 assert(feedOnlyRelease.changed && feedOnlyRelease.blockedPaths.length === 0, 'feed and generated README metadata changes may publish an automatic patch')
 const mixedRelease = classifyFeedReleasePaths(['feeds/openai.json', 'README.md', 'lib/scanner.mjs', '.github/workflows/ci.yml'])
@@ -802,6 +1075,34 @@ assert(!mixedRelease.changed && JSON.stringify(mixedRelease.blockedPaths) === JS
 assert(!classifyFeedReleasePaths(['README.md']).changed, 'README-only changes do not publish an automatic feed patch')
 assert(releaseWorkflow.includes('node scripts/feed-release-guard.mjs "$last"') && !releaseWorkflow.includes('git diff --quiet "$last"..HEAD -- feeds/'), 'npm release workflow uses the tested mixed-change guard')
 assert(releaseWorkflow.includes('git push --atomic origin main "$version" +refs/tags/v0:refs/tags/v0') && !releaseWorkflow.includes('git push -f origin v0'), 'release commit, immutable version tag, and moving v0 tag push atomically')
+assert(releaseWorkflow.includes("steps.state.outputs.publish == 'true'") && releaseWorkflow.includes("steps.state.outputs.create_github_release == 'true'"), 'release workflow independently resumes missing npm publication and GitHub release phases')
+assert(releaseWorkflow.includes("pre-release GITHUB_SHA") && releaseWorkflow.includes('--source-sha "$GITHUB_SHA"'), 'release recovery is explicitly bound to rerunning the original event and its pre-release source commit')
+assert(releaseWorkflow.includes('name: npm-release-result') && releaseWorkflow.includes('node scripts/release-receipt.mjs "${args[@]}"') && releaseWorkflow.includes('--registry-integrity "$RELEASE_INTEGRITY"'), 'release workflow exports its exact version, commit, and registry integrity through an artifact')
+assert(releaseWorkflow.includes('id-token: write') && releaseWorkflow.includes('npm publish "$RELEASE_TARBALL" --ignore-scripts'), 'release workflow preserves npm trusted publishing through OIDC')
+assert(releaseWorkflow.includes('npm install -g npm@11.6.4') && releaseWorkflow.includes(`test "$(npm --version)" = '11.6.4'`) && !releaseWorkflow.includes('npm@latest'), 'OIDC release execution pins and verifies its npm CLI instead of running a mutable latest version')
+assert(releaseWorkflow.includes('npm pack --json --ignore-scripts') && releaseWorkflow.includes('verifyPackageIntegrity') && releaseWorkflow.includes('--expected-integrity "$RELEASE_INTEGRITY"'), 'release publication hashes exact tag bytes, publishes that tarball, and verifies registry integrity')
+assert(releaseWorkflow.includes('gh api --paginate --slurp') && releaseWorkflow.includes('node scripts/github-release-state.mjs') && releaseWorkflow.includes('isDraft !== false') && !releaseWorkflow.includes('if gh release view'), 'release existence lookup fails closed and accepts only a published stable GitHub release')
+const publicWorkflow = fs.readFileSync(path.join(root, '.github/workflows/public-contract.yml'), 'utf8')
+assert(publicWorkflow.includes('no successful feed-refresh receipt matches every feed currently on main') && publicWorkflow.includes('successful receipt-era refresh run $run_id has no downloadable receipt') && publicWorkflow.includes('refusing stale receipt fallback'), 'public contract advances only from the newest valid receipt and fails closed on missing or mismatching receipt-era artifacts')
+assert(publicWorkflow.includes('.status, .conclusion') && !publicWorkflow.includes('--status success') && publicWorkflow.includes('refusing fallback until a newer refresh succeeds'), 'newer failed, queued, or in-progress receipt-era refreshes block fallback to older clean receipts')
+assert(publicWorkflow.includes('.isCrossRepository == false') && publicWorkflow.includes('startswith("feed-refresh/")') && publicWorkflow.includes('refusing to advance last_checked') && publicWorkflow.includes('pull-requests: read'), 'an unresolved same-repository material-change PR prevents later clean receipts without trusting fork branch names')
+assert(publicWorkflow.includes('Confirm this refresh event has not been superseded') && publicWorkflow.includes('it cannot roll the public contract back'), 'a delayed workflow_run event cannot deploy an older matching receipt after a newer refresh')
+assert(['lib/cli.mjs', 'lib/validate-feed.mjs', 'refresh/diff.mjs'].every(file => publicWorkflow.includes(`- '${file}'`)), 'public contract redeploys when any transitive build dependency changes')
+assert(publicWorkflow.includes('node scripts/verify-public-site.mjs') && publicWorkflow.includes('name: public-contract-expectation'), 'Pages verification compares the live deployment with the exact built artifact')
+const publishedUatWorkflow = fs.readFileSync(path.join(root, '.github/workflows/published-consumer-uat.yml'), 'utf8')
+assert(publishedUatWorkflow.includes('name: npm-release-result') && publishedUatWorkflow.includes('run-id: ${{ github.event.workflow_run.id }}') && !publishedUatWorkflow.includes('dist-tags.latest'), 'workflow-run UAT consumes the exact release result instead of npm latest')
+assert(publishedUatWorkflow.includes('moving_commit') && publishedUatWorkflow.includes('immutable_commit') && publishedUatWorkflow.includes('Moving v0 Action validate round-trip UAT') && publishedUatWorkflow.includes('Reverify remote v0 after the Action ran'), 'published UAT brackets the moving v0 Action with immutable-ref checks and validates its output round-trip')
+assert(publishedUatWorkflow.includes('Immutable release Action inventory UAT') && publishedUatWorkflow.includes('Immutable release Action validate round-trip UAT') && publishedUatWorkflow.match(/uses: \.\//g)?.length === 2, 'published UAT validates the exact immutable release Action locally before treating v0 as a moving-line monitor')
+assert(publishedUatWorkflow.includes("git ls-remote \"$remote\" 'refs/tags/v0^{}'") && publishedUatWorkflow.includes('--expected-integrity "$INTEGRITY"'), 'published UAT peels the moving Action tag and binds installed package bytes to the registry digest')
+assert(publishedUatWorkflow.includes("needs.resolve.outputs.moving_current == 'true'") && publishedUatWorkflow.includes('exact v$VERSION UAT remains authoritative'), 'superseded moving aliases are monitoring results and never invalidate immutable exact-version UAT')
+assert(publishedUatWorkflow.includes('v0 or immutable v$VERSION moved while the moving Action UAT was running') && publishedUatWorkflow.includes('exit 1'), 'moving Action monitoring fails if either bound ref changes during its two-step round-trip')
+assert(publishedUatWorkflow.includes('const r=Array.isArray(v)?v.at(-1):v') && publishedUatWorkflow.includes('if(typeof r!=="string")process.exit(1)'), 'moving npm-line recheck normalizes npm view arrays to the resolved latest version')
+assert(releaseWorkflow.includes('group: model-eol-release-and-moving-uat') && releaseWorkflow.includes('queue: max') && publishedUatWorkflow.includes('group: model-eol-release-and-moving-uat') && publishedUatWorkflow.includes('queue: max'), 'release and moving-alias UAT serialize through one non-cancelling queued concurrency group')
+assert(publishedUatWorkflow.includes('workflows: [npm-release]') && publishedUatWorkflow.includes('branches: [main]') && publishedUatWorkflow.includes('types: [completed]'), 'published UAT is triggered by completed npm-release runs on main')
+assert(!publishedUatWorkflow.includes('workflow_dispatch') && !publishedUatWorkflow.includes('inputs.version') && !publishedUatWorkflow.includes('REQUESTED_VERSION') && !publishedUatWorkflow.includes('manually requested immutable'), 'published UAT has no workflow-dispatch or manual-version execution fallback')
+assert(publishedUatWorkflow.includes("if: github.event.workflow_run.conclusion == 'success'") && publishedUatWorkflow.includes('ref: ${{ github.event.workflow_run.head_sha }}'), 'workflow-run UAT executes only after success and resolves its receipt with the triggering release commit\'s own verifier')
+assert(publishedUatWorkflow.includes('--expected-source-sha "$EXPECTED_SOURCE_SHA"'), 'workflow-run UAT binds the downloaded receipt to the triggering release source')
+assert(publishedUatWorkflow.includes('ref: ${{ needs.resolve.outputs.release_commit }}'), 'package UAT runs the exact release commit\'s own consumer harness')
 const freshnessScript = fs.readFileSync(path.join(root, 'scripts/update-readme-freshness.mjs'), 'utf8')
 assert(freshnessScript.includes('AWS Bedrock and Google Vertex AI lifecycle pages'), 'README freshness metadata names every automated distributor source')
 
@@ -848,6 +1149,7 @@ assert(corruptRun.code === 1, 'corrupted fixture exits nonzero')
 assert(!fs.existsSync(corruptOut), 'corrupted fixture produces no output directory')
 
 fs.rmSync(outputDir, { recursive: true, force: true })
+fs.rmSync(mixedDistributorOut, { recursive: true, force: true })
 fs.rmSync(corruptBedrockDir, { recursive: true, force: true })
 fs.rmSync(corruptOpenAIDir, { recursive: true, force: true })
 fs.rmSync(corruptDir, { recursive: true, force: true })

@@ -37,7 +37,7 @@ purpose. Open an issue - that conversation is the whole point of the project.
 
 ## Development setup
 
-Node 20+, nothing else. There are no dependencies to install - not for the
+Node 22+, nothing else. There are no dependencies to install - not for the
 tool, not for development.
 
 ```bash
@@ -48,10 +48,10 @@ npm test
 
 ## Quality gates
 
-`npm test` composes all four suites (checker, refresh, bot, changelog) plus
-feed validation - it must pass, offline, with no API keys. CI runs exactly
-this. Every behavior change needs a regression test that fails on the old
-code.
+`npm test` composes the checker, refresh, bot, Action, schema validation,
+example eval-harness, packed-consumer, changelog, and public-site suites - it
+must pass offline, with no API keys. CI runs exactly this. Every behavior change
+needs a regression test that fails on the old code.
 
 Two testing conventions that bite newcomers:
 

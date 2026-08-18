@@ -1,0 +1,254 @@
+name: published-consumer-uat
+
+# Keep release-code execution on workflow_run's read-only cache scope. For a
+# manual recovery, re-run this UAT run or the original npm-release run in Actions.
+on:
+  workflow_run:
+    workflows: [npm-release]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: model-eol-release-and-moving-uat
+  queue: max
+
+jobs:
+  resolve:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.release.outputs.released }}
+      version: ${{ steps.release.outputs.version }}
+      release_commit: ${{ steps.refs.outputs.release_commit }}
+      registry_integrity: ${{ steps.refs.outputs.registry_integrity }}
+      moving_current: ${{ steps.refs.outputs.moving_current }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Download npm-release's exact result
+        uses: actions/download-artifact@v8
+        with:
+          name: npm-release-result
+          path: _release-result
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Resolve exact tested release
+        id: release
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          node scripts/release-receipt.mjs verify \
+            --receipt _release-result/npm-release-result.json \
+            --expected-source-sha "$EXPECTED_SOURCE_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Verify remote moving and immutable Action refs
+        if: steps.release.outputs.released == 'true'
+        id: refs
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          EXPECTED_RELEASE_COMMIT: ${{ steps.release.outputs.release_commit }}
+          EXPECTED_REGISTRY_INTEGRITY: ${{ steps.release.outputs.registry_integrity }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin \
+            "+refs/tags/v$VERSION:refs/tags/v$VERSION" \
+            '+refs/tags/v0:refs/tags/v0'
+          immutable_commit=$(git rev-parse "refs/tags/v$VERSION^{commit}")
+          moving_commit=$(git rev-parse 'refs/tags/v0^{commit}')
+          if [ "$moving_commit" = "$immutable_commit" ]; then
+            echo 'moving_current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'moving_current=false' >> "$GITHUB_OUTPUT"
+            echo "v0 now resolves to $moving_commit; exact v$VERSION UAT remains authoritative and this superseded moving-line monitor will be skipped" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -n "$EXPECTED_RELEASE_COMMIT" ] && [ "$immutable_commit" != "$EXPECTED_RELEASE_COMMIT" ]; then
+            echo "release receipt names $EXPECTED_RELEASE_COMMIT, but v$VERSION is $immutable_commit" >&2
+            exit 1
+          fi
+          tagged_version=$(git show "$immutable_commit:package.json" | node -e 'let s=""; process.stdin.on("data", c => s += c).on("end", () => process.stdout.write(JSON.parse(s).version))')
+          if [ "$tagged_version" != "$VERSION" ]; then
+            echo "v$VERSION contains package version $tagged_version" >&2
+            exit 1
+          fi
+          registry_metadata="$RUNNER_TEMP/model-eol-registry-metadata.json"
+          npm view "model-eol@$VERSION" version dist.integrity --json --prefer-online > "$registry_metadata"
+          REGISTRY_METADATA="$registry_metadata" node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          import { assertSha512Integrity } from './scripts/package-integrity.mjs'
+          const metadata = JSON.parse(fs.readFileSync(process.env.REGISTRY_METADATA, 'utf8'))
+          if (metadata.version !== process.env.VERSION) throw new Error(`registry returned model-eol@${metadata.version}, expected ${process.env.VERSION}`)
+          const integrity = assertSha512Integrity(metadata['dist.integrity'], 'registry integrity')
+          if (process.env.EXPECTED_REGISTRY_INTEGRITY && integrity !== process.env.EXPECTED_REGISTRY_INTEGRITY) {
+            throw new Error(`registry integrity ${integrity} does not match release receipt ${process.env.EXPECTED_REGISTRY_INTEGRITY}`)
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `registry_integrity=${integrity}\n`)
+          NODE
+          echo "release_commit=$immutable_commit" >> "$GITHUB_OUTPUT"
+
+  package-consumer:
+    needs: resolve
+    if: needs.resolve.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - name: Exact published package UAT
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          INTEGRITY: ${{ needs.resolve.outputs.registry_integrity }}
+        run: node scripts/published-consumer-uat.mjs --package "model-eol@$VERSION" --expected-version "$VERSION" --expected-integrity "$INTEGRITY" --expected-engine '>=22'
+  moving-package-consumer:
+    needs: resolve
+    if: needs.resolve.outputs.run == 'true' && needs.resolve.outputs.moving_current == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+      - name: Moving npm 0.x line UAT
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          INTEGRITY: ${{ needs.resolve.outputs.registry_integrity }}
+        run: |
+          set +e
+          node scripts/published-consumer-uat.mjs --package model-eol@0 --expected-version "$VERSION" --expected-integrity "$INTEGRITY" --expected-engine '>=22'
+          uat_status=$?
+          set -e
+          current=$(npm view model-eol@0 version --json --prefer-online | node -e 'let s=""; process.stdin.on("data", c => s += c).on("end", () => { const v=JSON.parse(s); const r=Array.isArray(v)?v.at(-1):v; if(typeof r!=="string")process.exit(1); process.stdout.write(r) })')
+          if [ "$current" != "$VERSION" ]; then
+            echo "npm 0.x moved to $current while model-eol@$VERSION was being monitored" >&2
+            exit 1
+          fi
+          exit "$uat_status"
+
+  exact-action-consumer:
+    needs: resolve
+    if: needs.resolve.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.release_commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Create isolated exact Action consumer
+        run: |
+          mkdir consumer
+          printf '%s\n' \
+            'import OpenAI from "openai"' \
+            'const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })' \
+            'export const model = "o3-deep-research"' \
+            > consumer/app.mjs
+      - name: Immutable release Action inventory UAT
+        uses: ./
+        with:
+          command: inventory
+          paths: consumer
+          output-file: exact-action-inventory.json
+      - name: Immutable release Action validate round-trip UAT
+        uses: ./
+        with:
+          command: validate
+          paths: exact-action-inventory.json
+          output-file: exact-action-validation.txt
+      - name: Verify immutable release Action result
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const inventory = JSON.parse(fs.readFileSync('exact-action-inventory.json', 'utf8'))
+          if (inventory.schema !== 'model-eol/inventory@0.1') throw new Error(`unexpected schema ${inventory.schema}`)
+          if (!inventory.model_references.some(item => item.matched === 'o3-deep-research')) {
+            throw new Error('immutable release Action did not find the consumer model')
+          }
+          const validation = fs.readFileSync('exact-action-validation.txt', 'utf8')
+          if (!validation.includes('valid inventory document')) throw new Error('immutable release Action did not validate its own inventory artifact')
+          NODE
+
+  action-consumer:
+    needs: resolve
+    if: needs.resolve.outputs.run == 'true' && needs.resolve.outputs.moving_current == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Create isolated consumer
+        run: |
+          mkdir consumer
+          printf '%s\n' \
+            'import OpenAI from "openai"' \
+            'const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })' \
+            'export const model = "o3-deep-research"' \
+            > consumer/app.mjs
+      - name: Moving v0 Action inventory UAT
+        uses: thossullivan/model-eol@v0
+        with:
+          command: inventory
+          paths: consumer
+          output-file: action-inventory.json
+      - name: Moving v0 Action validate round-trip UAT
+        uses: thossullivan/model-eol@v0
+        with:
+          command: validate
+          paths: action-inventory.json
+          output-file: action-validation.txt
+      - name: Verify moving v0 Action result
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const inventory = JSON.parse(fs.readFileSync('action-inventory.json', 'utf8'))
+          if (inventory.schema !== 'model-eol/inventory@0.1') throw new Error(`unexpected schema ${inventory.schema}`)
+          if (!inventory.model_references.some(item => item.matched === 'o3-deep-research')) {
+            throw new Error('moving v0 Action did not find the consumer model')
+          }
+          const validation = fs.readFileSync('action-validation.txt', 'utf8')
+          if (!validation.includes('valid inventory document')) throw new Error('moving v0 Action did not validate its own inventory artifact')
+          NODE
+      - name: Reverify remote v0 after the Action ran
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          EXPECTED_RELEASE_COMMIT: ${{ needs.resolve.outputs.release_commit }}
+        run: |
+          set -euo pipefail
+          remote="https://github.com/$GITHUB_REPOSITORY.git"
+          immutable_commit=$(git ls-remote "$remote" "refs/tags/v$VERSION^{}" | cut -f1)
+          if [ -z "$immutable_commit" ]; then
+            immutable_commit=$(git ls-remote "$remote" "refs/tags/v$VERSION" | cut -f1)
+          fi
+          moving_commit=$(git ls-remote "$remote" 'refs/tags/v0^{}' | cut -f1)
+          if [ -z "$moving_commit" ]; then
+            moving_commit=$(git ls-remote "$remote" 'refs/tags/v0' | cut -f1)
+          fi
+          if [ "$immutable_commit" != "$EXPECTED_RELEASE_COMMIT" ] || [ "$moving_commit" != "$EXPECTED_RELEASE_COMMIT" ]; then
+            echo "v0 or immutable v$VERSION moved while the moving Action UAT was running" >&2
+            exit 1
+          fi

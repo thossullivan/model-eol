@@ -10,9 +10,11 @@
 //   node check.mjs alert [paths...] [--format github|markdown|badge] [--json]
 //   node check.mjs plan [paths...] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR]
 //   node check.mjs apply --plan plan.json [--dry-run]
+//   node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan]
 //
 // exit codes: check/alert 0 = clear, 1 = finding, 2 = usage error;
-// apply 0 = all items applied, 1 = item refused, 2 = usage or plan error.
+// apply 0 = all items applied, 1 = item refused, 2 = usage or plan error;
+// validate 0 = every document valid, 2 = usage, parse, schema, or semantic error.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -45,6 +47,7 @@ import {
   formatSchedule,
 } from './lib/reports.mjs'
 import { addedLinesForTargets, filterFindingsToChanged, gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
+import { DOCUMENT_TYPES, formatDocumentErrors, validateDocumentFile } from './lib/validate-document.mjs'
 
 const rootForTarget = target => {
   const absolute = path.resolve(target)
@@ -93,7 +96,7 @@ const repoPathForFile = (file, roots) => {
 }
 
 const main = () => {
-const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'apply', 'help'])
+const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'apply', 'validate', 'help'])
 const args = process.argv.slice(2)
 
 if (args[0] === '--help' || args[0] === '-h') args[0] = 'help'
@@ -115,6 +118,7 @@ try {
       'allow-incomplete': { type: 'boolean' },
       'dry-run': { type: 'boolean' },
       changed: { type: 'string' },
+      type: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: true,
@@ -148,6 +152,7 @@ Usage:
   node check.mjs alert [paths...] [--config FILE] [--days N] [--scope all|direct] [--format github|markdown|badge] [--json]
   node check.mjs plan [paths...] [--config FILE] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR] [--allow-incomplete]
   node check.mjs apply --plan plan.json [--dry-run]
+  node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan]
 
 Commands:
   check       Fail when tracked model IDs are retired or retiring within --days.
@@ -159,6 +164,8 @@ Commands:
   alert       Emit GitHub Actions annotations, Markdown, or a Shields badge JSON and fail on errors.
   plan        Emit a JSON migration plan with only safely patchable direct API references.
   apply       Apply a plan with line-hash and occurrence checks; use --dry-run to preview.
+  validate    Validate a feed, config, check, inventory, schedule, alert, or plan document.
+              The type is inferred from its discriminator or .model-eol.json filename unless --type is set.
 
 Scopes:
   all        Check every tracked model ID found. This preserves the original behavior.
@@ -171,10 +178,19 @@ Configuration:
 Exit codes:
   0  Clean, or report generated successfully.
   1  Findings, alert errors, or refused apply items.
-  2  Usage, feed, scan, or plan errors.
+  2  Usage, feed, scan, plan, or validation errors.
   3  Output stream failure other than EPIPE.
 `)
   return 0
+}
+
+if (positionals.some(value => value.length === 0)) {
+  console.error('positional paths must be non-empty')
+  return 2
+}
+if (values.via === '') {
+  console.error('--via must be a non-empty lifecycle channel')
+  return 2
 }
 
 if (command === 'apply') {
@@ -189,6 +205,41 @@ if (command === 'apply') {
     console.error(`failed to apply plan ${PLAN_FILE}: ${e.message}`)
     return 2
   }
+}
+
+if (command === 'validate') {
+  const allowedOptions = new Set(['type'])
+  const unsupported = Object.keys(values).find(option => !allowedOptions.has(option))
+  if (positionals.length === 0 || unsupported) {
+    const detail = unsupported ? `; --${unsupported} is not supported by validate` : ''
+    console.error(`validate requires one or more JSON documents${detail}`)
+    return 2
+  }
+  if (values.type !== undefined && !DOCUMENT_TYPES.includes(values.type) && values.type !== 'bot-config' && values.type !== 'model-eol-config') {
+    console.error(`unknown document type ${JSON.stringify(values.type)}; expected ${DOCUMENT_TYPES.join(', ')}`)
+    return 2
+  }
+  let failed = false
+  for (const file of positionals) {
+    try {
+      const result = validateDocumentFile(file, { type: values.type ?? null })
+      if (result.errors.length) {
+        for (const error of formatDocumentErrors(result.errors)) console.error(`${file}: ${error}`)
+        failed = true
+        continue
+      }
+      console.log(`${file}: valid ${result.type} document`)
+    } catch (error) {
+      console.error(`${file}: validation failed: ${error.message}`)
+      failed = true
+    }
+  }
+  return failed ? 2 : 0
+}
+
+if (values.type !== undefined) {
+  console.error('--type is only supported by the validate command')
+  return 2
 }
 
 let configLocation
@@ -355,7 +406,7 @@ if (command === 'plan') {
 
 if (command === 'check') {
   if (AS_JSON) {
-    console.log(JSON.stringify({ threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings }, null, 2))
+    console.log(JSON.stringify({ schema: 'model-eol/check@0.1', threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings }, null, 2))
   } else {
     console.log(formatCheck({ findings: changedFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
   }

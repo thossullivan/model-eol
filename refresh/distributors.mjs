@@ -97,7 +97,7 @@ function expandRows(rows) {
   })
 }
 
-function headerIndexes(rows) {
+function bedrockHeaderIndexes(rows) {
   for (const [row, candidate] of rows.entries()) {
     const labels = candidate.cells.map(cell => cell.text.toLowerCase())
     const model = labels.findIndex(label => /\bmodel\s+(?:id|identifier)\b/i.test(label))
@@ -107,7 +107,15 @@ function headerIndexes(rows) {
       /end\s*[- ]?of\s*[- ]?life.*\bdate\b|\bdate\b.*end\s*[- ]?of\s*[- ]?life/i.test(label) ||
       /\b(?:retirement|discontinuation)\b.*\bdate\b|\bdate\b.*\b(?:retirement|discontinuation)\b/i.test(label)
     ))
-    if (model >= 0 && legacy >= 0 && eol >= 0) return { row, model, legacy, eol }
+    if (model < 0 || legacy < 0 || eol < 0) continue
+    const extendedAccess = labels.findIndex(label => (
+      /\bpublic\s+extended\s+access\b.*\bdate\b|\bdate\b.*\bpublic\s+extended\s+access\b/i.test(label)
+    ))
+    if (extendedAccess < 0) {
+      throw new Error('aws-bedrock lifecycle table is missing the Public extended access start date column')
+    }
+    const status = labels.findIndex(label => /^(?:(?:model|lifecycle)\s+)*status$/i.test(label.trim()))
+    return { row, model, legacy, eol, extendedAccess, status }
   }
   return undefined
 }
@@ -123,6 +131,25 @@ function lifecycleDate(cell, field, bedrockId) {
   return parsed
 }
 
+function bedrockLifecycleStatus(cell, bedrockId) {
+  const value = cell?.text.trim().toLowerCase().replace(/[‐‑‒–\u2014−]/g, '-').replace(/\s+/g, ' ')
+  const statuses = new Map([
+    ['active', 'active'],
+    ['legacy', 'legacy'],
+    ['extended access', 'extended-access'],
+    ['public extended access', 'extended-access'],
+    ['end-of-life', 'retired'],
+    ['end of life', 'retired'],
+    ['end-of-life (eol)', 'retired'],
+    ['end of life (eol)', 'retired'],
+    ['eol', 'retired'],
+    ['retired', 'retired'],
+  ])
+  const status = statuses.get(value)
+  if (!status) throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has an unsupported lifecycle status: ${cell?.text || '(empty)'}`)
+  return status
+}
+
 function vertexHeaderIndexes(rows) {
   for (const [row, candidate] of rows.entries()) {
     const labels = candidate.cells.map(cell => cell.text.toLowerCase())
@@ -133,10 +160,14 @@ function vertexHeaderIndexes(rows) {
   return undefined
 }
 
-function sameRecord(left, right) {
-  return left.bedrockId === right.bedrockId &&
-    left.legacy === right.legacy &&
-    left.eol === right.eol
+function mergeRegionalBedrockRecord(left, right) {
+  if (left.legacy !== right.legacy || left.eol !== right.eol) return undefined
+  if (left.status === right.status) return left
+  const statuses = new Set([left.status, right.status])
+  if (statuses.size === 2 && statuses.has('legacy') && statuses.has('extended-access')) {
+    return { ...left, status: 'extended-access' }
+  }
+  return undefined
 }
 
 const isBedrockModelId = value => /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9._:+-]*$/i.test(value)
@@ -170,7 +201,7 @@ export function parseBedrockLifecycleHtml(html) {
 
   for (const table of tables) {
     const rows = expandRows(tableRows(table[1]))
-    const headers = headerIndexes(rows)
+    const headers = bedrockHeaderIndexes(rows)
     if (!headers) continue
     recognisedTables++
 
@@ -184,16 +215,34 @@ export function parseBedrockLifecycleHtml(html) {
       const offset = model.index - headers.model
       const legacyCell = row.cells[headers.legacy + offset]
       const eolCell = row.cells[headers.eol + offset]
-      if (!legacyCell || !eolCell) {
+      const extendedAccessCell = row.cells[headers.extendedAccess + offset]
+      const statusCell = headers.status >= 0 ? row.cells[headers.status + offset] : undefined
+      if (!legacyCell || !eolCell || !extendedAccessCell || (headers.status >= 0 && !statusCell)) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} is missing lifecycle columns`)
       }
 
       const legacy = lifecycleDate(legacyCell, 'legacy', bedrockId)
       const eol = lifecycleDate(eolCell, 'EOL', bedrockId)
+      const extendedAccess = lifecycleDate(extendedAccessCell, 'public extended access', bedrockId)
       if (legacy && eol && eol < legacy) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has EOL before legacy date`)
       }
-      const record = { bedrockId }
+      if (extendedAccess && legacy && extendedAccess < legacy) {
+        throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has public extended access before legacy date`)
+      }
+      if (extendedAccess && eol && extendedAccess > eol) {
+        throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has public extended access after EOL date`)
+      }
+      // The table schedules Extended Access, so preserve that signal without comparing against the runner clock.
+      const status = statusCell
+        ? bedrockLifecycleStatus(statusCell, bedrockId)
+        : extendedAccess
+          ? 'extended-access'
+          : 'legacy'
+      if (status === 'extended-access' && !extendedAccess) {
+        throw new Error(`aws-bedrock lifecycle entry ${bedrockId} reports extended access without a start date`)
+      }
+      const record = { bedrockId, status }
       if (legacy !== undefined) record.legacy = legacy
       if (eol !== undefined) record.eol = eol
       records.push(record)
@@ -209,8 +258,10 @@ export function parseBedrockLifecycleHtml(html) {
     const previous = unique.get(record.bedrockId)
     if (!previous) {
       unique.set(record.bedrockId, record)
-    } else if (!sameRecord(previous, record)) {
-      throw new Error(`aws-bedrock lifecycle page has conflicting rows for ${record.bedrockId}`)
+    } else {
+      const merged = mergeRegionalBedrockRecord(previous, record)
+      if (!merged) throw new Error(`aws-bedrock lifecycle page has conflicting rows for ${record.bedrockId}`)
+      unique.set(record.bedrockId, merged)
     }
   }
   return [...unique.values()]
@@ -497,7 +548,7 @@ export function mergeDistributions(feeds, {
       priorRecord.date_precision !== record.date_precision ||
       priorRecord.status !== record.status
     )) {
-      throw new Error(`${via} records map to ${target.model.id} with conflicting dates`)
+      throw new Error(`${via} records map to ${target.model.id} with conflicting lifecycle data`)
     }
     matchedRecords.set(targetKey, record)
 

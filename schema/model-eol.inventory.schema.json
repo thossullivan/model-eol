@@ -1,17 +1,17 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://example.invalid/model-eol/0.1/inventory.schema.json",
+  "$id": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json",
   "title": "model-eol inventory output",
-  "description": "Machine-readable repository inventory emitted by `model-eol inventory --json`. Draft 0.1 - the $id is a placeholder until the repo is public.",
+  "description": "Machine-readable repository inventory emitted by `model-eol inventory --json`.",
   "type": "object",
   "required": ["schema", "generated", "threshold_days", "scope", "targets", "scanned_files", "scan_notes", "summary", "model_references", "candidate_model_references", "integration_hints"],
   "properties": {
     "schema": { "const": "model-eol/inventory@0.1" },
     "generated": { "type": "string", "format": "date-time" },
-    "threshold_days": { "type": "number" },
-    "distributor": { "type": ["string", "null"] },
+    "threshold_days": { "type": "integer", "minimum": 0 },
+    "distributor": { "type": ["string", "null"], "minLength": 1 },
     "scope": { "enum": ["all", "direct"] },
-    "targets": { "type": "array", "items": { "type": "string" } },
+    "targets": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "scanned_files": { "type": "integer", "minimum": 0 },
     "scan_notes": { "type": "array", "items": { "$ref": "#/definitions/scanNote" } },
     "summary": {
@@ -39,96 +39,97 @@
       "type": "object",
       "required": ["file", "line"],
       "properties": {
-        "file": { "type": "string" },
+        "file": { "type": "string", "minLength": 1 },
         "line": { "type": "integer", "minimum": 1 }
-      }
+      },
+      "additionalProperties": false
     },
     "modelReference": {
-      "allOf": [
-        { "$ref": "#/definitions/location" },
-        {
-          "type": "object",
-          "required": ["kind", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "evidence", "status", "shutdown", "via", "days", "safe_until", "replacement", "source"],
+      "type": "object",
+      "required": ["file", "line", "kind", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "evidence", "status", "shutdown", "via", "days", "safe_until", "replacement", "source"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 },
+        "kind": { "const": "model-reference" },
+        "matched": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "publisher": { "type": "string", "minLength": 1 },
+        "usage": { "$ref": "#/definitions/usage" },
+        "resolved_provider": { "type": "string", "minLength": 1 },
+        "confidence": { "$ref": "#/definitions/confidence" },
+        "evidence": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/definitions/status" },
+        "shutdown": { "type": ["string", "null"], "format": "date" },
+        "date_precision": { "enum": ["exact", "earliest", null] },
+        "distribution_status": { "enum": ["active", "legacy", "extended-access", "retired", null] },
+        "via": { "type": ["string", "null"], "minLength": 1 },
+        "requested_via": { "type": ["string", "null"], "minLength": 1 },
+        "days": { "type": ["integer", "null"] },
+        "threshold_days": { "type": "integer", "minimum": 0 },
+        "effective_scope": { "enum": ["all", "direct"] },
+        "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
+        "mapped_from": { "type": "string", "minLength": 1 },
+        "safe_until": { "type": ["string", "null"], "format": "date" },
+        "replacement": { "type": ["string", "null"], "minLength": 1 },
+        "replacement_options": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+        },
+        "replacement_note": { "type": "string", "minLength": 1 },
+        "source": { "type": ["string", "null"], "format": "uri" },
+        "policy": {
+          "type": ["object", "null"],
+          "required": ["min_notice_days", "source"],
           "properties": {
-            "kind": { "const": "model-reference" },
-            "matched": { "type": "string" },
-            "id": { "type": "string" },
-            "publisher": { "type": "string" },
-            "usage": { "$ref": "#/definitions/usage" },
-            "resolved_provider": { "type": "string" },
-            "confidence": { "$ref": "#/definitions/confidence" },
-            "evidence": { "type": "string" },
-            "status": { "$ref": "#/definitions/status" },
-            "shutdown": { "type": ["string", "null"] },
-            "date_precision": { "enum": ["exact", "earliest", null] },
-            "distribution_status": { "enum": ["active", "legacy", "extended-access", "retired", null] },
-            "via": { "type": ["string", "null"] },
-            "requested_via": { "type": ["string", "null"] },
-            "days": { "type": ["integer", "null"] },
-            "threshold_days": { "type": "integer", "minimum": 0 },
-            "effective_scope": { "enum": ["all", "direct"] },
-            "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
-            "mapped_from": { "type": "string", "minLength": 1 },
-            "safe_until": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-            "replacement": { "type": ["string", "null"] },
-            "source": { "type": ["string", "null"] },
-            "policy": {
-              "type": ["object", "null"],
-              "required": ["min_notice_days", "source"],
-              "properties": {
-                "min_notice_days": { "type": "integer", "minimum": 0 },
-                "source": { "type": "string", "format": "uri" }
-              },
-              "additionalProperties": false
-            },
-            "feed_generated": { "type": ["string", "null"], "format": "date-time" }
-          }
-        }
-      ]
+            "min_notice_days": { "type": "integer", "minimum": 0 },
+            "source": { "type": "string", "format": "uri" }
+          },
+          "additionalProperties": false
+        },
+        "feed_generated": { "type": ["string", "null"], "format": "date-time" }
+      },
+      "additionalProperties": false
     },
     "candidateReference": {
-      "allOf": [
-        { "$ref": "#/definitions/location" },
-        {
-          "type": "object",
-          "required": ["kind", "matched", "usage", "resolved_provider", "confidence", "evidence", "reason"],
-          "properties": {
-            "kind": { "const": "candidate-model-reference" },
-            "matched": { "type": "string" },
-            "usage": { "$ref": "#/definitions/usage" },
-            "resolved_provider": { "type": "string" },
-            "confidence": { "$ref": "#/definitions/confidence" },
-            "evidence": { "type": "string" },
-            "effective_scope": { "enum": ["all", "direct"] },
-            "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
-            "reason": { "type": "string" }
-          }
-        }
-      ]
+      "type": "object",
+      "required": ["file", "line", "kind", "matched", "usage", "resolved_provider", "confidence", "evidence", "reason"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 },
+        "kind": { "const": "candidate-model-reference" },
+        "matched": { "type": "string", "minLength": 1 },
+        "usage": { "$ref": "#/definitions/usage" },
+        "resolved_provider": { "type": "string", "minLength": 1 },
+        "confidence": { "$ref": "#/definitions/confidence" },
+        "evidence": { "type": "string", "minLength": 1 },
+        "effective_scope": { "enum": ["all", "direct"] },
+        "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
     },
     "integrationHint": {
-      "allOf": [
-        { "$ref": "#/definitions/location" },
-        {
-          "type": "object",
-          "required": ["kind", "usage", "provider", "matched", "evidence"],
-          "properties": {
-            "kind": { "const": "integration-hint" },
-            "usage": { "enum": ["direct-api", "cloud-provider", "gateway"] },
-            "provider": { "type": "string" },
-            "matched": { "type": "string" },
-            "evidence": { "type": "string" }
-          }
-        }
-      ]
+      "type": "object",
+      "required": ["file", "line", "kind", "usage", "provider", "matched", "evidence"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 },
+        "kind": { "const": "integration-hint" },
+        "usage": { "enum": ["direct-api", "cloud-provider", "gateway"] },
+        "provider": { "type": "string", "minLength": 1 },
+        "matched": { "type": "string", "minLength": 1 },
+        "evidence": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
     },
     "scanNote": {
       "type": "object",
       "required": ["reason"],
       "properties": {
         "reason": { "type": "string", "minLength": 1 },
-        "file": { "type": "string" },
-        "message": { "type": "string" },
+        "file": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
         "bytes": { "type": "integer", "minimum": 0 },
         "limit_bytes": { "type": "integer", "minimum": 0 },
         "limit_files": { "type": "integer", "minimum": 0 }

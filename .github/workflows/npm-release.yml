@@ -7,13 +7,13 @@
 # GitHub Actions, repository thossullivan/model-eol, workflow npm-release.yml.
 # Provenance attestations come with it.
 #
-# No loop: the version-bump commit touches package.json only, which never
-# matches the feeds/** path filter.
-#
-# workflow_dispatch releases regardless of the feeds guard - the path for code
-# releases (fixes, features) to reach npm with the same provenance and an
-# explicit stable version. It still refuses a no-op: dispatch with zero commits
-# since the last tag does nothing.
+# The immutable version tag is the recovery journal. A rerun can resume after
+# the atomic Git push or after npm publish, but only after proving the version
+# tag, moving v0 tag, release commit, source commit, registry, and GitHub release
+# form one valid state.
+# Recovery means rerunning the original failed workflow run: GitHub preserves
+# that event's pre-release GITHUB_SHA. A fresh dispatch from the already tagged
+# release commit remains a zero-commit no-op instead of reopening publication.
 
 name: npm-release
 
@@ -24,11 +24,13 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: Exact stable semver for this code release (for example, 0.3.0)
+        description: Exact stable semver for this code release (for example, 0.5.0)
         required: true
         type: string
 
-concurrency: npm-release
+concurrency:
+  group: model-eol-release-and-moving-uat
+  queue: max
 
 permissions:
   contents: write
@@ -46,25 +48,25 @@ jobs:
           node-version: 24
           package-manager-cache: false
           registry-url: https://registry.npmjs.org
-      - name: npm >= 11.5 for trusted publishing
+      - name: Pinned npm for trusted publishing
         run: |
-          npm install -g npm@latest
-          npm --version
+          npm install -g npm@11.6.4
+          test "$(npm --version)" = '11.6.4'
 
       - name: Guard - release code explicitly and feed-only changes automatically
         id: guard
         run: |
           last=$(git describe --tags --abbrev=0 --match 'v*.*.*')
-          echo "last tag: $last"
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-              echo "changed=false" >> "$GITHUB_OUTPUT"
+          echo "last tag reachable from source: $last"
+          if [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
+            if [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+              echo 'changed=false' >> "$GITHUB_OUTPUT"
               echo "dispatch ref $GITHUB_REF is not main - refusing to release it"
             elif [ "$(git rev-list "$last"..HEAD --count)" -gt 0 ]; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo 'changed=true' >> "$GITHUB_OUTPUT"
               echo "manual dispatch - releasing $(git rev-list "$last"..HEAD --count) commit(s) since $last"
             else
-              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo 'changed=false' >> "$GITHUB_OUTPUT"
               echo "nothing since $last - refusing a no-op release"
             fi
           else
@@ -75,56 +77,190 @@ jobs:
         if: steps.guard.outputs.changed == 'true'
         run: npm test
 
-      - name: Validate requested code release
-        if: github.event_name == 'workflow_dispatch' && steps.guard.outputs.changed == 'true'
+      - name: Resolve new or resumable release state
+        if: steps.guard.outputs.changed == 'true'
+        id: state
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          target_args=(target --event-name "$GITHUB_EVENT_NAME")
+          resolve_args=(resolve --event-name "$GITHUB_EVENT_NAME")
+          if [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
+            target_args+=(--requested-version "$RELEASE_VERSION")
+            resolve_args+=(--requested-version "$RELEASE_VERSION")
+          fi
+          target=$(node scripts/release-state.mjs "${target_args[@]}")
+          release_pages="$RUNNER_TEMP/model-eol-github-releases.json"
+          gh api --paginate --slurp \
+            "/repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$release_pages"
+          github_release_exists=$(node scripts/github-release-state.mjs --input "$release_pages" --tag "v$target")
+          published=$(npm view model-eol versions --json --prefer-online)
+          git fetch --force origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            '+refs/tags/*:refs/tags/*'
+          node scripts/release-state.mjs "${resolve_args[@]}" \
+            --source-sha "$GITHUB_SHA" \
+            --published-json "$published" \
+            --github-release-exists "$github_release_exists" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Validate requested code release exactly
+        if: github.event_name == 'workflow_dispatch' && steps.guard.outputs.changed == 'true' && steps.state.outputs.mode == 'create'
+        env:
           RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           current=$(node -p "require('./package.json').version")
-          published=$(npm view model-eol versions --json)
+          published=$(npm view model-eol versions --json --prefer-online)
           node scripts/validate-release-version.mjs "$current" "$RELEASE_VERSION" "$published"
-          if git show-ref --verify --quiet "refs/tags/v$RELEASE_VERSION"; then
-            echo "tag v$RELEASE_VERSION already exists" >&2
-            exit 1
-          fi
-          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo "GitHub release v$RELEASE_VERSION already exists" >&2
-            exit 1
-          fi
 
-      - name: Bump release version, tag, push
+      - name: Create or recover exact release commit
         if: steps.guard.outputs.changed == 'true'
-        id: bump
+        id: exact
         env:
-          RELEASE_VERSION: ${{ inputs.release_version }}
+          RELEASE_VERSION: ${{ steps.state.outputs.version }}
+          RELEASE_TAG: ${{ steps.state.outputs.tag }}
+          RELEASE_MODE: ${{ steps.state.outputs.mode }}
+          RECOVERED_COMMIT: ${{ steps.state.outputs.release_commit }}
         run: |
-          git config user.name "model-eol release"
-          git config user.email "actions@users.noreply.github.com"
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            version=$(npm version "$RELEASE_VERSION" -m "model-eol v%s - dispatched code release")
+          set -euo pipefail
+          if [ "$RELEASE_MODE" = 'create' ]; then
+            git config user.name 'model-eol release'
+            git config user.email 'actions@users.noreply.github.com'
+            if [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
+              version=$(npm version "$RELEASE_VERSION" -m 'model-eol v%s - dispatched code release')
+            else
+              version=$(npm version patch -m 'model-eol v%s - automated feed-data release')
+            fi
+            if [ "$version" != "$RELEASE_TAG" ]; then
+              echo "npm created $version, expected exact tag $RELEASE_TAG" >&2
+              exit 1
+            fi
+            git tag -f v0 "$version"
+            git push --atomic origin main "$version" +refs/tags/v0:refs/tags/v0
+            release_commit=$(git rev-parse "$version^{commit}")
           else
-            version=$(npm version patch -m "model-eol v%s - automated feed-data release")
+            version="$RELEASE_TAG"
+            release_commit="$RECOVERED_COMMIT"
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          git tag -f v0 "$version"
-          git push --atomic origin main "$version" +refs/tags/v0:refs/tags/v0
+          git checkout --detach "$version"
+          actual_version=$(node -p "require('./package.json').version")
+          actual_commit=$(git rev-parse HEAD)
+          if [ "$actual_version" != "$RELEASE_VERSION" ] || [ "$actual_commit" != "$release_commit" ]; then
+            echo "release checkout is not the resolved exact version and commit" >&2
+            exit 1
+          fi
+          echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$version" >> "$GITHUB_OUTPUT"
+          echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
 
-      - name: Publish to npm
+      - name: Pack and hash the exact release commit
         if: steps.guard.outputs.changed == 'true'
-        run: npm publish
+        id: package
+        env:
+          RELEASE_VERSION: ${{ steps.exact.outputs.version }}
+          PACK_DIR: ${{ runner.temp }}/model-eol-release-package
+          PACK_MANIFEST: ${{ runner.temp }}/model-eol-release-package.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$PACK_DIR"
+          npm pack --json --ignore-scripts --pack-destination "$PACK_DIR" > "$PACK_MANIFEST"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          import path from 'node:path'
+          import { assertSha512Integrity, verifyPackageIntegrity } from './scripts/package-integrity.mjs'
+          const entries = JSON.parse(fs.readFileSync(process.env.PACK_MANIFEST, 'utf8'))
+          if (!Array.isArray(entries) || entries.length !== 1) throw new Error('npm pack must emit exactly one package')
+          const entry = entries[0]
+          if (entry.name !== 'model-eol' || entry.version !== process.env.RELEASE_VERSION) {
+            throw new Error(`npm pack emitted ${entry.name}@${entry.version}, expected model-eol@${process.env.RELEASE_VERSION}`)
+          }
+          if (typeof entry.filename !== 'string' || path.basename(entry.filename) !== entry.filename) {
+            throw new Error(`npm pack emitted an unsafe filename ${entry.filename}`)
+          }
+          const integrity = assertSha512Integrity(entry.integrity, 'npm pack integrity')
+          const tarball = path.resolve(process.env.PACK_DIR, entry.filename)
+          verifyPackageIntegrity({ tarball, expectedIntegrity: integrity })
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${tarball}\nintegrity=${integrity}\n`)
+          NODE
 
-      - name: GitHub release
+      - name: Publish missing exact version to npm with OIDC
+        if: steps.guard.outputs.changed == 'true' && steps.state.outputs.publish == 'true'
+        env:
+          RELEASE_TARBALL: ${{ steps.package.outputs.tarball }}
+        run: npm publish "$RELEASE_TARBALL" --ignore-scripts
+
+      - name: Smoke-test the exact published consumer artifact
+        if: steps.guard.outputs.changed == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.exact.outputs.version }}
+          RELEASE_INTEGRITY: ${{ steps.package.outputs.integrity }}
+        run: |
+          node scripts/published-consumer-uat.mjs \
+            --package "model-eol@$RELEASE_VERSION" \
+            --expected-version "$RELEASE_VERSION" \
+            --expected-integrity "$RELEASE_INTEGRITY" \
+            --expected-engine '>=22'
+
+      - name: Create missing GitHub release
+        if: steps.guard.outputs.changed == 'true' && steps.state.outputs.create_github_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.exact.outputs.tag }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = 'workflow_dispatch' ]; then
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG - feed data" \
+              --notes "Automated feed-data release: the weekly refresh landed material feed changes, republished so \`npx model-eol\` always checks against current retirement dates. The semantic diff is in the merged feed-refresh PR. No code changes."
+          fi
+
+      - name: Verify remote release refs and GitHub release
         if: steps.guard.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.exact.outputs.tag }}
+          RELEASE_COMMIT: ${{ steps.exact.outputs.release_commit }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            gh release create "${{ steps.bump.outputs.version }}" \
-              --title "${{ steps.bump.outputs.version }}" \
-              --generate-notes
-          else
-            gh release create "${{ steps.bump.outputs.version }}" \
-              --title "${{ steps.bump.outputs.version }} - feed data" \
-              --notes "Automated feed-data release: the weekly refresh landed material feed changes, republished so \`npx model-eol\` always checks against current retirement dates. The semantic diff is in the merged feed-refresh PR. No code changes."
+          set -euo pipefail
+          git fetch --force origin \
+            "+refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" \
+            '+refs/tags/v0:refs/tags/v0'
+          immutable_commit=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+          moving_commit=$(git rev-parse 'refs/tags/v0^{commit}')
+          if [ "$immutable_commit" != "$RELEASE_COMMIT" ] || [ "$moving_commit" != "$RELEASE_COMMIT" ]; then
+            echo "remote $RELEASE_TAG and v0 must both resolve to $RELEASE_COMMIT" >&2
+            exit 1
           fi
+          release_json="$RUNNER_TEMP/model-eol-github-release.json"
+          gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease > "$release_json"
+          RELEASE_JSON="$release_json" node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const release = JSON.parse(fs.readFileSync(process.env.RELEASE_JSON, 'utf8'))
+          if (release.tagName !== process.env.RELEASE_TAG || release.isDraft !== false || release.isPrerelease !== false) {
+            throw new Error(`${process.env.RELEASE_TAG} is not a published stable GitHub release`)
+          }
+          NODE
+
+      - name: Write exact release result
+        env:
+          RELEASED: ${{ steps.guard.outputs.changed }}
+          RELEASE_VERSION: ${{ steps.exact.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.exact.outputs.release_commit }}
+          RELEASE_INTEGRITY: ${{ steps.package.outputs.integrity }}
+        run: |
+          args=(create --out _release-result/npm-release-result.json --source-sha "$GITHUB_SHA")
+          if [ "$RELEASED" = 'true' ]; then
+            args+=(--version "$RELEASE_VERSION" --release-sha "$RELEASE_COMMIT" --registry-integrity "$RELEASE_INTEGRITY")
+          fi
+          node scripts/release-receipt.mjs "${args[@]}"
+
+      - name: Upload exact release result
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-release-result
+          path: _release-result/npm-release-result.json
+          if-no-files-found: error
+          overwrite: true

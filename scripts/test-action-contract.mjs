@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const actionPath = path.join(root, 'action.yml')
 const actionSource = fs.readFileSync(actionPath, 'utf8')
+assert.match(actionSource, /Node 22 or newer is required/, 'Action fails clearly when an ambient self-hosted runner is below the supported Node floor')
 
 const inputDefaults = new Map()
 let inInputs = false
@@ -53,6 +54,7 @@ const requiredDefaults = [
   'format',
   'feeds',
   'config',
+  'document-type',
   'include-docs',
   'allow-incomplete',
   'json',
@@ -73,6 +75,7 @@ const envNameByInput = {
   format: 'MODEL_EOL_FORMAT',
   feeds: 'MODEL_EOL_FEEDS',
   config: 'MODEL_EOL_CONFIG',
+  'document-type': 'MODEL_EOL_DOCUMENT_TYPE',
   'include-docs': 'MODEL_EOL_INCLUDE_DOCS',
   'allow-incomplete': 'MODEL_EOL_ALLOW_INCOMPLETE',
   json: 'MODEL_EOL_JSON',
@@ -131,6 +134,10 @@ const plan = runAction({ command: 'plan', paths: fixture })
 assert.equal(plan.code, 0, `plan works with Action defaults: ${plan.err}`)
 assert.equal(parseJson(plan.out, 'plan output is JSON').plan_schema, 'model-eol.plan/0.1')
 
+const validation = runAction({ command: 'validate', paths: 'feeds/openai.json\nfeeds/anthropic.json' })
+assert.equal(validation.code, 0, `validate accepts multiple public documents: ${validation.err}`)
+assert.match(validation.out, /openai\.json: valid feed document/, 'validate reports the selected document type')
+
 const cyclonedx = runAction({ command: 'inventory', paths: fixture, format: 'cyclonedx' })
 assert.equal(cyclonedx.code, 0, `inventory accepts its command-specific format: ${cyclonedx.err}`)
 assert.equal(parseJson(cyclonedx.out, 'CycloneDX output is JSON').bomFormat, 'CycloneDX')
@@ -141,11 +148,15 @@ assert.match(markdown.out, /^# model-eol alert/m, 'alert accepts its command-spe
 
 const jsonCheck = runAction({ command: 'check', paths: fixture, json: 'true' })
 assert.equal(jsonCheck.code, 1, 'JSON check preserves finding exit code')
-assert(Array.isArray(parseJson(jsonCheck.out, 'check --json emits JSON').findings), 'json input reaches the CLI')
+assert.equal(parseJson(jsonCheck.out, 'check --json emits JSON').schema, 'model-eol/check@0.1', 'json input emits the public check discriminator')
 
 const invalidCommand = runAction({ command: 'apply', paths: fixture })
 assert.equal(invalidCommand.code, 2, 'Action rejects commands outside its scanning contract')
 assert.match(invalidCommand.err, /command must be/, 'invalid command has an actionable diagnostic')
+
+const wrongDocumentTypeCommand = runAction({ command: 'check', paths: fixture, 'document-type': 'feed' })
+assert.equal(wrongDocumentTypeCommand.code, 2, 'Action rejects document-type outside validate')
+assert.match(wrongDocumentTypeCommand.err, /only supported by the validate command/, 'document-type error names its command')
 
 const wrongFormatCommand = runAction({ command: 'schedule', paths: fixture, format: 'json' })
 assert.equal(wrongFormatCommand.code, 2, 'Action rejects format for commands that do not accept it')
@@ -169,6 +180,10 @@ const wrongJsonCommand = runAction({ command: 'plan', paths: fixture, json: 'tru
 assert.equal(wrongJsonCommand.code, 2, 'Action rejects redundant json input for plan')
 assert.match(wrongJsonCommand.err, /only supported by the check, inventory, schedule, and alert/, 'json error names supported commands')
 
+const validateJsonCommand = runAction({ command: 'validate', paths: 'feeds/openai.json', json: 'true' })
+assert.equal(validateJsonCommand.code, 2, 'Action rejects json input for validate')
+assert.match(validateJsonCommand.err, /only supported by the check, inventory, schedule, and alert/, 'validate json error names supported commands')
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-action-contract-'))
 try {
   const docsOnly = path.join(tempRoot, 'docs only')
@@ -189,6 +204,13 @@ try {
   assert.equal(multilinePaths.code, 0, `newline-separated paths preserve spaces: ${multilinePaths.err}`)
   assert.deepEqual(parseJson(multilinePaths.out, 'multiline path inventory is JSON').targets, ['first path', 'second path'])
 
+  const dashPath = path.join(tempRoot, '--models')
+  fs.mkdirSync(dashPath)
+  fs.writeFileSync(path.join(dashPath, 'app.py'), 'MODEL = "o3-deep-research"\n')
+  const dashPathInventory = runAction({ command: 'inventory', paths: '--models\n' }, { cwd: tempRoot })
+  assert.equal(dashPathInventory.code, 0, `dash-prefixed paths are separated from CLI options: ${dashPathInventory.err}`)
+  assert.equal(parseJson(dashPathInventory.out, 'dash path inventory is JSON').targets[0], '--models')
+
   const outputPath = path.join(tempRoot, 'inventory.json')
   const outputInventory = runAction({ command: 'inventory', paths: 'first path\n', 'output-file': outputPath }, { cwd: tempRoot })
   assert.equal(outputInventory.code, 0, `output-file succeeds for reports: ${outputInventory.err}`)
@@ -198,6 +220,13 @@ try {
   const outputCheck = runAction({ command: 'check', paths: 'first path\n', 'output-file': findingOutputPath }, { cwd: tempRoot })
   assert.equal(outputCheck.code, 1, 'output-file does not mask the CLI finding exit code')
   assert.equal(fs.readFileSync(findingOutputPath, 'utf8'), outputCheck.out, 'finding output is still captured')
+
+  const checkJsonOutputPath = path.join(tempRoot, 'check.json')
+  const outputJsonCheck = runAction({ command: 'check', paths: 'first path\n', json: 'true', 'output-file': checkJsonOutputPath }, { cwd: tempRoot })
+  assert.equal(outputJsonCheck.code, 1, 'Action captures a finding check JSON artifact without masking its exit code')
+  const validateCheck = runAction({ command: 'validate', paths: `${checkJsonOutputPath}\n`, 'document-type': 'check' }, { cwd: tempRoot })
+  assert.equal(validateCheck.code, 0, `Action validates the emitted check artifact through explicit document-type selection: ${validateCheck.err}`)
+  assert.match(validateCheck.out, /valid check document/, 'Action reports the selected check document type')
 
   const impossibleOutput = runAction({
     command: 'inventory',

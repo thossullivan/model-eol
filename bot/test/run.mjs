@@ -20,7 +20,7 @@ import { branchFor, metadataLine, parseMetadata, slugFor } from '../lib/common.m
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
-import { cloneRepository, gitAuthentication, originFor } from '../lib/git.mjs'
+import { cloneRepository, deleteRemoteBranch, gitAuthentication, originFor } from '../lib/git.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-test-'))
@@ -37,6 +37,15 @@ const assert = (condition, message) => {
 
 const unknownFlag = spawnSync(process.execPath, [path.join(root, 'bot', 'bot.mjs'), '--dyas', '90'], { encoding: 'utf8' })
 assert(unknownFlag.status === 2 && unknownFlag.stderr.includes('--dyas') && unknownFlag.stderr.includes('--help'), 'unknown bot flags exit 2 with the bad flag and help hint')
+
+const deprecatedInlineEval = spawnSync(process.execPath, [path.join(root, 'bot', 'bot.mjs'), '--eval', '--dry-run'], { encoding: 'utf8' })
+assert(deprecatedInlineEval.status === 2 && deprecatedInlineEval.stderr.includes('inline --eval was removed') && deprecatedInlineEval.stderr.includes('MODEL_EOL_EVAL_RESULTS_FILE'), 'removed inline --eval fails with read-only evaluate migration guidance')
+
+const deprecatedEvalArtifacts = spawnSync(process.execPath, [path.join(root, 'bot', 'bot.mjs'), '--dry-run'], {
+  encoding: 'utf8',
+  env: { ...process.env, MODEL_EOL_EVAL_REPORT_FILE: 'legacy-report.md' },
+})
+assert(deprecatedEvalArtifacts.status === 2 && deprecatedEvalArtifacts.stderr.includes('not commit-bound') && deprecatedEvalArtifacts.stderr.includes('MODEL_EOL_EVAL_RESULTS_FILE'), 'removed unbound eval report/status contract fails with a bound-manifest migration hint')
 
 const git = (cwd, args) => {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
@@ -72,8 +81,98 @@ const makeRepo = ({ name = 'repo', files = {}, config = null } = {}) => {
   return { bare, work }
 }
 
+let boundArtifactSequence = 0
+const evaluateForPublish = async ({
+  targetDir,
+  configPath = null,
+  vendoredFeeds = path.join(root, 'feeds'),
+  checkerPath,
+  commandOverride = null,
+  now = new Date('2026-08-01T00:00:00Z'),
+} = {}) => {
+  const selectedConfig = configPath ?? path.join(targetDir, '.model-eol.json')
+  const config = loadConfig(selectedConfig)
+  const planConfigPath = fs.existsSync(selectedConfig) ? selectedConfig : null
+  const plan = runPlan({
+    workDir: targetDir,
+    config,
+    configPath: planConfigPath,
+    feedsDir: vendoredFeeds,
+    checkerPath,
+    warn: () => {},
+  })
+  const suffix = ++boundArtifactSequence
+  const planFile = path.join(tempRoot, `bound-plan-${suffix}.json`)
+  const evalResultsFile = path.join(tempRoot, `bound-eval-${suffix}.json`)
+  write(planFile, JSON.stringify(plan, null, 2))
+  const evaluation = await evaluatePlan({
+    targetDir,
+    configPath,
+    planFile,
+    outputFile: evalResultsFile,
+    vendoredFeeds,
+    checkerPath,
+    commandOverride,
+    now,
+    warn: () => {},
+  })
+  return { plan, planFile, evalResultsFile, evaluation }
+}
+
 const bareBranchFile = (repo, branch, file) => git(repo.bare, ['show', `${branch}:${file}`])
 const headOf = (repo, branch) => git(repo.bare, ['rev-parse', `refs/heads/${branch}`])
+
+const stageDefaultBranchAdvance = (repo, name) => {
+  write(path.join(repo.work, 'README.md'), `default branch advance for ${name}\n`)
+  git(repo.work, ['add', 'README.md'])
+  git(repo.work, ['commit', '-m', `stage ${name} default branch advance`])
+  const head = git(repo.work, ['rev-parse', 'HEAD'])
+  const ref = `refs/heads/model-eol-test-${name}`
+  git(repo.work, ['push', 'origin', `HEAD:${ref}`])
+  return { head, ref }
+}
+
+const advanceDefaultBranchAfterMigrationPush = (repo, branch, nextRef) => {
+  const hook = path.join(repo.bare, 'hooks', 'post-receive')
+  write(hook, [
+    '#!/bin/sh',
+    'while read -r _old _new ref',
+    'do',
+    `  if [ "$ref" = "refs/heads/${branch}" ]`,
+    '  then',
+    `    git update-ref refs/heads/main ${nextRef}`,
+    '  fi',
+    'done',
+    '',
+  ].join('\n'))
+  fs.chmodSync(hook, 0o755)
+}
+
+const deleteLeaseRepo = makeRepo({ name: 'delete-exact-head-lease', files: { 'README.md': 'first branch head\n' } })
+const deleteLeaseBranch = 'model-eol/test-delete-lease'
+git(deleteLeaseRepo.work, ['push', 'origin', `HEAD:refs/heads/${deleteLeaseBranch}`])
+const deleteLeaseExpectedHead = headOf(deleteLeaseRepo, deleteLeaseBranch)
+write(path.join(deleteLeaseRepo.work, 'README.md'), 'second branch head\n')
+git(deleteLeaseRepo.work, ['add', 'README.md'])
+git(deleteLeaseRepo.work, ['commit', '-m', 'advance leased branch'])
+git(deleteLeaseRepo.work, ['push', 'origin', `HEAD:refs/heads/${deleteLeaseBranch}`])
+const deleteLeaseCurrentHead = headOf(deleteLeaseRepo, deleteLeaseBranch)
+let deleteLeaseError = null
+try {
+  deleteRemoteBranch(deleteLeaseRepo.work, deleteLeaseBranch, deleteLeaseExpectedHead)
+} catch (error) {
+  deleteLeaseError = error
+}
+assert(deleteLeaseError && headOf(deleteLeaseRepo, deleteLeaseBranch) === deleteLeaseCurrentHead, 'remote branch deletion refuses a stale exact-head lease and preserves the newer head')
+let malformedDeleteLeaseError = null
+try {
+  deleteRemoteBranch(deleteLeaseRepo.work, deleteLeaseBranch, 'a'.repeat(41))
+} catch (error) {
+  malformedDeleteLeaseError = error
+}
+assert(malformedDeleteLeaseError?.message.includes('exact expected commit') && headOf(deleteLeaseRepo, deleteLeaseBranch) === deleteLeaseCurrentHead, 'remote branch deletion rejects malformed commit lengths before touching the current head')
+deleteRemoteBranch(deleteLeaseRepo.work, deleteLeaseBranch, deleteLeaseCurrentHead)
+assert(!gitTry(deleteLeaseRepo.bare, ['show-ref', '--verify', `refs/heads/${deleteLeaseBranch}`]), 'remote branch deletion succeeds only with the exact current head')
 
 class FakeGitHub {
   constructor() {
@@ -87,6 +186,10 @@ class FakeGitHub {
     this.beforeListIssues = null
     this.labelExists = false
     this.labelCreateStatus = 201
+    this.pullCreateStatus = 201
+    this.pullUpdateStatus = 200
+    this.pullUpdateApplyBeforeFailure = false
+    this.pullUpdateThrowAfterApply = false
   }
 
   response(data, status = 200) {
@@ -113,6 +216,11 @@ class FakeGitHub {
       this.beforeListPulls?.(this, this.listPullCount)
       return this.response(this.pulls)
     }
+    if (options.method === 'GET' && /\/pulls\/\d+$/.test(pathName)) {
+      const number = Number(pathName.split('/').at(-1))
+      const pull = this.pulls.find(item => item.number === number)
+      return pull ? this.response(pull) : this.response({ message: 'Not Found' }, 404)
+    }
     if (options.method === 'GET' && pathName.endsWith('/issues')) {
       this.listIssueCount++
       this.beforeListIssues?.(this, this.listIssueCount)
@@ -124,6 +232,7 @@ class FakeGitHub {
       return this.response({ object: { sha: pull?.head?.sha ?? null } })
     }
     if (options.method === 'POST' && pathName.endsWith('/pulls')) {
+      if (this.pullCreateStatus >= 400) return this.response({ message: 'pull creation failed' }, this.pullCreateStatus)
       const number = this.nextNumber++
       const created = {
         number,
@@ -141,9 +250,16 @@ class FakeGitHub {
     if (options.method === 'PATCH' && pathName.includes('/pulls/')) {
       const number = Number(pathName.split('/').at(-1))
       const pull = this.pulls.find(item => item.number === number)
+      if (this.pullUpdateStatus >= 400 && !this.pullUpdateApplyBeforeFailure) {
+        return this.response({ message: 'pull update failed' }, this.pullUpdateStatus)
+      }
       Object.assign(pull, body)
       const metadata = parseMetadata(body.body)
       if (metadata && pull.head) pull.head.sha = metadata.head_sha
+      if (this.pullUpdateStatus >= 400) {
+        if (this.pullUpdateThrowAfterApply) throw new Error('simulated pull update transport failure after apply')
+        return this.response({ message: 'pull update failed after apply' }, this.pullUpdateStatus)
+      }
       return this.response(pull)
     }
     if (options.method === 'POST' && pathName.includes('/comments')) return this.response({ id: this.nextNumber++, body: body.body }, 201)
@@ -174,6 +290,9 @@ const config = {
   days: 90,
   scope: 'direct',
   issues: { enabled: false },
+}
+const lifecycleConfig = {
+  ...config,
   eval: {
     command: 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "eval report with ```fence```")\'',
     timeout_ms: 1000,
@@ -181,19 +300,25 @@ const config = {
     pass_env: [],
   },
 }
-const repo = makeRepo({ name: 'lifecycle', files: baseFiles, config })
+const repo = makeRepo({ name: 'lifecycle', files: baseFiles, config: lifecycleConfig })
 const github = new FakeGitHub()
-const run = options => runBot({
-  repo: 'example/app',
-  targetDir: repo.work,
-  token: 'test-token',
-  transport: github.transport.bind(github),
-  vendoredFeeds: path.join(root, 'feeds'),
-  now: new Date('2026-08-01T00:00:00Z'),
-  ...options,
-})
+const run = async (options = {}) => {
+  const vendoredFeeds = options.vendoredFeeds ?? path.join(root, 'feeds')
+  const artifacts = await evaluateForPublish({ targetDir: repo.work, vendoredFeeds })
+  return runBot({
+    repo: 'example/app',
+    targetDir: repo.work,
+    token: 'test-token',
+    transport: github.transport.bind(github),
+    vendoredFeeds,
+    planFile: artifacts.planFile,
+    evalResultsFile: artifacts.evalResultsFile,
+    now: new Date('2026-08-01T00:00:00Z'),
+    ...options,
+  })
+}
 
-const first = await run({ evalEnabled: true, tokenKind: 'github-token' })
+const first = await run({ tokenKind: 'github-token' })
 const firstDecision = first.decisions.find(item => item.group.kind === 'model')
 const branch = branchFor('openai', 'o3-deep-research-2025-06-26')
 const createCall = github.callsFor('POST', '/pulls')[0]
@@ -302,7 +427,7 @@ assert(clockPublisherDecision?.action === 'create' && clockDistributorDecision?.
 assert(clockGithub.callsFor('POST', '/pulls').length === 2 && clockGithub.pulls[0].head.ref !== clockGithub.pulls[1].head.ref, 'clock-specific PR matching does not reuse the publisher-clock PR')
 
 const callsAfterCreate = github.calls.length
-const unchanged = await run({ evalEnabled: true })
+const unchanged = await run()
 assert(unchanged.decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'unchanged feed digest does nothing')
 assert(github.calls.length > callsAfterCreate && github.callsFor('PATCH', '/pulls').length === 0, 'unchanged state only performs discovery')
 
@@ -328,6 +453,188 @@ const baseFreshSecond = await baseFreshRun()
 const baseFreshSecondDecision = baseFreshSecond.decisions.find(item => item.group.kind === 'model')
 assert(baseFreshSecondDecision?.action === 'update', 'unchanged finding is regenerated when its recorded default-branch base is stale')
 assert(parseMetadata(baseFreshSecondDecision?.body)?.base_sha === headOf(baseFreshRepo, 'main'), 'refreshed PR metadata records the independently cloned default-branch head')
+
+const publishWindowRepo = makeRepo({ name: 'publish-window-drift', files: baseFiles, config: { issues: { enabled: false } } })
+const publishWindowGithub = new FakeGitHub()
+publishWindowGithub.beforeListPulls = (_api, count) => {
+  if (count !== 1) return
+  write(path.join(publishWindowRepo.work, 'README.md'), 'default branch moved after the publisher captured its base\n')
+  git(publishWindowRepo.work, ['add', 'README.md'])
+  git(publishWindowRepo.work, ['commit', '-m', 'move base during publish'])
+  git(publishWindowRepo.work, ['push', 'origin', 'main'])
+}
+let publishWindowError = null
+try {
+  await runBot({
+    repo: 'example/publish-window-drift',
+    targetDir: publishWindowRepo.work,
+    token: 'test-token',
+    transport: publishWindowGithub.transport.bind(publishWindowGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+} catch (error) {
+  publishWindowError = error
+}
+assert(publishWindowError?.message.includes('prepared base commit') && publishWindowError.message.includes('does not match evaluated base commit'), 'publisher refuses a patch checkout when the default branch moves after plan and eval verification')
+assert(publishWindowGithub.callsFor('POST', '/pulls').length === 0 && !gitTry(publishWindowRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'publish-window base drift fails before patch branch push or pull-request creation')
+
+const postPushCreateRepo = makeRepo({ name: 'post-push-create-base-drift', files: baseFiles, config: { issues: { enabled: false } } })
+const postPushCreateGithub = new FakeGitHub()
+const postPushCreateBase = headOf(postPushCreateRepo, 'main')
+let postPushCreateHead = null
+postPushCreateGithub.beforeListPulls = (_api, count) => {
+  if (count !== 2) return
+  write(path.join(postPushCreateRepo.work, 'README.md'), 'default branch moved after the migration branch push\n')
+  git(postPushCreateRepo.work, ['add', 'README.md'])
+  git(postPushCreateRepo.work, ['commit', '-m', 'move base after patch push'])
+  git(postPushCreateRepo.work, ['push', 'origin', 'main'])
+  postPushCreateHead = headOf(postPushCreateRepo, 'main')
+}
+const postPushCreateResult = await runBot({
+  repo: 'example/post-push-create-base-drift',
+  targetDir: postPushCreateRepo.work,
+  token: 'test-token',
+  transport: postPushCreateGithub.transport.bind(postPushCreateGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const postPushCreateDecision = postPushCreateResult.decisions.find(item => item.group.kind === 'model')
+assert(
+  postPushCreateDecision?.action === 'stand-down'
+    && postPushCreateDecision.reason === 'default-branch-moved'
+    && postPushCreateDecision.expectedBaseHead === postPushCreateBase
+    && postPushCreateDecision.currentBaseHead === postPushCreateHead,
+  'new-PR publication stands down when the default branch moves after the migration branch push',
+)
+assert(postPushCreateGithub.callsFor('POST', '/pulls').length === 0, 'post-push default-branch drift creates no pull request')
+assert(!gitTry(postPushCreateRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'post-push refusal deletes the unpublished migration branch under its exact pushed-head lease')
+
+const postPushCreateRecovery = await runBot({
+  repo: 'example/post-push-create-base-drift',
+  targetDir: postPushCreateRepo.work,
+  token: 'test-token',
+  transport: postPushCreateGithub.transport.bind(postPushCreateGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const postPushCreateRecoveryDecision = postPushCreateRecovery.decisions.find(item => item.group.kind === 'model')
+const postPushCreateRecoveryMetadata = parseMetadata(postPushCreateRecoveryDecision?.body)
+assert(postPushCreateRecoveryDecision?.action === 'create' && postPushCreateGithub.callsFor('POST', '/pulls').length === 1, 'a fresh run after new-PR drift creates safe work instead of conflicting with an orphan branch')
+assert(postPushCreateRecoveryMetadata?.base_sha === postPushCreateHead && postPushCreateRecoveryMetadata?.head_sha === headOf(postPushCreateRepo, branch), 'new-PR drift recovery binds the receipt to the moved base and regenerated branch head')
+
+const createFailureRepo = makeRepo({ name: 'pull-create-failure-cleanup', files: baseFiles, config: { issues: { enabled: false } } })
+const createFailureGithub = new FakeGitHub()
+createFailureGithub.pullCreateStatus = 503
+const createFailureRun = () => runBot({
+  repo: 'example/pull-create-failure-cleanup',
+  targetDir: createFailureRepo.work,
+  token: 'test-token',
+  transport: createFailureGithub.transport.bind(createFailureGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+let createFailureError = null
+try {
+  await createFailureRun()
+} catch (error) {
+  createFailureError = error
+}
+assert(createFailureError?.message.includes('GitHub POST') && createFailureGithub.pulls.length === 0, 'pull-request creation failure is surfaced without publishing a pull request')
+assert(!gitTry(createFailureRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'pull-request creation failure deletes its unpublished branch under the exact pushed-head lease')
+createFailureGithub.pullCreateStatus = 201
+const createFailureRecovery = await createFailureRun()
+const createFailureRecoveryDecision = createFailureRecovery.decisions.find(item => item.group.kind === 'model')
+assert(createFailureRecoveryDecision?.action === 'create' && parseMetadata(createFailureRecoveryDecision?.body)?.head_sha === headOf(createFailureRepo, branch), 'a retry after pull creation failure safely recreates the branch and pull request')
+
+const latestUpdateFailureRepo = makeRepo({ name: 'latest-open-update-failure', files: baseFiles, config: { issues: { enabled: false } } })
+const latestUpdateFailureGithub = new FakeGitHub()
+let latestUpdateFailurePull = null
+latestUpdateFailureGithub.pullUpdateStatus = 503
+latestUpdateFailureGithub.beforeListPulls = (client, count) => {
+  if (count !== 2) return
+  const pushedHead = headOf(latestUpdateFailureRepo, branch)
+  latestUpdateFailurePull = {
+    number: 93,
+    state: 'open',
+    labels: [{ name: 'model-eol' }],
+    body: metadataLine({
+      schema: 'model-eol.bot/0.1',
+      id: 'o3-deep-research-2025-06-26',
+      publisher: 'openai',
+      shutdown: '2026-07-23',
+      via: null,
+      replacement: 'gpt-5.6-sol',
+      base_sha: headOf(latestUpdateFailureRepo, 'main'),
+      head_sha: pushedHead,
+      feed_digest: 'concurrent-update-failure',
+    }),
+    head: { ref: branch, sha: pushedHead, repo: { full_name: 'example/latest-open-update-failure' } },
+    base: { ref: 'main' },
+  }
+  client.pulls.push(latestUpdateFailurePull)
+}
+let latestUpdateFailureError = null
+try {
+  await runBot({
+    repo: 'example/latest-open-update-failure',
+    targetDir: latestUpdateFailureRepo.work,
+    token: 'test-token',
+    transport: latestUpdateFailureGithub.transport.bind(latestUpdateFailureGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+} catch (error) {
+  latestUpdateFailureError = error
+}
+assert(latestUpdateFailureError?.message.includes('GitHub PATCH') && latestUpdateFailurePull?.state === 'open', 'concurrent latestOpen update failure surfaces instead of claiming publication')
+assert(!gitTry(latestUpdateFailureRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'concurrent latestOpen without a trusted prior head exact-deletes the pushed branch and becomes unmergeable')
+
+const postPushLatestRepo = makeRepo({ name: 'post-push-latest-open-base-drift', files: baseFiles, config: { issues: { enabled: false } } })
+const postPushLatestGithub = new FakeGitHub()
+const postPushLatestBase = headOf(postPushLatestRepo, 'main')
+let postPushLatestPull = null
+postPushLatestGithub.beforeListPulls = (client, count) => {
+  if (count !== 2) return
+  write(path.join(postPushLatestRepo.work, 'README.md'), 'default branch moved as a concurrent trusted PR appeared\n')
+  git(postPushLatestRepo.work, ['add', 'README.md'])
+  git(postPushLatestRepo.work, ['commit', '-m', 'move base during latest-open race'])
+  git(postPushLatestRepo.work, ['push', 'origin', 'main'])
+  const pushedHead = headOf(postPushLatestRepo, branch)
+  postPushLatestPull = {
+    number: 92,
+    state: 'open',
+    labels: [{ name: 'model-eol' }],
+    body: metadataLine({
+      schema: 'model-eol.bot/0.1',
+      id: 'o3-deep-research-2025-06-26',
+      publisher: 'openai',
+      shutdown: '2026-07-23',
+      via: null,
+      replacement: 'gpt-5.6-sol',
+      base_sha: postPushLatestBase,
+      head_sha: pushedHead,
+      feed_digest: 'concurrent-latest-open',
+    }),
+    head: { ref: branch, sha: pushedHead, repo: { full_name: 'example/post-push-latest-open-base-drift' } },
+    base: { ref: 'main' },
+  }
+  client.pulls.push(postPushLatestPull)
+}
+const postPushLatestResult = await runBot({
+  repo: 'example/post-push-latest-open-base-drift',
+  targetDir: postPushLatestRepo.work,
+  token: 'test-token',
+  transport: postPushLatestGithub.transport.bind(postPushLatestGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const postPushLatestDecision = postPushLatestResult.decisions.find(item => item.group.kind === 'model')
+const postPushLatestMetadata = parseMetadata(postPushLatestPull?.body)
+assert(postPushLatestDecision?.action === 'stand-down' && postPushLatestDecision.reason === 'default-branch-moved', 'post-push drift stands down when a trusted latestOpen race appears')
+assert(postPushLatestPull?.state === 'closed' && postPushLatestMetadata?.stale_closed === true && postPushLatestMetadata?.head_sha === headOf(postPushLatestRepo, branch), 'detected latestOpen race is closed with stale metadata bound to the pushed head')
+assert(postPushLatestGithub.callsFor('POST', '/pulls').length === 0 && !postPushLatestGithub.pulls.some(item => item.state === 'open'), 'latestOpen drift leaves no open unsafe pull request')
+assert(postPushLatestGithub.callsFor('POST', '/comments').some(call => call.body.body?.includes('default branch moved') && call.body.body?.includes('reevaluated')), 'latestOpen drift records a clear reevaluation comment')
 
 const staleRepo = makeRepo({ name: 'stale-reconciliation', files: baseFiles, config: { issues: { enabled: false } } })
 const staleGithub = new FakeGitHub()
@@ -383,6 +690,230 @@ const changedOpenai = JSON.parse(fs.readFileSync(path.join(changedFeeds, 'openai
 changedOpenai.note = 'Changed feed note for lifecycle update'
 fs.writeFileSync(path.join(changedFeeds, 'openai.json'), JSON.stringify(changedOpenai, null, 2))
 
+const updateFailureRepo = makeRepo({ name: 'existing-update-failure-rollback', files: baseFiles, config: { issues: { enabled: false } } })
+const updateFailureGithub = new FakeGitHub()
+const updateFailureRun = options => runBot({
+  repo: 'example/existing-update-failure-rollback',
+  targetDir: updateFailureRepo.work,
+  token: 'test-token',
+  transport: updateFailureGithub.transport.bind(updateFailureGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const updateFailureFirst = await updateFailureRun()
+const updateFailureFirstDecision = updateFailureFirst.decisions.find(item => item.group.kind === 'model')
+const updateFailurePull = updateFailureGithub.pulls.find(item => item.number === updateFailureFirstDecision?.number)
+const updateFailureOldBody = updateFailurePull?.body
+const updateFailureOldHead = headOf(updateFailureRepo, branch)
+const updateFailureBase = headOf(updateFailureRepo, 'main')
+if (updateFailurePull) updateFailurePull.head.sha = updateFailureOldHead
+updateFailureGithub.pullUpdateStatus = 503
+let updateFailureError = null
+try {
+  await updateFailureRun({ vendoredFeeds: changedFeeds })
+} catch (error) {
+  updateFailureError = error
+}
+assert(updateFailureError?.message.includes('GitHub PATCH'), 'existing pull-request body update failure is surfaced')
+assert(headOf(updateFailureRepo, branch) === updateFailureOldHead && headOf(updateFailureRepo, 'main') === updateFailureBase, 'failed existing update exact-leases the branch back to its prior trusted head without moving the base')
+assert(updateFailurePull?.state === 'open' && updateFailurePull.body === updateFailureOldBody && parseMetadata(updateFailurePull.body)?.head_sha === updateFailureOldHead, 'failed existing update leaves the old pull-request body and restored head aligned')
+updateFailureGithub.pullUpdateStatus = 200
+const updateFailureRecovery = await updateFailureRun({ vendoredFeeds: changedFeeds })
+const updateFailureRecoveryDecision = updateFailureRecovery.decisions.find(item => item.group.kind === 'model')
+assert(updateFailureRecoveryDecision?.action === 'update' && headOf(updateFailureRepo, branch) !== updateFailureOldHead, 'a retry after exact-head rollback successfully publishes the regenerated update')
+assert(parseMetadata(updateFailurePull?.body)?.head_sha === headOf(updateFailureRepo, branch), 'successful retry realigns the pull-request receipt with the regenerated remote head')
+
+const ambiguousUpdateFeeds = path.join(tempRoot, 'ambiguous-update-feeds')
+fs.cpSync(changedFeeds, ambiguousUpdateFeeds, { recursive: true })
+const ambiguousUpdateOpenai = JSON.parse(fs.readFileSync(path.join(ambiguousUpdateFeeds, 'openai.json'), 'utf8'))
+ambiguousUpdateOpenai.note = 'Ambiguous update response after the body was applied'
+fs.writeFileSync(path.join(ambiguousUpdateFeeds, 'openai.json'), JSON.stringify(ambiguousUpdateOpenai, null, 2))
+const ambiguousUpdatePriorBody = updateFailurePull?.body
+const ambiguousUpdatePriorHead = headOf(updateFailureRepo, branch)
+updateFailureGithub.pullUpdateStatus = 503
+updateFailureGithub.pullUpdateApplyBeforeFailure = true
+let ambiguousUpdateError = null
+try {
+  await updateFailureRun({ vendoredFeeds: ambiguousUpdateFeeds })
+} catch (error) {
+  ambiguousUpdateError = error
+}
+const ambiguousUpdateMetadata = parseMetadata(updateFailurePull?.body)
+assert(ambiguousUpdateError?.message.includes('GitHub PATCH') && updateFailurePull?.body !== ambiguousUpdatePriorBody, 'existing update detects a 503 response after GitHub applied the candidate body')
+assert(ambiguousUpdateMetadata?.head_sha !== ambiguousUpdatePriorHead && !gitTry(updateFailureRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'ambiguous existing update never rolls a candidate receipt onto the old head; it deletes the candidate branch so the PR is unmergeable')
+assert(updateFailureGithub.callsFor('GET', `/pulls/${updateFailurePull?.number}`).length >= 2, 'failed existing updates re-read pull-request state before choosing rollback or deletion')
+
+const latestRollbackRepo = makeRepo({ name: 'latest-open-update-rollback', files: baseFiles, config: { issues: { enabled: false } } })
+const latestRollbackGithub = new FakeGitHub()
+const latestRollbackRun = options => runBot({
+  repo: 'example/latest-open-update-rollback',
+  targetDir: latestRollbackRepo.work,
+  token: 'test-token',
+  transport: latestRollbackGithub.transport.bind(latestRollbackGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const latestRollbackFirst = await latestRollbackRun()
+const latestRollbackFirstDecision = latestRollbackFirst.decisions.find(item => item.group.kind === 'model')
+const latestRollbackClosed = latestRollbackGithub.pulls.find(item => item.number === latestRollbackFirstDecision?.number)
+const latestRollbackOldBody = latestRollbackClosed?.body
+const latestRollbackOldHead = headOf(latestRollbackRepo, branch)
+if (latestRollbackClosed) {
+  const priorMetadata = parseMetadata(latestRollbackClosed.body)
+  const lines = latestRollbackClosed.body.split(/\r?\n/)
+  lines[0] = metadataLine({ ...priorMetadata, stale_closed: true })
+  latestRollbackClosed.body = lines.join('\n')
+  latestRollbackClosed.state = 'closed'
+  latestRollbackClosed.head.sha = latestRollbackOldHead
+}
+let latestRollbackOpen = null
+latestRollbackGithub.pullUpdateStatus = 503
+latestRollbackGithub.beforeListPulls = (client, count) => {
+  if (count !== 4) return
+  const pushedHead = headOf(latestRollbackRepo, branch)
+  latestRollbackOpen = {
+    number: 94,
+    state: 'open',
+    labels: [{ name: 'model-eol' }],
+    body: latestRollbackOldBody,
+    head: { ref: branch, sha: pushedHead, repo: { full_name: 'example/latest-open-update-rollback' } },
+    base: { ref: 'main' },
+  }
+  client.pulls.push(latestRollbackOpen)
+}
+let latestRollbackError = null
+try {
+  await latestRollbackRun({ vendoredFeeds: changedFeeds })
+} catch (error) {
+  latestRollbackError = error
+}
+assert(latestRollbackError?.message.includes('GitHub PATCH') && latestRollbackOpen?.body === latestRollbackOldBody, 'concurrent latestOpen update failure preserves its prior trusted body')
+assert(headOf(latestRollbackRepo, branch) === latestRollbackOldHead, 'concurrent latestOpen with exact trusted prior metadata rolls the pushed branch back to the available prior head')
+
+const latestAmbiguousRepo = makeRepo({ name: 'latest-open-ambiguous-update', files: baseFiles, config: { issues: { enabled: false } } })
+const latestAmbiguousGithub = new FakeGitHub()
+const latestAmbiguousRun = options => runBot({
+  repo: 'example/latest-open-ambiguous-update',
+  targetDir: latestAmbiguousRepo.work,
+  token: 'test-token',
+  transport: latestAmbiguousGithub.transport.bind(latestAmbiguousGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const latestAmbiguousFirst = await latestAmbiguousRun()
+const latestAmbiguousFirstDecision = latestAmbiguousFirst.decisions.find(item => item.group.kind === 'model')
+const latestAmbiguousClosed = latestAmbiguousGithub.pulls.find(item => item.number === latestAmbiguousFirstDecision?.number)
+const latestAmbiguousOldBody = latestAmbiguousClosed?.body
+const latestAmbiguousOldHead = headOf(latestAmbiguousRepo, branch)
+if (latestAmbiguousClosed) {
+  const priorMetadata = parseMetadata(latestAmbiguousClosed.body)
+  const lines = latestAmbiguousClosed.body.split(/\r?\n/)
+  lines[0] = metadataLine({ ...priorMetadata, stale_closed: true })
+  latestAmbiguousClosed.body = lines.join('\n')
+  latestAmbiguousClosed.state = 'closed'
+  latestAmbiguousClosed.head.sha = latestAmbiguousOldHead
+}
+let latestAmbiguousOpen = null
+latestAmbiguousGithub.pullUpdateStatus = 503
+latestAmbiguousGithub.pullUpdateApplyBeforeFailure = true
+latestAmbiguousGithub.pullUpdateThrowAfterApply = true
+latestAmbiguousGithub.beforeListPulls = (client, count) => {
+  if (count !== 4) return
+  const pushedHead = headOf(latestAmbiguousRepo, branch)
+  latestAmbiguousOpen = {
+    number: 95,
+    state: 'open',
+    labels: [{ name: 'model-eol' }],
+    body: latestAmbiguousOldBody,
+    head: { ref: branch, sha: pushedHead, repo: { full_name: 'example/latest-open-ambiguous-update' } },
+    base: { ref: 'main' },
+  }
+  client.pulls.push(latestAmbiguousOpen)
+}
+let latestAmbiguousError = null
+try {
+  await latestAmbiguousRun({ vendoredFeeds: changedFeeds })
+} catch (error) {
+  latestAmbiguousError = error
+}
+const latestAmbiguousMetadata = parseMetadata(latestAmbiguousOpen?.body)
+assert(latestAmbiguousError?.message.includes('transport failure after apply') && latestAmbiguousOpen?.body !== latestAmbiguousOldBody, 'trusted latestOpen path detects a transport failure after the candidate body was applied')
+assert(latestAmbiguousMetadata?.head_sha !== latestAmbiguousOldHead && !gitTry(latestAmbiguousRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'ambiguous trusted latestOpen never rolls a candidate receipt onto its old head; exact deletion makes it unmergeable')
+assert(latestAmbiguousGithub.callsFor('GET', `/pulls/${latestAmbiguousOpen?.number}`).length === 1, 'failed trusted latestOpen update re-reads pull-request state before rejecting rollback')
+
+const closeFailureRepo = makeRepo({ name: 'post-push-close-failure', files: baseFiles, config: { issues: { enabled: false } } })
+const closeFailureGithub = new FakeGitHub()
+const closeFailureRun = options => runBot({
+  repo: 'example/post-push-close-failure',
+  targetDir: closeFailureRepo.work,
+  token: 'test-token',
+  transport: closeFailureGithub.transport.bind(closeFailureGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const closeFailureFirst = await closeFailureRun()
+const closeFailureFirstDecision = closeFailureFirst.decisions.find(item => item.group.kind === 'model')
+const closeFailurePull = closeFailureGithub.pulls.find(item => item.number === closeFailureFirstDecision?.number)
+if (closeFailurePull) closeFailurePull.head.sha = parseMetadata(closeFailureFirstDecision?.body)?.head_sha
+const closeFailureAdvance = stageDefaultBranchAdvance(closeFailureRepo, 'close-failure')
+advanceDefaultBranchAfterMigrationPush(closeFailureRepo, branch, closeFailureAdvance.ref)
+closeFailureGithub.pullUpdateStatus = 503
+let closeFailureError = null
+try {
+  await closeFailureRun({ vendoredFeeds: changedFeeds })
+} catch (error) {
+  closeFailureError = error
+}
+assert(closeFailureError?.message.includes('GitHub PATCH') && closeFailurePull?.state === 'open', 'failed drift closure surfaces the GitHub update error and may leave the pull request open')
+assert(!gitTry(closeFailureRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'failed drift closure exact-leases away the newly pushed head so the open pull request is unmergeable')
+
+const postPushUpdateRepo = makeRepo({ name: 'post-push-update-base-drift', files: baseFiles, config: { issues: { enabled: false } } })
+const postPushUpdateGithub = new FakeGitHub()
+const postPushUpdateRun = options => runBot({
+  repo: 'example/post-push-update-base-drift',
+  targetDir: postPushUpdateRepo.work,
+  token: 'test-token',
+  transport: postPushUpdateGithub.transport.bind(postPushUpdateGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+  ...options,
+})
+const postPushUpdateFirst = await postPushUpdateRun()
+const postPushUpdateFirstDecision = postPushUpdateFirst.decisions.find(item => item.group.kind === 'model')
+const postPushUpdatePull = postPushUpdateGithub.pulls.find(item => item.number === postPushUpdateFirstDecision?.number)
+if (postPushUpdatePull) postPushUpdatePull.head.sha = parseMetadata(postPushUpdateFirstDecision?.body)?.head_sha
+const postPushUpdateBase = headOf(postPushUpdateRepo, 'main')
+const postPushUpdateBranchBefore = headOf(postPushUpdateRepo, branch)
+const postPushUpdateAdvance = stageDefaultBranchAdvance(postPushUpdateRepo, 'update-base-drift')
+advanceDefaultBranchAfterMigrationPush(postPushUpdateRepo, branch, postPushUpdateAdvance.ref)
+const postPushUpdateResult = await postPushUpdateRun({ vendoredFeeds: changedFeeds })
+const postPushUpdateDecision = postPushUpdateResult.decisions.find(item => item.group.kind === 'model')
+const postPushUpdateHead = headOf(postPushUpdateRepo, branch)
+const postPushUpdateMetadata = parseMetadata(postPushUpdatePull?.body)
+assert(
+  postPushUpdateDecision?.action === 'stand-down'
+    && postPushUpdateDecision.reason === 'default-branch-moved'
+    && postPushUpdateDecision.expectedBaseHead === postPushUpdateBase
+    && postPushUpdateDecision.currentBaseHead === postPushUpdateAdvance.head,
+  'existing-PR publication stands down when the default branch moves after its migration branch push',
+)
+assert(postPushUpdateGithub.calls.filter(call => call.method === 'PATCH' && call.path.includes('/pulls/')).length === 1 && postPushUpdateGithub.callsFor('POST', '/pulls').length === 1, 'post-push default-branch drift closes the existing pull request without creating another')
+assert(postPushUpdatePull?.state === 'closed' && !postPushUpdateGithub.pulls.some(item => item.state === 'open'), 'detected post-push drift leaves no open unsafe pull request')
+assert(postPushUpdateMetadata?.stale_closed === true && postPushUpdateMetadata?.head_sha === postPushUpdateHead && postPushUpdateMetadata.head_sha === postPushUpdateDecision?.headSha, 'drift closure records automated stale metadata bound to the newly pushed head')
+assert(postPushUpdateHead !== postPushUpdateBranchBefore, 'existing-PR refusal leaves the newly evaluated migration branch available for the next reconciliation')
+assert(postPushUpdateGithub.callsFor('POST', '/comments').some(call => call.body.body?.includes('default branch moved') && call.body.body?.includes('reevaluated')), 'existing-PR drift records a clear reevaluation comment')
+
+const postPushUpdateRecovery = await postPushUpdateRun({ vendoredFeeds: changedFeeds })
+const postPushUpdateRecoveryDecision = postPushUpdateRecovery.decisions.find(item => item.group.kind === 'model')
+const postPushUpdateRecoveredPull = postPushUpdateGithub.pulls.find(item => item.number === postPushUpdateRecoveryDecision?.number)
+const postPushUpdateRecoveredMetadata = parseMetadata(postPushUpdateRecoveryDecision?.body)
+assert(postPushUpdateRecoveryDecision?.action === 'create' && postPushUpdateRecoveredPull?.state === 'open' && postPushUpdatePull?.state === 'closed', 'a fresh run after base refresh creates safe work without reopening the stale PR')
+assert(postPushUpdateRecoveredMetadata?.base_sha === headOf(postPushUpdateRepo, 'main') && postPushUpdateRecoveredMetadata?.head_sha === headOf(postPushUpdateRepo, branch), 'recovery PR binds its receipt to the refreshed base and regenerated branch head')
+
 const replacementRepo = makeRepo({ name: 'replacement-suppression', files: baseFiles, config })
 const replacementGithub = new FakeGitHub()
 const replacementRun = options => runBot({
@@ -417,11 +948,12 @@ const replacementChanged = await replacementRun({ vendoredFeeds: replacementYFee
 assert(replacementChanged.decisions.find(item => item.group.kind === 'model')?.action === 'create' && replacementGithub.callsFor('POST', '/pulls').length === 2, 'changed replacement creates a fresh PR instead of reusing dismissal')
 
 const beforeUpdateHead = headOf(repo, branch)
-const updated = await run({ evalEnabled: true, vendoredFeeds: changedFeeds })
+const updated = await run({ vendoredFeeds: changedFeeds })
 const updateDecision = updated.decisions.find(item => item.group.kind === 'model')
 assert(updateDecision?.action === 'update', 'changed digest with intact bot head updates the PR')
 assert(headOf(repo, branch) !== beforeUpdateHead, 'changed digest force-pushes a regenerated branch')
 assert(github.calls.filter(call => call.method === 'PATCH' && call.path.includes('/pulls/')).length === 1, 'changed digest updates the PR body')
+assert(createdPull?.state === 'open' && parseMetadata(createdPull?.body)?.stale_closed !== true, 'successful existing-PR regeneration remains open without stale closure churn')
 
 const foreignHead = '1111111111111111111111111111111111111111'
 const pull = github.pulls.find(item => item.number === firstDecision.number)
@@ -732,30 +1264,30 @@ if (fifoAvailable) {
   assert(true, 'FIFO eval test skipped because mkfifo is unavailable')
 }
 
-const externalEvalRepo = makeRepo({ name: 'external-eval-status', files: baseFiles, config: { issues: { enabled: false } } })
-const externalEvalGithub = new FakeGitHub()
-const externalReport = path.join(tempRoot, 'external-eval-report.md')
-const externalStatus = path.join(tempRoot, 'external-eval-status.txt')
-const externalRun = () => runBot({
-  repo: 'example/external-eval-status',
-  targetDir: externalEvalRepo.work,
-  token: 'test-token',
-  transport: externalEvalGithub.transport.bind(externalEvalGithub),
-  vendoredFeeds: path.join(root, 'feeds'),
-  evalReportFile: externalReport,
-  evalStatusFile: externalStatus,
-  now: new Date('2026-08-01T00:00:00Z'),
+const missingBoundRepo = makeRepo({
+  name: 'missing-bound-eval',
+  files: baseFiles,
+  config: {
+    issues: { enabled: false },
+    eval: { command: 'node scripts/model-eol-eval.mjs' },
+  },
 })
-write(externalReport, 'external report')
-write(externalStatus, '0garbage')
-const malformedExternal = await externalRun()
-assert(malformedExternal.decisions.find(item => item.group.kind === 'model')?.action === 'eval-failed', 'malformed external eval status fails closed')
-fs.rmSync(externalStatus, { force: true })
-const missingExternal = await externalRun()
-assert(missingExternal.decisions.find(item => item.group.kind === 'model')?.action === 'eval-failed', 'missing external eval status fails even with a report')
-write(externalStatus, '0')
-const cleanExternal = await externalRun()
-assert(cleanExternal.decisions.find(item => item.group.kind === 'model')?.action === 'create' && externalEvalGithub.callsFor('POST', '/pulls').length === 1, 'strict zero external eval status permits the patch')
+const missingBoundGithub = new FakeGitHub()
+let missingBoundError = null
+try {
+  await runBot({
+    repo: 'example/missing-bound-eval',
+    targetDir: missingBoundRepo.work,
+    token: 'test-token',
+    transport: missingBoundGithub.transport.bind(missingBoundGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+} catch (error) {
+  missingBoundError = error
+}
+assert(missingBoundError?.message.includes('configured eval requires MODEL_EOL_EVAL_RESULTS_FILE'), 'configured publication refuses to bypass the read-only evaluator')
+assert(missingBoundGithub.calls.length === 0 && !gitTry(missingBoundRepo.bare, ['show-ref', '--verify', `refs/heads/${branch}`]), 'missing bound eval results fail before GitHub API calls or patch pushes')
 
 const evalMissingRepo = makeRepo({
   name: 'eval-missing-report',
@@ -766,13 +1298,15 @@ const evalMissingRepo = makeRepo({
   },
 })
 const evalMissingGithub = new FakeGitHub()
+const evalMissingArtifacts = await evaluateForPublish({ targetDir: evalMissingRepo.work })
 const evalMissingResult = await runBot({
   repo: 'example/eval-missing-report',
   targetDir: evalMissingRepo.work,
   token: 'test-token',
   transport: evalMissingGithub.transport.bind(evalMissingGithub),
   vendoredFeeds: path.join(root, 'feeds'),
-  evalEnabled: true,
+  planFile: evalMissingArtifacts.planFile,
+  evalResultsFile: evalMissingArtifacts.evalResultsFile,
   now: new Date('2026-08-01T00:00:00Z'),
 })
 const evalMissingDecision = evalMissingResult.decisions.find(item => item.group.kind === 'model')
@@ -788,13 +1322,15 @@ const extraEvalRepo = makeRepo({
   },
 })
 const extraEvalGithub = new FakeGitHub()
+const extraEvalArtifacts = await evaluateForPublish({ targetDir: extraEvalRepo.work })
 const extraEvalResult = await runBot({
   repo: 'example/eval-extra-file',
   targetDir: extraEvalRepo.work,
   token: 'test-token',
   transport: extraEvalGithub.transport.bind(extraEvalGithub),
   vendoredFeeds: path.join(root, 'feeds'),
-  evalEnabled: true,
+  planFile: extraEvalArtifacts.planFile,
+  evalResultsFile: extraEvalArtifacts.evalResultsFile,
   now: new Date('2026-08-01T00:00:00Z'),
 })
 const extraEvalDecision = extraEvalResult.decisions.find(item => item.group.kind === 'model')
@@ -810,13 +1346,15 @@ const mutatedEvalRepo = makeRepo({
   },
 })
 const mutatedEvalGithub = new FakeGitHub()
+const mutatedEvalArtifacts = await evaluateForPublish({ targetDir: mutatedEvalRepo.work })
 const mutatedEvalResult = await runBot({
   repo: 'example/eval-mutated-plan-file',
   targetDir: mutatedEvalRepo.work,
   token: 'test-token',
   transport: mutatedEvalGithub.transport.bind(mutatedEvalGithub),
   vendoredFeeds: path.join(root, 'feeds'),
-  evalEnabled: true,
+  planFile: mutatedEvalArtifacts.planFile,
+  evalResultsFile: mutatedEvalArtifacts.evalResultsFile,
   now: new Date('2026-08-01T00:00:00Z'),
 })
 const mutatedEvalDecision = mutatedEvalResult.decisions.find(item => item.group.kind === 'model')
@@ -831,16 +1369,141 @@ const cleanRideRepo = makeRepo({
   },
 })
 const cleanRideGithub = new FakeGitHub()
+const cleanRideArtifacts = await evaluateForPublish({ targetDir: cleanRideRepo.work })
 const cleanRideResult = await runBot({
   repo: 'example/eval-clean-ride',
   targetDir: cleanRideRepo.work,
   token: 'test-token',
   transport: cleanRideGithub.transport.bind(cleanRideGithub),
   vendoredFeeds: path.join(root, 'feeds'),
-  evalEnabled: true,
+  planFile: cleanRideArtifacts.planFile,
+  evalResultsFile: cleanRideArtifacts.evalResultsFile,
   now: new Date('2026-08-01T00:00:00Z'),
 })
-assert(cleanRideResult.decisions.find(item => item.group.kind === 'model')?.action === 'create', 'clean eval ride-along still commits the patch')
+const cleanRideDecision = cleanRideResult.decisions.find(item => item.group.kind === 'model')
+const cleanRideMetadata = parseMetadata(cleanRideDecision?.body)
+assert(cleanRideDecision?.action === 'create', 'bound passing eval result permits the write-only publisher to commit the patch')
+assert(cleanRideDecision?.body.includes('Result: pass') && cleanRideDecision.body.includes('pass') && cleanRideMetadata?.eval_config_digest === cleanRideArtifacts.evaluation.artifact.eval_config_digest, 'published PR records the passing report and exact eval configuration digest')
+
+const durableEvalRepo = makeRepo({ name: 'durable-eval-failure', files: baseFiles })
+const durableEvalGithub = new FakeGitHub()
+const durableEvalConfigFile = path.join(tempRoot, 'durable-eval-config.json')
+const writeDurableEvalConfig = passing => write(durableEvalConfigFile, JSON.stringify({
+  issues: { enabled: true },
+  eval: {
+    command: passing
+      ? 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "durable eval passed")\''
+      : 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "durable eval failed with ```untrusted``` output");process.exit(7)\'',
+    timeout_ms: 1000,
+    max_report_bytes: 1024,
+    pass_env: [],
+  },
+}))
+const durableEvalRun = async () => {
+  const artifacts = await evaluateForPublish({
+    targetDir: durableEvalRepo.work,
+    configPath: durableEvalConfigFile,
+  })
+  return runBot({
+    repo: 'example/durable-eval-failure',
+    targetDir: durableEvalRepo.work,
+    configPath: durableEvalConfigFile,
+    token: 'test-token',
+    transport: durableEvalGithub.transport.bind(durableEvalGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    planFile: artifacts.planFile,
+    evalResultsFile: artifacts.evalResultsFile,
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+}
+writeDurableEvalConfig(false)
+const durableEvalFailed = await durableEvalRun()
+const durableEvalFailedDecision = durableEvalFailed.decisions.find(item => item.group.kind === 'model')
+const firstEvalIssue = durableEvalGithub.issues.find(item => item.state === 'open')
+const firstEvalIssueMetadata = parseMetadata(firstEvalIssue?.body)
+assert(durableEvalFailedDecision?.action === 'eval-failed' && durableEvalFailedDecision.issueAction === 'create', 'failed configured eval creates a durable issue decision')
+assert(durableEvalGithub.callsFor('POST', '/pulls').length === 0 && durableEvalGithub.callsFor('POST', '/issues').length === 1, 'failed configured eval opens an issue and never a pull request')
+assert(firstEvalIssue?.labels?.some(label => label === 'model-eol' || label.name === 'model-eol') && firstEvalIssueMetadata?.channel === 'configured-eval', 'eval failure issue is labelled and carries a distinct trusted metadata identity')
+assert(firstEvalIssue?.body.includes('Result: fail') && firstEvalIssue.body.includes('durable eval failed') && !firstEvalIssue.body.includes('```untrusted```'), 'eval failure issue records a safely fenced bounded report')
+const durableEvalStillFailed = await durableEvalRun()
+assert(durableEvalStillFailed.decisions.find(item => item.group.kind === 'model')?.issueAction === 'skip-unchanged' && durableEvalGithub.callsFor('POST', '/issues').length === 1, 'persistent eval failure maintains one unchanged durable issue')
+
+const durablePatchCallsBeforeLabelFailure = durableEvalGithub.calls.filter(call => call.method === 'PATCH').length
+durableEvalGithub.labelExists = false
+durableEvalGithub.labelCreateStatus = 403
+const durableLabelUnavailable = await durableEvalRun()
+assert(durableLabelUnavailable.decisions.some(item => item.action === 'label-unavailable'), 'transient label denial fails closed before processing configured eval work')
+assert(firstEvalIssue?.state === 'open' && durableEvalGithub.calls.filter(call => call.method === 'PATCH').length === durablePatchCallsBeforeLabelFailure, 'label denial preserves an active configured-eval issue without stale reconciliation writes')
+durableEvalGithub.labelExists = true
+durableEvalGithub.labelCreateStatus = 201
+
+writeDurableEvalConfig(true)
+const durableEvalCleared = await durableEvalRun()
+const durableEvalPull = durableEvalGithub.pulls.find(item => item.state === 'open')
+assert(durableEvalCleared.decisions.some(item => item.group.kind === 'model' && item.action === 'create') && durableEvalPull, 'cleared eval opens the migration pull request')
+assert(durableEvalCleared.decisions.some(item => item.group.kind === 'issue' && item.action === 'close-stale') && firstEvalIssue?.state === 'closed' && parseMetadata(firstEvalIssue?.body)?.stale_closed === true, 'cleared eval reconciles its durable issue as stale')
+
+writeDurableEvalConfig(false)
+const durableEvalReappeared = await durableEvalRun()
+const secondEvalIssue = durableEvalGithub.issues.find(item => item.state === 'open')
+assert(durableEvalReappeared.decisions.some(item => item.group.kind === 'model' && item.action === 'eval-failed') && secondEvalIssue?.number !== firstEvalIssue?.number, 'reappearing eval failure creates fresh durable work after automated closure')
+assert(durableEvalGithub.callsFor('POST', '/pulls').length === 1 && durableEvalPull?.state === 'closed' && parseMetadata(durableEvalPull?.body)?.stale_closed === true, 'reappearing eval failure closes the trusted bot PR and never opens a failing replacement PR')
+
+writeDurableEvalConfig(true)
+const durableEvalClearedAgain = await durableEvalRun()
+assert(durableEvalClearedAgain.decisions.some(item => item.group.kind === 'model' && item.action === 'create') && durableEvalGithub.callsFor('POST', '/pulls').length === 2, 'a second cleared eval safely regenerates a fresh migration PR')
+assert(secondEvalIssue?.state === 'closed' && parseMetadata(secondEvalIssue?.body)?.stale_closed === true, 'the reappeared eval issue reconciles when the eval clears again')
+
+const channelCollisionRepo = makeRepo({
+  name: 'eval-issue-channel-collision',
+  files: {
+    ...baseFiles,
+    'generic.py': 'MODEL = "o3-deep-research"\n',
+  },
+})
+const channelCollisionGithub = new FakeGitHub()
+const channelCollisionConfigFile = path.join(tempRoot, 'eval-issue-channel-collision.json')
+const writeChannelCollisionConfig = passing => write(channelCollisionConfigFile, JSON.stringify({
+  issues: { enabled: true },
+  eval: {
+    command: passing
+      ? 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "pass")\''
+      : 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "fail");process.exit(7)\'',
+    timeout_ms: 1000,
+    max_report_bytes: 1024,
+    pass_env: [],
+  },
+}))
+const channelCollisionRun = async () => {
+  const artifacts = await evaluateForPublish({
+    targetDir: channelCollisionRepo.work,
+    configPath: channelCollisionConfigFile,
+  })
+  return runBot({
+    repo: 'example/eval-issue-channel-collision',
+    targetDir: channelCollisionRepo.work,
+    configPath: channelCollisionConfigFile,
+    token: 'test-token',
+    transport: channelCollisionGithub.transport.bind(channelCollisionGithub),
+    vendoredFeeds: path.join(root, 'feeds'),
+    planFile: artifacts.planFile,
+    evalResultsFile: artifacts.evalResultsFile,
+    now: new Date('2026-08-01T00:00:00Z'),
+  })
+}
+writeChannelCollisionConfig(false)
+await channelCollisionRun()
+const collisionEvalIssues = () => channelCollisionGithub.issues.filter(issue => parseMetadata(issue.body)?.channel === 'configured-eval')
+const collisionOrdinaryIssues = () => channelCollisionGithub.issues.filter(issue => (parseMetadata(issue.body)?.channel ?? null) === null)
+assert(collisionEvalIssues().length === 1 && collisionOrdinaryIssues().length === 1 && channelCollisionGithub.issues.every(issue => issue.state === 'open'), 'a failed eval and ordinary finding for the same model keep distinct issue identities')
+await channelCollisionRun()
+assert(channelCollisionGithub.issues.length === 2 && parseMetadata(collisionEvalIssues()[0].body)?.channel === 'configured-eval', 'persistent failure maintains both issue channels without overwriting metadata')
+writeChannelCollisionConfig(true)
+await channelCollisionRun()
+assert(collisionEvalIssues()[0].state === 'closed' && collisionOrdinaryIssues()[0].state === 'open', 'clearing eval closes only configured-eval work and preserves the ordinary finding')
+writeChannelCollisionConfig(false)
+await channelCollisionRun()
+assert(collisionEvalIssues().filter(issue => issue.state === 'open').length === 1 && collisionOrdinaryIssues().length === 1 && collisionOrdinaryIssues()[0].state === 'open', 'reappearing eval failure creates fresh eval work without duplicating or suppressing its ordinary sibling')
 
 const maliciousFeeds = path.join(tempRoot, 'malicious-feeds')
 fs.cpSync(path.join(root, 'feeds'), maliciousFeeds, { recursive: true })
@@ -952,14 +1615,18 @@ for (const name of envNames) {
 assert(reportForBody('```untrusted```') === 'untrusted', 'report embedding strips backticks')
 
 const transportCallsBeforeDry = github.calls.length
+const dryArtifacts = await evaluateForPublish({ targetDir: repo.work })
 const dry = await runBot({
   repo: 'example/app',
   targetDir: repo.work,
   dryRun: true,
   transport: async () => { throw new Error('dry-run must not call transport') },
   vendoredFeeds: path.join(root, 'feeds'),
+  planFile: dryArtifacts.planFile,
+  evalResultsFile: dryArtifacts.evalResultsFile,
 })
 assert(dry.decisions.some(item => item.action === 'create'), 'dry-run prints would-be create decisions')
+assert(dry.decisions.find(item => item.group.kind === 'model')?.body.includes('Result: pass'), 'dry-run consumes the same bound eval result instead of bypassing configured evaluation')
 assert(github.calls.length === transportCallsBeforeDry, 'dry-run makes zero GitHub transport calls')
 assert(!gitTry(repo.bare, ['show-ref', '--verify', `refs/heads/${branch}-dry-run`]), 'dry-run makes no push')
 
@@ -1019,7 +1686,7 @@ assert(tamperedArtifactError?.message.includes('does not match the independently
 assert(artifactGithub.calls.length === 0, 'tampered plan artifact is rejected before any GitHub reads or writes')
 
 const policyArgsChecker = path.join(tempRoot, 'policy-args-checker.mjs')
-write(policyArgsChecker, `const forbidden = process.argv.slice(2).filter(value => ["--days", "--scope", "--via"].includes(value)); if (forbidden.length) { console.error("config masked by " + forbidden.join(",")); process.exit(9) } console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:["config-only-policy"],items:[],issues:[]}))\n`)
+write(policyArgsChecker, `const forbidden = process.argv.slice(2).filter(value => ["--days", "--scope", "--via"].includes(value)); if (forbidden.length) { console.error("config masked by " + forbidden.join(",")); process.exit(9) } console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:[{reason:"config-only-policy"}],items:[],issues:[]}))\n`)
 const policyArgsRepo = makeRepo({
   name: 'policy-args',
   files: baseFiles,
@@ -1035,7 +1702,7 @@ const policyArgsResult = await runBot({
   checkerPath: policyArgsChecker,
   vendoredFeeds: path.join(root, 'feeds'),
 })
-assert(policyArgsResult.plan.scan_notes.includes('config-only-policy'), 'bot forwards config without top-level days/scope/via flags that would mask path routes and overrides')
+assert(policyArgsResult.plan.scan_notes.some(note => note.reason === 'config-only-policy'), 'bot forwards config without top-level days/scope/via flags that would mask path routes and overrides')
 
 const nullViaRepo = makeRepo({
   name: 'null-via',
@@ -1112,6 +1779,51 @@ assert(partitionEvaluation.artifact.results.length === 2 && partitionPass && par
 assert(partitionEvaluation.artifact.base_sha === headOf(partitionRepo, 'main'), 'eval manifest records the exact evaluated default-branch commit')
 assert(partitionPass.report.includes('true|explicit-pass-env|undefined|1'), 'per-group eval sees the patched migration, selected one-item plan, and explicit pass_env only')
 assert(Buffer.byteLength(partitionFail.report) <= 128 && partitionFail.report.includes('truncated'), 'per-group eval report honors the configured byte cap')
+
+const movingSourceCommand = 'node -e \'const fs=require("fs");const {spawnSync}=require("child_process");fs.writeFileSync(process.env.MODEL_EOL_REPORT,"pass");const r=spawnSync("git",["-C",process.env.MODEL_EOL_TEST_SOURCE,"commit","--allow-empty","-m","move source during eval"],{stdio:"ignore"});process.exit(r.status??1)\''
+const movingSourceRepo = makeRepo({
+  name: 'moving-eval-source',
+  files: baseFiles,
+  config: {
+    issues: { enabled: false },
+    eval: {
+      command: movingSourceCommand,
+      timeout_ms: 1000,
+      max_report_bytes: 128,
+      pass_env: ['MODEL_EOL_TEST_SOURCE'],
+    },
+  },
+})
+const movingSourceConfigFile = path.join(movingSourceRepo.work, '.model-eol.json')
+const movingSourcePlan = runPlan({
+  workDir: movingSourceRepo.work,
+  config: loadConfig(movingSourceConfigFile),
+  configPath: movingSourceConfigFile,
+  feedsDir: path.join(root, 'feeds'),
+  warn: () => {},
+})
+const movingSourcePlanFile = path.join(tempRoot, 'moving-source-plan.json')
+const movingSourceEvalFile = path.join(tempRoot, 'moving-source-eval.json')
+write(movingSourcePlanFile, JSON.stringify(movingSourcePlan, null, 2))
+const savedEvalSource = process.env.MODEL_EOL_TEST_SOURCE
+process.env.MODEL_EOL_TEST_SOURCE = movingSourceRepo.work
+let movingSourceError = null
+try {
+  await evaluatePlan({
+    targetDir: movingSourceRepo.work,
+    configPath: movingSourceConfigFile,
+    planFile: movingSourcePlanFile,
+    outputFile: movingSourceEvalFile,
+    vendoredFeeds: path.join(root, 'feeds'),
+    commandOverride: null,
+  })
+} catch (error) {
+  movingSourceError = error
+} finally {
+  if (savedEvalSource === undefined) delete process.env.MODEL_EOL_TEST_SOURCE
+  else process.env.MODEL_EOL_TEST_SOURCE = savedEvalSource
+}
+assert(movingSourceError?.message.includes('target commit changed during migration evaluation') && !fs.existsSync(movingSourceEvalFile), 'evaluator never labels earlier results with a base commit that moved during evaluation')
 
 const timeoutEvalFile = path.join(tempRoot, 'partition-timeout-eval.json')
 const timeoutEvaluation = await evaluatePlan({
@@ -1318,7 +2030,7 @@ assert(headOf(leaseRepo, leaseBranch) === leaseHeadBefore, 'committer identity m
 assert(leaseGithub.callsFor('POST', '/comments').some(call => call.body.body?.includes('forge the configured identity')), 'lease stand-down comment records the residual identity-forgery risk')
 
 const malformedChecker = path.join(tempRoot, 'malformed-plan-checker.mjs')
-write(malformedChecker, 'console.log(JSON.stringify({ plan_schema: "model-eol.plan/0.1", items: [{ file: "direct.py", line: 0, occurrence: 0, matched: "old", replacement: "new", expected_line_sha256: "' + '0'.repeat(64) + '" }], issues: [], scan_notes: [] }))\n')
+write(malformedChecker, 'console.log(JSON.stringify({ plan_schema: "model-eol.plan/0.1", generated: new Date().toISOString(), threshold_days: 90, via: null, items: [{ file: "direct.py", line: 0, occurrence: 0, matched: "old", replacement: "new", expected_line_sha256: "' + '0'.repeat(64) + '", id: "old", publisher: "openai", shutdown: "2026-07-01", days: -31, status: "retired", sources: [], notes: null }], issues: [], scan_notes: [] }))\n')
 let malformedPlanRefused = false
 try {
   await runBot({ repo: 'example/app', targetDir: repo.work, dryRun: true, checkerPath: malformedChecker, vendoredFeeds: path.join(root, 'feeds') })

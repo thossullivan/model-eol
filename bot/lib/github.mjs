@@ -149,6 +149,10 @@ export class GitHubClient {
     return data
   }
 
+  async getPull(number) {
+    return (await this.request('GET', `/repos/${this.repo}/pulls/${number}`)).data
+  }
+
   async listIssues() {
     const issues = await this.listAll(`/repos/${this.repo}/issues`)
     return issues.filter(issue => !issue.pull_request)

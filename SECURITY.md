@@ -21,9 +21,13 @@ The surface that matters, given zero runtime dependencies:
 - Feed integrity: `feeds/*.json` are generated from provider pages, and a
   poisoned feed changes CI verdicts downstream. Feed signing is on the
   roadmap, not shipped.
-- The bot workflow's privilege split: provider keys live only in the
-  read-only plan/eval job, write tokens only in the publish job. Anything
-  that lets one side reach the other's credentials is a finding.
+- The bot workflow's privilege split: the plan job is read-only, the evaluate
+  job receives only provider secrets explicitly needed by trusted eval code and
+  has no write token, and the publish job receives the write token but never
+  executes repository-owned eval code. `eval.pass_env` controls normal
+  subprocess forwarding; it is not an OS sandbox or same-user secret-isolation
+  boundary. Anything that bridges the evaluate/publish privilege split is a
+  finding.
 
 The checker itself needs no credentials: scanning is static analysis, so a
 report that assumes an API key inside `check.mjs` is out of scope by

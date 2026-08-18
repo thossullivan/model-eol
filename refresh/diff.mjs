@@ -97,7 +97,12 @@ function distributionChanges(oldModel, model, publisher) {
       changes.push({ publisher, id: model.id, via, kind: 'removed', old, next })
       continue
     }
-    if (old.announced !== next.announced || old.shutdown !== next.shutdown || old.date_precision !== next.date_precision) {
+    if (
+      old.announced !== next.announced ||
+      old.shutdown !== next.shutdown ||
+      old.date_precision !== next.date_precision ||
+      old.status !== next.status
+    ) {
       changes.push({ publisher, id: model.id, via, kind: 'changed', old, next })
     }
   }
@@ -212,7 +217,7 @@ const dateValue = (date, precision) => `${code(date)}${precision === 'earliest' 
 const dateLine = model => `announced: ${code(model.announced)}; shutdown: ${dateValue(model.shutdown, model.date_precision)}`
 
 function distributionDateLine(distribution) {
-  return `announced: ${code(distribution?.announced)}; EOL: ${dateValue(distribution?.shutdown, distribution?.date_precision)}`
+  return `announced: ${code(distribution?.announced)}; EOL: ${dateValue(distribution?.shutdown, distribution?.date_precision)}; status: ${code(distribution?.status)}`
 }
 
 function distributionModelLabel(change) {
@@ -224,7 +229,7 @@ function renderDistributionChanges(result) {
   for (const change of result.distributionChanges) {
     const label = code(distributionModelLabel(change))
     if (change.kind === 'added') {
-      lines.push(`- ${label} - ${code(change.via)} dates added; ${distributionDateLine(change.next)}`)
+      lines.push(`- ${label} - ${code(change.via)} distribution added; ${distributionDateLine(change.next)}`)
     } else if (change.kind === 'removed') {
       lines.push(`- ${label} - ${code(change.via)} distribution removed`)
     } else {
@@ -235,6 +240,9 @@ function renderDistributionChanges(result) {
         lines.push(`- ${label} - ${code(change.via)} EOL date moved ${dateValue(change.old.shutdown, change.old.date_precision)} -> ${dateValue(change.next.shutdown, change.next.date_precision)}`)
       } else if (change.old.date_precision !== change.next.date_precision) {
         lines.push(`- ${label} - ${code(change.via)} EOL date precision changed ${dateValue(change.old.shutdown, change.old.date_precision)} -> ${dateValue(change.next.shutdown, change.next.date_precision)}`)
+      }
+      if (change.old.status !== change.next.status) {
+        lines.push(`- ${label} - ${code(change.via)} status changed ${code(change.old.status)} -> ${code(change.next.status)}`)
       }
     }
   }

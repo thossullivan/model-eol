@@ -36,9 +36,12 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$MODEL_EOL_VERSION" > "$RUNNER_TEMP/model-eol-plan/model-eol-version"
-          PLAN_ARGS=(plan .)
-          if [ ! -f .model-eol.json ]; then PLAN_ARGS+=(--days 90 --scope direct); fi
-          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol "${PLAN_ARGS[@]}" > "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json"
+          # Resolve npx outside the consumer checkout so a repository whose own
+          # package is named model-eol cannot shadow the requested published bin.
+          cd "$RUNNER_TEMP/model-eol-plan"
+          npx --yes --package="model-eol@$MODEL_EOL_VERSION" \
+            -c 'cd "$GITHUB_WORKSPACE" && if [ -f .model-eol.json ]; then model-eol plan .; else model-eol plan . --days 90 --scope direct; fi' \
+            > "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json"
       - name: Upload plan
         uses: actions/upload-artifact@v7
         with:
@@ -55,8 +58,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Provider credentials exist only in this read-only job. The evaluator
-      # forwards only names explicitly allowed by eval.pass_env.
+      # Add only the provider secrets required by trusted default-branch eval
+      # code, and list the same names in eval.pass_env. Environment filtering is
+      # not an OS sandbox; this job's hard boundary is that it has no write token.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -71,10 +75,8 @@ jobs:
           path: ${{ runner.temp }}/model-eol-plan
       - name: Apply and evaluate each migration independently
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Example (opt in only when needed by eval.pass_env):
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # A non-empty repository variable overrides eval.command. Otherwise
           # the strictly validated command in .model-eol.json is used.
           MODEL_EOL_EVAL_COMMAND: ${{ vars.MODEL_EOL_EVAL_COMMAND }}
@@ -85,8 +87,9 @@ jobs:
             echo "refusing invalid resolved model-eol version: $MODEL_EOL_VERSION" >&2
             exit 1
           fi
+          cd "$RUNNER_TEMP/model-eol-eval"
           npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol-bot evaluate \
-            --target-dir . \
+            --target-dir "$GITHUB_WORKSPACE" \
             --plan-file "$RUNNER_TEMP/model-eol-plan/model-eol-plan.json" \
             --output-file "$RUNNER_TEMP/model-eol-eval/model-eol-eval-results.json"
       - name: Upload bounded eval results
@@ -134,15 +137,21 @@ jobs:
           MODEL_EOL_EVAL_COMMAND: ${{ vars.MODEL_EOL_EVAL_COMMAND }}
           MODEL_EOL_TOKEN_KIND: ${{ secrets.MODEL_EOL_BOT_TOKEN && 'external-token' || 'github-token' }}
         run: |
+          mkdir -p "$RUNNER_TEMP/model-eol-publish"
           MODEL_EOL_VERSION="$(cat "$RUNNER_TEMP/model-eol-plan/model-eol-version")"
           if [[ ! "$MODEL_EOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "refusing invalid resolved model-eol version: $MODEL_EOL_VERSION" >&2
             exit 1
           fi
-          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol-bot --repo "${{ github.repository }}" --target-dir .
+          cd "$RUNNER_TEMP/model-eol-publish"
+          npx --yes --package="model-eol@$MODEL_EOL_VERSION" model-eol-bot \
+            --repo "${{ github.repository }}" \
+            --target-dir "$GITHUB_WORKSPACE"
 
 # A PR made with GITHUB_TOKEN does not trigger pull_request workflows. For
 # required checks, store a narrowly scoped fine-grained PAT or GitHub App token
 # as MODEL_EOL_BOT_TOKEN. Keep provider keys out of the publish job.
+# For migration evidence, copy examples/model-eol-eval.mjs into the consumer,
+# customize its dedicated eval command, and set eval.command in .model-eol.json.
 # Set feeds.allow_vendored_fallback: true only for degraded report-only runs.
 # Independent concurrent invocations need external mutual exclusion.
