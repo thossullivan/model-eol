@@ -60,8 +60,15 @@
             "evidence": { "type": "string" },
             "status": { "$ref": "#/definitions/status" },
             "shutdown": { "type": ["string", "null"] },
+            "date_precision": { "enum": ["exact", "earliest", null] },
+            "distribution_status": { "enum": ["active", "legacy", "extended-access", "retired", null] },
             "via": { "type": ["string", "null"] },
+            "requested_via": { "type": ["string", "null"] },
             "days": { "type": ["integer", "null"] },
+            "threshold_days": { "type": "integer", "minimum": 0 },
+            "effective_scope": { "enum": ["all", "direct"] },
+            "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
+            "mapped_from": { "type": "string", "minLength": 1 },
             "safe_until": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
             "replacement": { "type": ["string", "null"] },
             "source": { "type": ["string", "null"] },
@@ -92,6 +99,8 @@
             "resolved_provider": { "type": "string" },
             "confidence": { "$ref": "#/definitions/confidence" },
             "evidence": { "type": "string" },
+            "effective_scope": { "enum": ["all", "direct"] },
+            "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
             "reason": { "type": "string" }
           }
         }
@@ -123,6 +132,18 @@
         "bytes": { "type": "integer", "minimum": 0 },
         "limit_bytes": { "type": "integer", "minimum": 0 },
         "limit_files": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "policyProvenance": {
+      "type": "object",
+      "required": ["override_indexes", "route_index"],
+      "properties": {
+        "override_indexes": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "route_index": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     }

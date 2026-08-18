@@ -19,8 +19,18 @@ import path from 'node:path'
 
 import { applyPlan } from './lib/apply.mjs'
 import { parseCliArgs } from './lib/cli.mjs'
-import { CLI_DEFAULT_CONFIG, DEFAULT_CONFIG, loadConfig, normalizeConfig } from './lib/config.mjs'
-import { findingFromRef, isBad, loadFeeds } from './lib/feeds.mjs'
+import {
+  CLI_DEFAULT_CONFIG,
+  DEFAULT_CONFIG,
+  configForRepoPath,
+  configuredVias,
+  loadConfig,
+  mappedRoutesForRepoPath,
+  normalizeConfig,
+  routeForRepoReference,
+} from './lib/config.mjs'
+import { BUILTIN_CHANNELS, findingFromRef, isBad, loadFeeds } from './lib/feeds.mjs'
+import { normalizeRepoPath } from './lib/glob.mjs'
 import { buildPlan } from './lib/plan.mjs'
 import {
   buildAlert,
@@ -71,6 +81,15 @@ const configForTargets = ({ targets, explicit }) => {
     throw new Error(`multiple .model-eol.json files found (${files.join(', ')}); use --config FILE to choose one`)
   }
   return { file: files[0] ?? null, roots }
+}
+
+const repoPathForFile = (file, roots) => {
+  const absolute = path.resolve(file)
+  const candidates = roots
+    .map(root => ({ root, relative: path.relative(root, absolute) }))
+    .filter(({ relative }) => relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+    .sort((a, b) => b.root.length - a.root.length)
+  return normalizeRepoPath(candidates[0]?.relative ?? absolute)
 }
 
 const main = () => {
@@ -222,6 +241,37 @@ if (feedData.entries.size === 0) {
   return 2
 }
 
+const allowedVias = new Set([...BUILTIN_CHANNELS, ...feedData.vias])
+const unknownVia = [values.via, ...configuredVias(repositoryConfig)]
+  .find(via => via && !allowedVias.has(via))
+if (unknownVia) {
+  console.error(`unknown lifecycle channel "${unknownVia}"; known values: ${[...allowedVias].sort().join(', ')}`)
+  return 2
+}
+const unresolvedRoute = repositoryConfig.routes.find(route => route.model && !feedData.entries.has(route.model))
+if (unresolvedRoute) {
+  console.error(`configured route model "${unresolvedRoute.model}" is not present in loaded feeds`)
+  return 2
+}
+
+const policyCache = new Map()
+const policyForFile = file => {
+  const absolute = path.resolve(file)
+  if (!policyCache.has(absolute)) {
+    const repoPath = repoPathForFile(absolute, configLocation.roots)
+    policyCache.set(absolute, { ...configForRepoPath(repositoryConfig, repoPath), repoPath })
+  }
+  return policyCache.get(absolute)
+}
+const routeForReference = ({ file, matched, id }) => {
+  const policy = policyForFile(file)
+  return routeForRepoReference(repositoryConfig, policy.repoPath, { matched, id })
+}
+const mappedRoutesForFile = file => {
+  const policy = policyForFile(file)
+  return mappedRoutesForRepoPath(repositoryConfig, policy.repoPath)
+}
+
 let scan
 try {
   scan = scanTargets({
@@ -229,10 +279,11 @@ try {
     entries: feedData.entries,
     keys: feedData.keys,
     includeDocs: INCLUDE_DOCS,
-    ignoreModels: repositoryConfig.ignore.models,
-    ignorePaths: repositoryConfig.ignore.paths,
     ignoreRoots: configLocation.roots,
     ignoredFiles: configLocation.file ? [configLocation.file] : [],
+    policyForFile,
+    routeForReference,
+    mappedRoutesForFile,
   })
 } catch (e) {
   console.error(`scan failed: ${e.message}`)
@@ -250,10 +301,32 @@ if (incompleteNotes.length && (command === 'check' || command === 'plan')) {
   if (!ALLOW_INCOMPLETE) return 2
 }
 
-const findings = scan.modelRefs.map(ref => findingFromRef(ref, { days: DAYS, via: VIA }))
-const checkFindings = SCOPE === 'direct'
-  ? findings.filter(f => f.usage === 'direct-api' || f.usage === 'model-reference')
-  : findings
+const findings = scan.modelRefs.map(ref => {
+  const policy = policyForFile(ref.file)
+  const route = routeForReference({ file: ref.file, matched: ref.matched, id: ref.id })
+  const days = values.days === undefined ? policy.days : DAYS
+  const scope = values.scope === undefined ? policy.scope : SCOPE
+  const via = values.via === undefined ? (route?.via ?? policy.via) : VIA
+  const finding = findingFromRef(ref, { days, via })
+  finding.effective_scope = scope
+  finding.requested_via = via
+  if (policy.override_indexes.length || route) {
+    finding.policy_provenance = {
+      override_indexes: policy.override_indexes,
+      route_index: route?.index ?? null,
+    }
+  }
+  return finding
+})
+for (const candidate of scan.candidateRefs) {
+  const policy = policyForFile(candidate.file)
+  candidate.effective_scope = values.scope === undefined ? policy.scope : SCOPE
+  if (policy.override_indexes.length) {
+    candidate.policy_provenance = { override_indexes: policy.override_indexes, route_index: null }
+  }
+}
+const checkFindings = findings.filter(finding =>
+  finding.effective_scope !== 'direct' || finding.usage === 'direct-api' || finding.usage === 'model-reference')
 let changedFindings = checkFindings
 if (CHANGED_BASE !== null) {
   try {

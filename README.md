@@ -163,6 +163,37 @@ coverage limits are counted. With no config the CLI keeps its historical
 (`days: 90`, `scope: direct`, and the publisher clock). The complete contract is
 [`schema/model-eol.bot-config.schema.json`](schema/model-eol.bot-config.schema.json).
 
+Mixed-provider monorepos can keep those top-level values as repository defaults,
+then apply path policies and a lifecycle channel per reference:
+
+```json
+{
+  "days": 90,
+  "scope": "direct",
+  "overrides": [
+    { "paths": ["services/**"], "scope": "all" },
+    { "paths": ["services/bedrock/**"], "days": 180, "via": "aws-bedrock" }
+  ],
+  "routes": [
+    { "paths": ["services/vertex/**"], "via": "vertex-ai" },
+    {
+      "paths": ["services/bedrock/**"],
+      "match": "chat-prod",
+      "model": "claude-3-7-sonnet-20250219",
+      "via": "aws-bedrock"
+    }
+  ]
+}
+```
+
+Matching overrides apply in order: later scalar values win and ignore lists are
+additive. The last matching route wins. Exact `match`/`model` pairs resolve a
+repository deployment alias without making cloud or gateway references patchable.
+Explicit CLI flags and Action inputs still take precedence. JSON inventory and
+plan output records each reference's effective threshold, scope, requested
+channel, and matching rule indexes, so a Bedrock service and a direct publisher
+call in the same repository do not silently share one global clock.
+
 ## Same weights, different clocks
 
 The same model retires on different dates per channel, and a checker that ignores
@@ -203,20 +234,24 @@ stay visible without generating false alarms.
 The scanner covers code and configuration files with [`CODE_EXT`](lib/scanner.mjs)
 as the source of truth - Python, TypeScript/JavaScript, JSON/YAML/TOML, shell,
 Ruby, Go, Java, C#, Rust, C/C++, PHP, Swift, Kotlin, Terraform, SQL, Scala, and
-Objective-C. Terraform files (`.tf`, `.tfvars`) are scanned while `.terraform`
-directories stay excluded.
+Objective-C, including `.baml` sources. Publisher-compatible BAML provider/model
+pairs are eligible plan targets; generated BAML clients and conservative
+`DO NOT EDIT`/`@generated` sources are skipped. Model-eol's own JSON reports are
+also skipped on reruns, while third-party CycloneDX files remain scannable unless
+they carry explicit model-eol generator provenance. Terraform files (`.tf`,
+`.tfvars`) are scanned while `.terraform` directories stay excluded.
 
 ## The bot
 
 Copy `bot.yml.example` to `.github/workflows/model-eol-bot.yml` for a weekly run
 that maintains exactly one labelled migration PR per retiring model (full feed
 context in the body, never auto-merged) and one issue per finding that needs a
-human. The workflow runs `model-eol@0` from npm in both jobs; consumer repositories
-do not need to copy `check.mjs` or the `bot/` source directory. Dismissals are
-respected; a changed shutdown date reopens. Configure via `.model-eol.json`:
-thresholds, scope, ignores, and an optional plan-level eval hook that can inspect
-`MODEL_EOL_PLAN` before publication. Preview everything with no GitHub calls and
-without adding a project dependency:
+human. The workflow resolves `model-eol@0` from npm once and reuses that exact
+version across its plan, read-only evaluation, and write-token publication jobs;
+consumer repositories do not copy `check.mjs` or the `bot/` source directory.
+Dismissals are respected, reintroduced retired models create fresh work, and
+bot-owned PRs/issues close when their finding disappears. Preview everything with
+no GitHub calls and without adding a project dependency:
 
 ```sh
 npx --yes --package=model-eol@0 model-eol-bot --dry-run --target-dir . --repo OWNER/REPO
@@ -225,21 +260,24 @@ npx --yes --package=model-eol@0 model-eol-bot --dry-run --target-dir . --repo OW
 The workflow honors configured `days`, `scope`, and `via` values; without a config
 it uses the bot defaults of 90 days and direct references. `eval.command` also
 comes from the config unless the `MODEL_EOL_EVAL_COMMAND` repository variable is
-set as an explicit workflow override. In the split workflow this command runs
-once in the unmodified, read-only checkout; it is a plan preflight, not a test of
-each patched migration branch.
+set as an explicit workflow override. Each patchable model is applied in an
+isolated checkout and evaluated independently with its own old/new IDs, timeout,
+bounded report, and explicitly allowed environment. The content-bound result
+manifest lets passing migrations proceed while a failing peer remains blocked.
 
 On its first actionable run, the bot creates the `model-eol` label. If repository
-policy prevents label creation or assignment, it warns and still publishes work;
-metadata in each PR or issue preserves idempotence. For HTTPS remotes—including
-private repositories—the bot passes `GITHUB_TOKEN` to its temporary Git processes
-as a host-scoped authorization header and never places it in a remote URL.
+policy prevents label creation or assignment, it fails closed rather than publish
+work whose ownership cannot be authenticated. Existing work is trusted only when
+the label, metadata, deterministic branch, repository, base, and Git lease agree.
+For HTTPS remotes—including private repositories—the bot passes `GITHUB_TOKEN` to
+temporary Git processes as a host-scoped authorization header and never places it
+in a remote URL.
 
 Two operational notes the hard way teaches: PRs created with `GITHUB_TOKEN` do not
 trigger `pull_request` workflows (use a fine-grained PAT or GitHub App token when
 checks must run, stored as the optional `MODEL_EOL_BOT_TOKEN` secret), and the
-workflow splits privileges—provider keys live only in the read-only plan/eval job,
-write tokens only in the publish job.
+workflow splits privileges—provider keys live only in the read-only evaluation
+job, while write tokens live only in the reconciliation job.
 
 ## Keeping the feeds honest
 

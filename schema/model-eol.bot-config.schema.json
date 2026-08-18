@@ -54,6 +54,18 @@
       },
       "default": { "models": [], "paths": [] }
     },
+    "overrides": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/pathOverride" },
+      "default": [],
+      "description": "Path-scoped policy overrides. Matching entries apply in array order; later scalar values win and ignore lists are additive."
+    },
+    "routes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/referenceRoute" },
+      "default": [],
+      "description": "Path- and optionally reference-scoped distributor routes. The last matching route wins. Exact match/model pairs can resolve repository deployment aliases to canonical feed IDs."
+    },
     "issues": {
       "type": "object",
       "additionalProperties": false,
@@ -104,7 +116,56 @@
     "via": null,
     "feeds": { "allow_vendored_fallback": false },
     "ignore": { "models": [], "paths": [] },
+    "overrides": [],
+    "routes": [],
     "issues": { "enabled": true },
     "eval": { "command": null, "timeout_ms": 600000, "max_report_bytes": 65536, "pass_env": [] }
+  },
+  "definitions": {
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "nonEmptyStringArray": {
+      "allOf": [
+        { "$ref": "#/definitions/stringArray" },
+        { "minItems": 1 }
+      ]
+    },
+    "ignore": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "models": { "$ref": "#/definitions/stringArray" },
+        "paths": { "$ref": "#/definitions/stringArray" }
+      }
+    },
+    "pathOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paths"],
+      "properties": {
+        "paths": { "$ref": "#/definitions/nonEmptyStringArray" },
+        "days": { "type": "integer", "minimum": 0 },
+        "scope": { "enum": ["direct", "all"] },
+        "via": { "type": ["string", "null"], "minLength": 1 },
+        "ignore": { "$ref": "#/definitions/ignore" }
+      }
+    },
+    "referenceRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paths", "via"],
+      "properties": {
+        "paths": { "$ref": "#/definitions/nonEmptyStringArray" },
+        "via": { "type": "string", "minLength": 1 },
+        "match": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 }
+      },
+      "dependencies": {
+        "match": ["model"],
+        "model": ["match"]
+      }
+    }
   }
 }
