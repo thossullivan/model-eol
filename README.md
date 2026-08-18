@@ -290,7 +290,8 @@ move any of us can make here.
   lifecycle fetcher is not built yet.
 - On npm as [`model-eol`](https://www.npmjs.com/package/model-eol). Material feed
   changes republish automatically as patch versions (trusted publishing with
-  provenance), so `npx model-eol` always checks against current dates.
+  provenance), while manual code releases require an explicit stable version, so
+  `npx model-eol` always checks against current dates.
 - Not yet: feed signing, gateway route resolvers.
 
 ## Contributing
