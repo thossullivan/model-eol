@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-08-18T00:47:44.931Z",
+  "generated": "2026-08-31T05:30:20.090Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -574,7 +574,11 @@
       ]
     },
     {
-      "id": "gemini-omni-flash-preview"
+      "id": "gemini-omni-flash-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-09-30",
+      "date_precision": "earliest",
+      "replacement": "gemini-omni-1.1-flash"
     },
     {
       "id": "gemini-robotics-er-2-preview"
@@ -610,7 +614,20 @@
       "id": "gemini-robotics-er-2-streaming-preview"
     },
     {
-      "id": "gemini-3.5-live-translate-preview"
+      "id": "gemini-3.5-live-translate-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.5-transcribe-live",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.5-transcribe",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-omni-1.1-flash",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
     }
   ]
 }
