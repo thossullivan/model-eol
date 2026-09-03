@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-08-18T00:47:44.930Z",
+  "generated": "2026-08-31T05:30:19.216Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -937,7 +937,14 @@
       "id": "text-embedding-ada-002"
     },
     {
-      "id": "whisper-1"
+      "id": "whisper-1",
+      "announced": "2026-08-26",
+      "shutdown": "2027-02-26",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement_options": [
+        "gpt-live-transcribe",
+        "gpt-transcribe"
+      ]
     },
     {
       "id": "tts-1"
@@ -988,10 +995,24 @@
       "id": "gpt-4o-mini-search-preview"
     },
     {
-      "id": "gpt-4o-transcribe"
+      "id": "gpt-4o-transcribe",
+      "announced": "2026-08-26",
+      "shutdown": "2027-02-26",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement_options": [
+        "gpt-live-transcribe",
+        "gpt-transcribe"
+      ]
     },
     {
-      "id": "gpt-4o-mini-transcribe"
+      "id": "gpt-4o-mini-transcribe",
+      "announced": "2026-08-26",
+      "shutdown": "2027-02-26",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement_options": [
+        "gpt-live-transcribe",
+        "gpt-transcribe"
+      ]
     },
     {
       "id": "gpt-4o-mini-tts"
@@ -1009,7 +1030,14 @@
       "id": "gpt-4.1-mini"
     },
     {
-      "id": "gpt-4o-transcribe-diarize"
+      "id": "gpt-4o-transcribe-diarize",
+      "announced": "2026-08-26",
+      "shutdown": "2027-02-26",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement_options": [
+        "gpt-live-transcribe",
+        "gpt-transcribe"
+      ]
     },
     {
       "id": "gpt-5"
