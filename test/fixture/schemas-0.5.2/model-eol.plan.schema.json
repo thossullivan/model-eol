@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.plan.schema.json",
+  "title": "model-eol migration plan",
+  "description": "Deterministic, hash-guarded migration plan emitted by `model-eol plan`.",
+  "type": "object",
+  "required": ["plan_schema", "generated", "threshold_days", "via", "scan_notes", "items", "issues"],
+  "properties": {
+    "plan_schema": { "const": "model-eol.plan/0.1" },
+    "generated": { "type": "string", "format": "date-time" },
+    "threshold_days": { "type": "integer", "minimum": 0 },
+    "via": { "type": ["string", "null"] },
+    "scan_notes": { "type": "array", "items": { "$ref": "#/definitions/scanNote" } },
+    "items": { "type": "array", "items": { "$ref": "#/definitions/item" } },
+    "issues": { "type": "array", "items": { "$ref": "#/definitions/issue" } }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "item": {
+      "type": "object",
+      "required": ["file", "line", "occurrence", "matched", "expected_line_sha256", "id", "publisher", "replacement", "shutdown", "days", "status", "sources", "notes"],
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 },
+        "occurrence": { "type": "integer", "minimum": 0 },
+        "matched": { "type": "string", "minLength": 1 },
+        "expected_line_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "id": { "type": "string", "minLength": 1 },
+        "publisher": { "type": "string", "minLength": 1 },
+        "replacement": { "type": "string", "minLength": 1 },
+        "shutdown": { "type": "string", "format": "date" },
+        "days": { "type": "integer" },
+        "status": { "enum": ["retired", "retiring"] },
+        "requested_via": { "type": ["string", "null"] },
+        "threshold_days": { "type": "integer", "minimum": 0 },
+        "effective_scope": { "enum": ["all", "direct"] },
+        "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
+        "mapped_from": { "type": "string", "minLength": 1 },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "required": ["file", "line", "reason"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "matched": { "type": "string" },
+        "id": { "type": "string" },
+        "publisher": { "type": "string" },
+        "usage": { "enum": ["direct-api", "cloud-provider", "gateway", "model-reference"] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "status": { "enum": ["retired", "retiring", "scheduled", "watch", "ok"] },
+        "shutdown": { "type": ["string", "null"], "format": "date" },
+        "via": { "type": ["string", "null"] },
+        "requested_via": { "type": ["string", "null"] },
+        "days": { "type": ["integer", "null"] },
+        "threshold_days": { "type": "integer", "minimum": 0 },
+        "effective_scope": { "enum": ["all", "direct"] },
+        "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
+        "mapped_from": { "type": "string", "minLength": 1 },
+        "replacement": { "type": ["string", "null"] },
+        "replacement_options": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+        },
+        "replacement_note": { "type": "string" },
+        "provider": { "type": "string" },
+        "reason": { "type": "string", "minLength": 1 },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "scanNote": {
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "file": { "type": "string" },
+        "message": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "limit_bytes": { "type": "integer", "minimum": 0 },
+        "limit_files": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "policyProvenance": {
+      "type": "object",
+      "required": ["override_indexes", "route_index"],
+      "properties": {
+        "override_indexes": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "route_index": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

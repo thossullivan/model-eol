@@ -112,7 +112,7 @@ assert(['retiring', 'retired'].includes(byId('claude-opus-4-1-20250805')?.status
 assert(byId('gpt-5.6-sol')?.status === 'ok', 'gpt-5.6-sol is clean')
 assert(byId('gpt-5.6-sol')?.safe_until === null, 'OpenAI clean models make no forward claim without a policy floor')
 assert(byId('o3-deep-research-2025-06-26')?.replacement === 'gpt-5.6-sol', 'replacement surfaced')
-assert(byId('o3-deep-research-2025-06-26')?.waiver === null, 'non-waived findings carry explicit null waiver metadata')
+assert(!Object.hasOwn(byId('o3-deep-research-2025-06-26'), 'waiver'), 'non-waived findings omit waiver metadata')
 
 // Direct scope: the recommended direct-first CI mode leaves cloud/gateway-adjacent
 // refs for inventory/resolvers while still failing on direct or generic refs.
@@ -281,6 +281,14 @@ writeWaiverConfig({
 const expiredWaiverCheck = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json'])
 const expiredWaivedFinding = JSON.parse(expiredWaiverCheck.out).findings[0]
 assert(expiredWaiverCheck.code === 1 && expiredWaivedFinding?.waiver?.active === false && expiredWaivedFinding.waiver.expires === todayDate, 'a waiver is inactive on its exact expiry date and the finding reactivates')
+const expiredWaiverInventory = JSON.parse(run(['inventory', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out)
+const expiredWaiverSchedule = JSON.parse(run(['schedule', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out)
+const expiredWaiverAlert = JSON.parse(run(['alert', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out)
+const expiredWaiverPlan = JSON.parse(run(['plan', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all']).out)
+assert(expiredWaiverInventory.model_references[0]?.waiver?.active === false, 'inventory preserves an expired matched waiver')
+assert(expiredWaiverSchedule.items[0]?.waiver?.active === false, 'schedule preserves an expired matched waiver')
+assert(expiredWaiverAlert.errors[0]?.waiver?.active === false, 'alert preserves an expired matched waiver')
+assert(expiredWaiverPlan.items[0]?.waiver?.active === false, 'plan preserves an expired matched waiver')
 const expiredWaiverText = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all'])
 assert(expiredWaiverText.out.includes(`waiver expired on ${todayDate}; owner @platform-team`), 'human check output explains an expired waiver')
 
@@ -288,13 +296,13 @@ writeWaiverConfig({ waivers: [baseWaiver] })
 const pathScopedWaivers = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out).findings
 const legacyPathFinding = pathScopedWaivers.find(item => item.file.endsWith('services/legacy/app.py'))
 const currentPathFinding = pathScopedWaivers.find(item => item.file.endsWith('services/current/app.py'))
-assert(legacyPathFinding?.waiver?.active === true && currentPathFinding?.waiver === null, 'waiver paths suppress only matching repository paths')
+assert(legacyPathFinding?.waiver?.active === true && !Object.hasOwn(currentPathFinding, 'waiver'), 'waiver paths suppress only matching repository paths')
 
 writeWaiverConfig({
   overrides: [{ paths: ['services/legacy/**'], waivers: [{ ...baseWaiver, paths: undefined }] }],
 })
 const overrideWaivers = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out).findings
-assert(overrideWaivers.find(item => item.file.endsWith('services/legacy/app.py'))?.waiver?.active === true && overrideWaivers.find(item => item.file.endsWith('services/current/app.py'))?.waiver === null, 'path overrides accept the same waiver shape and scope it to matching files')
+assert(overrideWaivers.find(item => item.file.endsWith('services/legacy/app.py'))?.waiver?.active === true && !Object.hasOwn(overrideWaivers.find(item => item.file.endsWith('services/current/app.py')), 'waiver'), 'path overrides accept the same waiver shape and scope it to matching files')
 
 writeWaiverConfig({
   via: 'azure-ai-foundry',
@@ -302,7 +310,7 @@ writeWaiverConfig({
   waivers: [{ ...baseWaiver, via: 'aws-bedrock' }],
 })
 const mismatchedViaFinding = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '365', '--scope', 'all', '--json']).out).findings[0]
-assert(mismatchedViaFinding?.via === 'azure-ai-foundry' && mismatchedViaFinding.waiver === null, 'a distributor-scoped waiver does not match a different finding clock')
+assert(mismatchedViaFinding?.via === 'azure-ai-foundry' && !Object.hasOwn(mismatchedViaFinding, 'waiver'), 'a distributor-scoped waiver does not match a different finding clock')
 writeWaiverConfig({
   via: 'azure-ai-foundry',
   ignore: { paths: ['services/current/**'] },

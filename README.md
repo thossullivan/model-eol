@@ -197,10 +197,11 @@ Draft-07 cannot express cleanly.
 
 Ignores hide inventory noise from non-dependency artifacts. Waivers record owned,
 expiring exceptions for live dependencies. A waiver never hides its finding.
-Every report includes its reason, owner, expiry, and active state. Active waivers
-remove retired or retiring findings from failure and badge totals. Alerts emit
-these findings as warnings. Plans retain them without creating migration work.
-Expired waivers explain why their findings became actionable again.
+The `waiver` field appears on a finding only when a waiver matched it. It records
+the reason, owner, expiry, and active state. Active waivers remove retired or
+retiring findings from failure and badge totals. Alerts emit these findings as
+warnings. Plans retain them without creating migration work. Expired waivers
+explain why their findings became actionable again.
 
 The expiry date uses UTC calendar dates. A waiver becomes inactive on its expiry
 date. A model alias matches its whole canonical alias family. Optional `paths`
