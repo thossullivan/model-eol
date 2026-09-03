@@ -46,7 +46,7 @@
     },
     "modelReference": {
       "type": "object",
-      "required": ["file", "line", "kind", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "evidence", "status", "shutdown", "via", "days", "safe_until", "replacement", "source"],
+      "required": ["file", "line", "kind", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "evidence", "status", "shutdown", "via", "days", "safe_until", "replacement", "waiver", "source"],
       "properties": {
         "file": { "type": "string", "minLength": 1 },
         "line": { "type": "integer", "minimum": 1 },
@@ -77,6 +77,7 @@
           "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
         },
         "replacement_note": { "type": "string", "minLength": 1 },
+        "waiver": { "$ref": "#/definitions/waiver" },
         "source": { "type": ["string", "null"], "format": "uri" },
         "policy": {
           "type": ["object", "null"],
@@ -145,6 +146,17 @@
           "items": { "type": "integer", "minimum": 0 }
         },
         "route_index": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "waiver": {
+      "type": ["object", "null"],
+      "required": ["reason", "owner", "expires", "active"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "owner": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "expires": { "type": "string", "format": "date" },
+        "active": { "type": "boolean" }
       },
       "additionalProperties": false
     }

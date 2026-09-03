@@ -102,6 +102,23 @@ for (const name of credentialEnvironmentNames) {
 }
 assert.equal(validateJsonSchema({ eval: { pass_env: ['OPENAI_API_KEY', 'MODEL_EOL_REPORT', 'AWS_REGION'] } }, catalog.byType.get('config')).length, 0, 'the standalone config schema permits explicit non-credential eval inputs')
 
+const validWaiver = {
+  model: 'test-model',
+  paths: ['services/legacy/**'],
+  via: 'aws-bedrock',
+  reason: 'A migration is scheduled.',
+  owner: '@platform-team',
+  expires: '2026-12-31',
+}
+assert.equal(validateJsonSchema({ waivers: [validWaiver] }, catalog.byType.get('config')).length, 0, 'the standalone config schema accepts a bounded owned waiver')
+assert.equal(normalizeConfig({ overrides: [{ paths: ['services/**'], waivers: [validWaiver] }] }).overrides[0].waivers.length, 1, 'runtime config normalization accepts waivers inside path overrides')
+const aggregateWaiverConfig = {
+  waivers: Array.from({ length: 500 }, () => validWaiver),
+  overrides: [{ paths: ['services/**'], waivers: [validWaiver] }],
+}
+assert.equal(validateJsonSchema(aggregateWaiverConfig, catalog.byType.get('config')).length, 0, 'portable config structure leaves the aggregate waiver cap to semantic validation')
+assert.throws(() => normalizeConfig(aggregateWaiverConfig), /at most 500 waivers/, 'runtime config normalization enforces the aggregate waiver cap across root and overrides')
+
 const cycloneDxReference = ({
   file,
   line,
@@ -111,6 +128,7 @@ const cycloneDxReference = ({
   status,
   shutdown,
   distributionStatus = null,
+  waiver = null,
 }) => ({
   file,
   line,
@@ -128,9 +146,10 @@ const cycloneDxReference = ({
   replacement: 'next-model',
   replacement_options: null,
   replacement_note: null,
+  waiver,
 })
 const mixedClockReferences = [
-  cycloneDxReference({ file: 'z-direct.py', line: 9, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01' }),
+  cycloneDxReference({ file: 'z-direct.py', line: 9, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: { reason: 'Migration scheduled.', owner: '@platform-team', expires: '2026-12-31', active: true } }),
   cycloneDxReference({ file: 'a-direct.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retiring', shutdown: '2026-08-01' }),
   cycloneDxReference({ file: 'a-direct.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retiring', shutdown: '2026-08-01' }),
   cycloneDxReference({ file: 'custom-publisher/service.ts', line: 3, usage: 'gateway', requestedVia: 'publisher', via: 'publisher', status: 'scheduled', shutdown: '2027-02-01' }),
@@ -151,6 +170,7 @@ assert.equal(new Set(mixedClockCycloneDx.components.map(component => component['
 assert(mixedClockCycloneDx.components.every(component => component['bom-ref'].includes(`:${encodeURIComponent(cycloneDxProperty(component, 'model-eol:lifecycle_channel'))}`)), 'each component bom-ref carries its lifecycle channel')
 assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:status'), 'retired', 'direct publisher lifecycle does not inherit a distributor status')
 assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:shutdown'), '2026-08-01', 'direct publisher lifecycle keeps its own shutdown clock')
+assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:waiver_owner'), '@platform-team', 'CycloneDX component properties expose active waiver ownership')
 assert.equal(cycloneDxProperty(componentForChannel('publisher'), 'model-eol:shutdown'), '2027-02-01', 'a custom distribution literally named publisher does not collide with the direct publisher clock')
 assert.equal(cycloneDxProperty(componentForChannel('azure-ai-foundry'), 'model-eol:shutdown'), '2027-01-01', 'Azure lifecycle keeps its separate shutdown clock')
 assert.equal(cycloneDxProperty(componentForChannel('aws-bedrock'), 'model-eol:distribution_status'), 'extended-access', 'Bedrock lifecycle keeps its channel-specific distribution status')
@@ -273,10 +293,19 @@ try {
     assert.match(validation.out, new RegExp(`valid ${type} document`), `${type} is automatically selected by discriminator`)
   }
 
+  assert(generated.get('check').findings.every(item => Object.hasOwn(item, 'waiver')), 'check findings always emit required nullable waiver metadata')
+  assert(generated.get('inventory').model_references.every(item => Object.hasOwn(item, 'waiver')), 'inventory findings always emit required nullable waiver metadata')
+  assert(generated.get('schedule').items.every(item => Object.hasOwn(item, 'waiver')), 'schedule findings always emit required nullable waiver metadata')
+  assert(generated.get('alert').errors.every(item => Object.hasOwn(item, 'waiver')), 'alert model findings always emit required nullable waiver metadata')
+  assert([...generated.get('plan').items, ...generated.get('plan').issues].every(item => Object.hasOwn(item, 'waiver')), 'plan findings always emit required nullable waiver metadata')
+
   assert.equal(generated.get('check').schema, 'model-eol/check@0.1', 'check --json emits its stable public discriminator')
   const strictCheckFinding = structuredClone(generated.get('check'))
   strictCheckFinding.findings[0].unexpected = true
   assert(validateDocument(strictCheckFinding, { type: 'check' }).errors.some(error => error.path === '$.findings[0].unexpected' && error.keyword === 'additionalProperties'), 'check findings reject unknown nested fields')
+  const missingCheckWaiver = structuredClone(generated.get('check'))
+  delete missingCheckWaiver.findings[0].waiver
+  assert(validateDocument(missingCheckWaiver, { type: 'check' }).errors.some(error => error.path === '$.findings[0].waiver' && error.keyword === 'required'), 'check findings require nullable waiver metadata')
   const artifactInventory = JSON.parse(run(['inventory', tempRoot, '--json']).out)
   assert(!artifactInventory.model_references.some(reference => reference.file.endsWith('/check.json')), 'a generated check report is not re-ingested as repository model usage')
   assert(artifactInventory.scan_notes.some(note => note.reason === 'model-eol-document-skipped' && note.file.endsWith('/check.json')), 'scanner records the generated check report as an intentional product artifact skip')
@@ -398,6 +427,12 @@ try {
   const missingRouteModel = run(['validate', missingRouteModelPath, '--type', 'config'])
   assert.equal(missingRouteModel.code, 2, 'Draft-07 property dependencies are enforced')
   assert.match(missingRouteModel.err, /\.model: is required when match is present/, 'dependency errors identify the missing peer')
+
+  const aggregateWaiverPath = path.join(tempRoot, 'aggregate-waivers.json')
+  writeJson(aggregateWaiverPath, aggregateWaiverConfig)
+  const aggregateWaivers = run(['validate', aggregateWaiverPath, '--type', 'config'])
+  assert.equal(aggregateWaivers.code, 2, 'public config validation enforces the aggregate waiver cap')
+  assert.match(aggregateWaivers.err, /at most 500 waivers/, 'aggregate waiver cap errors name the semantic resource bound')
 
   const crossedSchedule = structuredClone(generated.get('schedule'))
   crossedSchedule.scan_notes = [{ reason: 'test', unexpected: true }]

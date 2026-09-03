@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 
 import {
+  activeWaiver,
   branchFor,
   daysRemaining,
   hasMetadataMarker,
@@ -19,8 +20,11 @@ import {
   metadataLine,
   parseMetadata,
   repoPath,
+  sameWaiverGeneration,
   sha256,
+  staleWorkComment,
   stableJson,
+  waiverExpiryFor,
 } from './lib/common.mjs'
 import { assertValidPlanDocument } from '../lib/validate-document.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
@@ -342,6 +346,7 @@ const buildModelGroups = (plan, config, root, records) => {
   const ignoredIds = ignoredModelIds(plan, config)
   const groups = new Map()
   for (const item of plan.items) {
+    if (activeWaiver(item)) continue
     if (isIgnored(item, root, config, ignoredIds)) continue
     const via = Object.hasOwn(item, 'requested_via') ? item.requested_via : plan.via
     const key = `${item.publisher}\0${item.id}\0${via ?? ''}`
@@ -360,6 +365,8 @@ const buildModelGroups = (plan, config, root, records) => {
   }
   for (const group of groups.values()) {
     group.items.sort((a, b) => `${a.file}:${a.line}:${a.occurrence}`.localeCompare(`${b.file}:${b.line}:${b.occurrence}`))
+    const waiverExpiries = new Set(group.items.map(waiverExpiryFor))
+    group.waiverExpires = waiverExpiries.size === 1 ? [...waiverExpiries][0] : null
     group.feedDigest = itemDigest(group.items)
   }
   return [...groups.values()].sort((a, b) => `${a.publisher}/${a.id}`.localeCompare(`${b.publisher}/${b.id}`))
@@ -369,6 +376,7 @@ const buildIssueGroups = (plan, config, root, records) => {
   const ignoredIds = ignoredModelIds(plan, config)
   const groups = new Map()
   for (const issue of plan.issues) {
+    if (activeWaiver(issue)) continue
     if (!ISSUE_REASONS.has(issue.reason)) continue
     if (issue.reason !== 'unresolved-channel' && !ACTIONABLE_STATUSES.has(issue.status)) continue
     if (isIgnored(issue, root, config, ignoredIds)) continue
@@ -394,6 +402,8 @@ const buildIssueGroups = (plan, config, root, records) => {
   }
   for (const group of groups.values()) {
     group.issues.sort((a, b) => `${a.file}:${a.line}:${a.reason}`.localeCompare(`${b.file}:${b.line}:${b.reason}`))
+    const waiverExpiries = new Set(group.issues.map(waiverExpiryFor))
+    group.waiverExpires = waiverExpiries.size === 1 ? [...waiverExpiries][0] : null
     group.feedDigest = itemDigest(group.issues)
   }
   return [...groups.values()].sort((a, b) => `${a.publisher}/${a.subject}/${a.shutdown ?? ''}`.localeCompare(`${b.publisher}/${b.subject}/${b.shutdown ?? ''}`))
@@ -493,6 +503,7 @@ export const buildPullBody = ({ group, headSha, baseSha = null, now = new Date()
     replacement: item.replacement,
     replacement_options: item.replacement_options,
     replacement_note: item.replacement_note,
+    ...(group.waiverExpires ? { waiver_expires: group.waiverExpires } : {}),
     base_sha: baseSha,
     head_sha: headSha,
     feed_digest: group.feedDigest,
@@ -541,6 +552,7 @@ export const buildIssueBody = ({ group, now = new Date() }) => {
     replacement: issue.replacement ?? null,
     replacement_options: issue.replacement_options,
     replacement_note: issue.replacement_note,
+    ...(group.waiverExpires ? { waiver_expires: group.waiverExpires } : {}),
     head_sha: null,
     feed_digest: group.feedDigest,
     ...(group.channel ? { channel: group.channel } : {}),
@@ -640,8 +652,6 @@ const ownedIssueRecords = issues => issues
   .map(item => ({ item, metadata: parseMetadata(item.body) }))
   .filter(record => record.metadata)
 
-const staleWorkComment = kind => `model-eol is closing this bot-owned ${kind} because its finding is no longer actionable on the repository's current default branch. The reference may have been removed, ignored, retracted by the feed, moved to another clock, or disabled by repository configuration.`
-
 const staleClosedBody = (body, metadata) => {
   const lines = String(body ?? '').split(/\r?\n/)
   lines[0] = metadataLine({ ...metadata, stale_closed: true })
@@ -657,7 +667,7 @@ const groupFromMetadata = (kind, metadata) => ({
   branch: kind === 'model' ? branchFor(metadata.publisher, metadata.id, metadata.via ?? null) : undefined,
 })
 
-const reconcileStaleWork = async ({ api, pulls, issues, models, issueGroups }) => {
+const reconcileStaleWork = async ({ api, pulls, issues, models, issueGroups, plan }) => {
   const activeModels = new Set(models.map(group => modelIdentity(group.publisher, group.id, group.via)))
   const activeIssues = new Set(issueGroups.flatMap(group => {
     const exact = issueIdentity(group.publisher, group.id || group.subject, group.via, group.channel)
@@ -665,12 +675,23 @@ const reconcileStaleWork = async ({ api, pulls, issues, models, issueGroups }) =
       ? [exact]
       : [exact, issueIdentity(group.publisher, group.id || group.subject, group.via, null)]
   }))
+  const waivedModels = new Map()
+  const waivedIssues = new Map()
+  for (const item of [...plan.items, ...plan.issues]) {
+    const waiver = activeWaiver(item)
+    if (!waiver || !item.id || !item.publisher) continue
+    const via = Object.hasOwn(item, 'requested_via') ? item.requested_via : (item.via ?? plan.via)
+    const modelKey = modelIdentity(item.publisher, item.id, via)
+    const issueKey = issueIdentity(item.publisher, item.id, via, null)
+    if (!waivedModels.has(modelKey)) waivedModels.set(modelKey, waiver)
+    if (!waivedIssues.has(issueKey)) waivedIssues.set(issueKey, waiver)
+  }
   const decisions = []
   for (const record of ownedPullRecords(pulls, api.repo)) {
     if (!isOpen(record.item)) continue
     const key = modelIdentity(record.metadata.publisher, record.metadata.id, record.metadata.via)
     if (activeModels.has(key)) continue
-    await api.comment(record.item.number, staleWorkComment('pull request'))
+    await api.comment(record.item.number, staleWorkComment('pull request', waivedModels.get(key) ?? null))
     await api.updatePull(record.item.number, {
       state: 'closed',
       body: staleClosedBody(record.item.body, record.metadata),
@@ -683,7 +704,7 @@ const reconcileStaleWork = async ({ api, pulls, issues, models, issueGroups }) =
     const legacyKey = issueIdentity(record.metadata.publisher, record.metadata.id, record.metadata.via, null)
     const evalFailure = record.metadata.channel === EVAL_FAILURE_CHANNEL
     if (activeIssues.has(key) || (!evalFailure && activeIssues.has(legacyKey))) continue
-    await api.comment(record.item.number, staleWorkComment('issue'))
+    await api.comment(record.item.number, staleWorkComment('issue', waivedIssues.get(legacyKey) ?? waivedIssues.get(key) ?? null))
     await api.updateIssue(record.item.number, {
       state: 'closed',
       body: staleClosedBody(record.item.body, record.metadata),
@@ -1130,7 +1151,8 @@ const processModel = async ({ api, pulls, issueRecords, group, source, base, bas
   }
 
   const replacement = group.items[0].replacement
-  const dismissed = matches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  // Expiry separates post-waiver reintroductions from earlier dismissals.
+  const dismissed = matches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.stale_closed !== true && sameWaiverGeneration(record.metadata, group) && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (dismissed) return decision(group, 'skip-dismissed', { number: dismissed.item.number })
 
   const previous = matches.find(record => record.metadata?.head_sha) ?? null
@@ -1202,7 +1224,7 @@ const processModel = async ({ api, pulls, issueRecords, group, source, base, bas
   }
   const latestUntrusted = latestPulls.find(item => pullOnExpectedBranch(item, group, api.repo) && !latestMatches.some(record => record.item.number === item.number))
   if (latestUntrusted) return decision(group, 'conflict', { number: latestUntrusted.number })
-  const latestSuppressed = latestMatches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  const latestSuppressed = latestMatches.find(record => !isOpen(record.item) && !isMerged(record.item) && record.metadata.stale_closed !== true && sameWaiverGeneration(record.metadata, group) && record.metadata.shutdown === group.items[0].shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (latestSuppressed) return decision(group, 'skip-dismissed', { number: latestSuppressed.item.number })
   const baseDecision = publicationBaseDecision({ group, root, base, baseHead, gitAuth })
   if (baseDecision) {
@@ -1242,7 +1264,7 @@ const processIssue = async ({ api, issues, group, now }) => {
     return decision(group, 'update', { number: open.item.number, body })
   }
   const replacement = group.issues[0].replacement ?? null
-  const dismissed = matches.find(record => !isOpen(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  const dismissed = matches.find(record => !isOpen(record.item) && record.metadata.stale_closed !== true && sameWaiverGeneration(record.metadata, group) && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (dismissed) return decision(group, 'skip-dismissed', { number: dismissed.item.number })
   const latestMatches = matchingIssues(await api.listIssues(), group)
   const latestConflict = latestMatches.find(record => record.conflict)
@@ -1252,7 +1274,7 @@ const processIssue = async ({ api, issues, group, now }) => {
     await api.updateIssue(latestOpen.item.number, { title: issueTitle(group), body })
     return decision(group, 'update', { number: latestOpen.item.number, body })
   }
-  const latestDismissed = latestMatches.find(record => !isOpen(record.item) && record.metadata.stale_closed !== true && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
+  const latestDismissed = latestMatches.find(record => !isOpen(record.item) && record.metadata.stale_closed !== true && sameWaiverGeneration(record.metadata, group) && record.metadata.shutdown === group.shutdown && (record.metadata.replacement === undefined || record.metadata.replacement === replacement))
   if (latestDismissed) return decision(group, 'skip-dismissed', { number: latestDismissed.item.number })
   const created = await api.createIssue({ title: issueTitle(group), body, labels: ['model-eol'] })
   return decision(group, 'create', { number: created.number, body })
@@ -1491,7 +1513,7 @@ export const runBot = async ({
       for (const group of issues) decisions.push(await processIssue({ api, issues: issueRecords, group, now }))
     }
     if (labelReady) {
-      decisions.push(...await reconcileStaleWork({ api, pulls, issues: issueRecords, models, issueGroups: [...issues, ...evalIssueGroups] }))
+      decisions.push(...await reconcileStaleWork({ api, pulls, issues: issueRecords, models, issueGroups: [...issues, ...evalIssueGroups], plan }))
     }
     return { plan, config, decisions, feedsDir: feedSet.dir, degraded: false }
   } finally {

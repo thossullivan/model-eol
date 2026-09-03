@@ -112,6 +112,7 @@ assert(['retiring', 'retired'].includes(byId('claude-opus-4-1-20250805')?.status
 assert(byId('gpt-5.6-sol')?.status === 'ok', 'gpt-5.6-sol is clean')
 assert(byId('gpt-5.6-sol')?.safe_until === null, 'OpenAI clean models make no forward claim without a policy floor')
 assert(byId('o3-deep-research-2025-06-26')?.replacement === 'gpt-5.6-sol', 'replacement surfaced')
+assert(byId('o3-deep-research-2025-06-26')?.waiver === null, 'non-waived findings carry explicit null waiver metadata')
 
 // Direct scope: the recommended direct-first CI mode leaves cloud/gateway-adjacent
 // refs for inventory/resolvers while still failing on direct or generic refs.
@@ -221,6 +222,129 @@ assert(!cyclonedx.components.some(item => item.name === 'gpt-9-ultra-20990101'),
 assert(cyclonedx.metadata?.properties?.some(item => item.name === 'model-eol:generator' && item.value === 'model-eol/inventory-cyclonedx@0.1'), 'CycloneDX records explicit model-eol generator provenance')
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
+
+const waiverDir = path.join(tempRoot, 'waivers')
+const waiverConfigPath = path.join(tempRoot, 'waiver-config.json')
+fs.mkdirSync(path.join(waiverDir, 'services', 'legacy'), { recursive: true })
+fs.mkdirSync(path.join(waiverDir, 'services', 'current'), { recursive: true })
+fs.writeFileSync(path.join(waiverDir, 'services', 'legacy', 'app.py'), 'from openai import OpenAI\nMODEL = "o3-deep-research"\n')
+fs.writeFileSync(path.join(waiverDir, 'services', 'current', 'app.py'), 'from openai import OpenAI\nMODEL = "o3-deep-research"\n')
+assert(spawnSync('git', ['init', '-q'], { cwd: waiverDir }).status === 0, 'waiver fixture initializes a git root')
+const utcDate = offset => {
+  const date = new Date()
+  date.setUTCHours(0, 0, 0, 0)
+  date.setUTCDate(date.getUTCDate() + offset)
+  return date.toISOString().slice(0, 10)
+}
+const todayDate = utcDate(0)
+const activeExpiry = utcDate(1)
+const baseWaiver = {
+  model: 'o3-deep-research-2025-06-26',
+  paths: ['services/legacy/**'],
+  reason: 'Vendor contract pins this model until migration.',
+  owner: '@platform-team',
+  expires: activeExpiry,
+}
+const writeWaiverConfig = value => fs.writeFileSync(waiverConfigPath, JSON.stringify(value, null, 2))
+writeWaiverConfig({
+  ignore: { paths: ['services/current/**'] },
+  waivers: [baseWaiver],
+})
+const activeWaiverCheck = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json'])
+const activeWaiverDocument = JSON.parse(activeWaiverCheck.out)
+const activeWaivedFinding = activeWaiverDocument.findings[0]
+assert(activeWaiverCheck.code === 0 && activeWaiverDocument.findings.length === 1, 'only active-waived retired findings produce a clear check exit')
+assert(activeWaivedFinding?.matched === 'o3-deep-research' && activeWaivedFinding.waiver?.active === true, 'a canonical waiver matches every alias while preserving the finding')
+assert(activeWaivedFinding.waiver.owner === '@platform-team' && activeWaivedFinding.waiver.expires === activeExpiry, 'active findings expose waiver ownership and expiry')
+const activeWaiverText = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all'])
+assert(activeWaiverText.out.includes(`waived until ${activeExpiry} by @platform-team: Vendor contract pins this model until migration.`), 'human check output prints the active waiver marker')
+
+const activeWaiverInventory = JSON.parse(run(['inventory', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out)
+const activeWaiverSchedule = JSON.parse(run(['schedule', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out)
+const activeWaiverAlertRun = run(['alert', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json'])
+const activeWaiverAlert = JSON.parse(activeWaiverAlertRun.out)
+const activeWaiverPlan = JSON.parse(run(['plan', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all']).out)
+assert(activeWaiverInventory.model_references[0]?.waiver?.active === true && activeWaiverInventory.summary.retired_or_retiring === 0, 'inventory keeps active-waived findings and removes them from actionable severity totals')
+assert(activeWaiverSchedule.items[0]?.waiver?.active === true, 'schedule keeps active-waived findings')
+assert(activeWaiverAlertRun.code === 0 && activeWaiverAlert.errors.length === 0 && activeWaiverAlert.warnings.some(item => item.waiver?.active === true && item.status === 'retired'), 'alert emits active-waived retired findings as warnings and exits clear')
+assert(activeWaiverPlan.items.length === 0 && activeWaiverPlan.issues.some(item => item.reason === 'waived' && item.waiver?.active === true), 'plan reports active waivers without producing migration items')
+const activeWaiverBadge = JSON.parse(run(['alert', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--format', 'badge']).out)
+assert(activeWaiverBadge.message === 'clear' && activeWaiverBadge.color === 'brightgreen', 'badge counts exclude active-waived findings')
+const activeWaiverCycloneDx = JSON.parse(run(['inventory', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--format', 'cyclonedx']).out)
+const activeWaiverComponent = activeWaiverCycloneDx.components.find(component => component.name === 'o3-deep-research-2025-06-26')
+assert(property(activeWaiverComponent, 'model-eol:waiver_active') === 'true' && property(activeWaiverComponent, 'model-eol:waiver_owner') === '@platform-team' && property(activeWaiverComponent, 'model-eol:waiver_expires') === activeExpiry, 'CycloneDX properties expose active waiver suppression')
+
+writeWaiverConfig({
+  ignore: { paths: ['services/current/**'] },
+  waivers: [{ ...baseWaiver, expires: todayDate }],
+})
+const expiredWaiverCheck = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json'])
+const expiredWaivedFinding = JSON.parse(expiredWaiverCheck.out).findings[0]
+assert(expiredWaiverCheck.code === 1 && expiredWaivedFinding?.waiver?.active === false && expiredWaivedFinding.waiver.expires === todayDate, 'a waiver is inactive on its exact expiry date and the finding reactivates')
+const expiredWaiverText = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all'])
+assert(expiredWaiverText.out.includes(`waiver expired on ${todayDate}; owner @platform-team`), 'human check output explains an expired waiver')
+
+writeWaiverConfig({ waivers: [baseWaiver] })
+const pathScopedWaivers = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out).findings
+const legacyPathFinding = pathScopedWaivers.find(item => item.file.endsWith('services/legacy/app.py'))
+const currentPathFinding = pathScopedWaivers.find(item => item.file.endsWith('services/current/app.py'))
+assert(legacyPathFinding?.waiver?.active === true && currentPathFinding?.waiver === null, 'waiver paths suppress only matching repository paths')
+
+writeWaiverConfig({
+  overrides: [{ paths: ['services/legacy/**'], waivers: [{ ...baseWaiver, paths: undefined }] }],
+})
+const overrideWaivers = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out).findings
+assert(overrideWaivers.find(item => item.file.endsWith('services/legacy/app.py'))?.waiver?.active === true && overrideWaivers.find(item => item.file.endsWith('services/current/app.py'))?.waiver === null, 'path overrides accept the same waiver shape and scope it to matching files')
+
+writeWaiverConfig({
+  via: 'azure-ai-foundry',
+  ignore: { paths: ['services/current/**'] },
+  waivers: [{ ...baseWaiver, via: 'aws-bedrock' }],
+})
+const mismatchedViaFinding = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '365', '--scope', 'all', '--json']).out).findings[0]
+assert(mismatchedViaFinding?.via === 'azure-ai-foundry' && mismatchedViaFinding.waiver === null, 'a distributor-scoped waiver does not match a different finding clock')
+writeWaiverConfig({
+  via: 'azure-ai-foundry',
+  ignore: { paths: ['services/current/**'] },
+  waivers: [{ ...baseWaiver, via: 'azure-ai-foundry' }],
+})
+const matchingViaRun = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '365', '--scope', 'all', '--json'])
+assert(matchingViaRun.code === 0 && JSON.parse(matchingViaRun.out).findings[0]?.waiver?.active === true, 'a distributor-scoped waiver matches the finding clock exactly')
+
+writeWaiverConfig({
+  ignore: { paths: ['services/current/**'] },
+  waivers: [
+    { ...baseWaiver, owner: '@expired-owner', expires: todayDate },
+    { ...baseWaiver, owner: '@active-owner' },
+  ],
+})
+const overlappingWithExpired = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out).findings[0]
+assert(overlappingWithExpired?.waiver?.active === true && overlappingWithExpired.waiver.owner === '@active-owner', 'the first active waiver wins when an earlier matching waiver is expired')
+writeWaiverConfig({
+  ignore: { paths: ['services/current/**'] },
+  waivers: [
+    { ...baseWaiver, owner: '@first-active' },
+    { ...baseWaiver, owner: '@second-active' },
+  ],
+})
+const overlappingActive = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out).findings[0]
+assert(overlappingActive?.waiver?.owner === '@first-active', 'config order selects the first matching active waiver')
+
+const malformedWaiverCases = [
+  ['unknown waiver key', { ...baseWaiver, ticket: 'MIG-1' }, 'ticket'],
+  ['missing waiver owner', Object.fromEntries(Object.entries(baseWaiver).filter(([key]) => key !== 'owner')), 'owner'],
+  ['impossible waiver date', { ...baseWaiver, expires: '2026-02-30' }, 'date'],
+  ['relative waiver duration', { ...baseWaiver, expires: '90d' }, 'format date'],
+  ['invalid waiver paths type', { ...baseWaiver, paths: 'services/**' }, 'paths'],
+]
+for (const [label, waiver, diagnostic] of malformedWaiverCases) {
+  writeWaiverConfig({ waivers: [waiver] })
+  const result = run(['validate', waiverConfigPath, '--type', 'config'])
+  assert(result.code === 2 && result.err.includes(diagnostic), `${label} fails closed during public config validation`)
+}
+writeWaiverConfig({ waivers: Array.from({ length: 501 }, () => baseWaiver) })
+const excessiveWaivers = run(['validate', waiverConfigPath, '--type', 'config'])
+assert(excessiveWaivers.code === 2 && excessiveWaivers.err.includes('500'), 'configs reject more than 500 waivers')
 
 const artifactDir = path.join(tempRoot, 'generated-artifacts')
 fs.mkdirSync(path.join(artifactDir, 'baml_src'), { recursive: true })
@@ -1201,6 +1325,7 @@ const applyItem = {
   shutdown: '2026-07-01',
   days: -31,
   status: 'retired',
+  waiver: null,
   sources: [],
   notes: null,
 }

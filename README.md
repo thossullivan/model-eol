@@ -171,6 +171,16 @@ Git repository root. CLI flags or Action inputs override configured values, and
     "models": ["o3-deep-research"],
     "paths": ["test/fixtures/**", "vendor"]
   },
+  "waivers": [
+    {
+      "model": "gpt-4",
+      "paths": ["services/legacy/**"],
+      "via": "aws-bedrock",
+      "reason": "Vendor contract pins this model until the Q1 migration.",
+      "owner": "@platform-team",
+      "expires": "2026-12-31"
+    }
+  ],
   "issues": { "enabled": true },
   "eval": { "command": "node scripts/model-eol-eval.mjs" }
 }
@@ -186,6 +196,19 @@ defined by
 [`schema/model-eol.bot-config.schema.json`](schema/model-eol.bot-config.schema.json),
 while `model-eol validate` also enforces runtime semantic and safety checks that
 Draft-07 cannot express cleanly.
+
+Ignores hide inventory noise from non-dependency artifacts. Waivers record owned,
+expiring exceptions for live dependencies. A waiver never hides its finding.
+Every report includes its reason, owner, expiry, and active state. Active waivers
+remove retired or retiring findings from failure and badge totals. Alerts emit
+these findings as warnings. Plans retain them without creating migration work.
+Expired waivers explain why their findings became actionable again.
+
+The expiry date uses UTC calendar dates. A waiver becomes inactive on its expiry
+date. A model alias matches its whole canonical alias family. Optional `paths`
+use the same repository-relative globs as `ignore.paths`. Optional `via` matches
+only the lifecycle clock recorded in the finding. The first active matching
+waiver wins. A config can contain at most 500 waivers across all policy levels.
 
 For content-heavy repositories, start with `inventory`, then exclude caches,
 generated catalogs, archived fixtures, and documentation that are not live model
@@ -228,7 +251,8 @@ then apply path policies and a lifecycle channel per reference:
 ```
 
 Matching overrides apply in order: later scalar values win and ignore lists are
-additive. The last matching route wins. Exact `match`/`model` pairs resolve a
+additive. Overrides can also add path-scoped `waivers` with the same shape.
+The last matching route wins. Exact `match`/`model` pairs resolve a
 repository deployment alias without making cloud or gateway references patchable.
 Explicit CLI flags and Action inputs still take precedence. JSON inventory and
 plan output records each reference's effective threshold, scope, requested

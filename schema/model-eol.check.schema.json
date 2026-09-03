@@ -20,7 +20,7 @@
   "definitions": {
     "finding": {
       "type": "object",
-      "required": ["file", "line", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "status", "shutdown", "date_precision", "distribution_status", "via", "days", "safe_until", "replacement", "replacement_options", "replacement_note", "threshold_days", "effective_scope", "requested_via"],
+      "required": ["file", "line", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "status", "shutdown", "date_precision", "distribution_status", "via", "days", "safe_until", "replacement", "replacement_options", "replacement_note", "threshold_days", "effective_scope", "requested_via", "waiver"],
       "properties": {
         "file": { "type": "string", "minLength": 1 },
         "line": { "type": "integer", "minimum": 1 },
@@ -47,6 +47,7 @@
         "threshold_days": { "type": "integer", "minimum": 0 },
         "effective_scope": { "enum": ["all", "direct"] },
         "requested_via": { "type": ["string", "null"], "minLength": 1 },
+        "waiver": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/waiver" },
         "policy_provenance": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/policyProvenance" },
         "mapped_from": { "type": "string", "minLength": 1 }
       },
