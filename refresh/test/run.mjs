@@ -136,13 +136,13 @@ try {
       publisher: 'anthropic',
       generated: '2026-08-01T00:00:00Z',
       source: PROVIDERS.anthropic.deprecationsUrl,
-      models: [{ id: 'tentative-model', shutdown: '2027-06-09', date_precision: 'earliest' }],
+      models: [{ id: 'tentative-model', shutdown: '2027-06-09', date_precision: 'tentative' }],
     },
   }])
 } catch {
   tentativeWithoutAnnouncementValid = false
 }
-assert(tentativeWithoutAnnouncementValid, 'feed validation permits earliest shutdown dates without announced dates')
+assert(tentativeWithoutAnnouncementValid, 'feed validation permits tentative shutdown dates without announced dates')
 
 const unknownFlag = run(['--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown refresh flags exit 2 with the bad flag and help hint')
@@ -232,11 +232,32 @@ try {
 }
 assert(ambiguousAnnouncementReason.includes('ambiguous-announcement-date'), 'generic deprecation parser rejects ambiguous announcement context')
 
-const anthropicStatusEdgeHtml = '<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-no-tentative-date</code></td><td>Active</td><td>N/A</td><td>N/A</td></tr><tr><td><code>claude-unparseable-tentative-date</code></td><td>Active</td><td>N/A</td><td>Not sooner than someday</td></tr><tr><td><code>claude-retired-without-announcement</code></td><td>Retired</td><td>June 1, 2026</td><td>August 1, 2026</td></tr></table><h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-announced</code></td><td><code>claude-next</code></td></tr></table>'
+const anthropicStatusEdgeHtml = '<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-no-tentative-date</code></td><td>Active</td><td>N/A</td><td>N/A</td></tr><tr><td><code>claude-empty-tentative-date</code></td><td>Active</td><td>N/A</td><td></td></tr><tr><td><code>claude-retired-without-announcement</code></td><td>Retired</td><td>June 1, 2026</td><td>August 1, 2026</td></tr><tr><td><code>claude-deprecated-without-retirement</code></td><td>Deprecated</td><td>July 1, 2026</td><td>N/A</td></tr></table>'
 const anthropicStatusEdges = parseAnthropicDeprecations(anthropicStatusEdgeHtml)
-const anthropicNoDate = anthropicStatusEdges.filter(entry => entry.id === 'claude-no-tentative-date' || entry.id === 'claude-unparseable-tentative-date')
-assert(anthropicNoDate.length === 2 && anthropicNoDate.every(entry => entry.shutdown === undefined && entry.date_precision === undefined), 'Anthropic treats N/A and unparseable tentative dates as no date')
-assert(anthropicStatusEdges.parserNotes.some(note => note.id === 'claude-retired-without-announcement' && note.reason === 'non-active-status-without-announcement'), 'Anthropic records a parser note for non-active status rows without announcements')
+const anthropicNoDates = anthropicStatusEdges.filter(entry => entry.id === 'claude-no-tentative-date' || entry.id === 'claude-empty-tentative-date')
+assert(anthropicNoDates.length === 2 && anthropicNoDates.every(entry => entry.shutdown === undefined && entry.date_precision === undefined), 'Anthropic treats active N/A and empty retirement dates as no date')
+const anthropicRetiredStatus = anthropicStatusEdges.find(entry => entry.id === 'claude-retired-without-announcement')
+assert(anthropicRetiredStatus?.announced === '2026-06-01' && anthropicRetiredStatus.shutdown === '2026-08-01' && anthropicRetiredStatus.date_precision === undefined, 'Anthropic converts an unmatched retired status row into an exact lifecycle record')
+const anthropicDeprecatedStatus = anthropicStatusEdges.find(entry => entry.id === 'claude-deprecated-without-retirement')
+assert(anthropicDeprecatedStatus?.announced === '2026-07-01' && anthropicDeprecatedStatus.shutdown === undefined, 'Anthropic converts a deprecated N/A status row into an announced-only record')
+
+const anthropicStatusTable = (id, state, deprecated, retirement) => `<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>${id}</code></td><td>${state}</td><td>${deprecated}</td><td>${retirement}</td></tr></table>`
+const anthropicStatusError = html => {
+  try {
+    parseAnthropicDeprecations(html)
+    return ''
+  } catch (error) {
+    return error.message
+  }
+}
+const unparseableTentativeReason = anthropicStatusError(anthropicStatusTable('claude-unparseable-tentative-date', 'Active', 'N/A', 'Not sooner than Q4 2027'))
+assert(unparseableTentativeReason.includes('claude-unparseable-tentative-date') && unparseableTentativeReason.includes('Not sooner than Q4 2027'), 'Anthropic rejects an unparseable active tentative retirement date')
+const plainActiveDateReason = anthropicStatusError(anthropicStatusTable('claude-plain-active-date', 'Active', 'N/A', 'September 1, 2027'))
+assert(plainActiveDateReason.includes('claude-plain-active-date') && plainActiveDateReason.includes('September 1, 2027'), 'Anthropic rejects an active retirement date without the not-sooner-than prefix')
+const retiredWithoutShutdownReason = anthropicStatusError(anthropicStatusTable('claude-retired-without-shutdown', 'Retired', 'June 1, 2026', 'N/A'))
+assert(retiredWithoutShutdownReason.includes('claude-retired-without-shutdown') && retiredWithoutShutdownReason.includes('N/A'), 'Anthropic rejects a retired status row without a shutdown date')
+const missingDeprecatedReason = anthropicStatusError(anthropicStatusTable('claude-missing-deprecated-date', 'Deprecated', 'N/A', 'September 1, 2027'))
+assert(missingDeprecatedReason.includes('claude-missing-deprecated-date') && missingDeprecatedReason.includes('N/A'), 'Anthropic rejects a non-active status row without a deprecated date')
 
 assert(openaiEntries.every(entry => !/[\s/]/.test(entry.id)), 'OpenAI endpoint and product retirement rows are excluded from the model feed')
 assert(normalizeBedrockId('anthropic.claude-3-haiku-20240307-v1:0') === 'claude-3-haiku-20240307', 'Bedrock normalization strips a known provider prefix and v1 suffix')
@@ -341,7 +362,7 @@ assert(overlapping.length > 0, 'OpenAI fixture overlaps the committed feed')
 assert(anthropicEntries.length === 9, 'Anthropic deprecation fixture parses announcement and active status entries')
 assert(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805')?.replacement === 'claude-opus-4-6', 'Anthropic replacement parses')
 const anthropicTentative = anthropicEntries.find(entry => entry.id === 'claude-fable-5-1')
-assert(anthropicTentative?.shutdown === '2027-09-01' && anthropicTentative.date_precision === 'earliest' && anthropicTentative.announced === undefined, 'Anthropic parses active tentative retirement dates without an announcement date')
+assert(anthropicTentative?.shutdown === '2027-09-01' && anthropicTentative.date_precision === 'tentative' && anthropicTentative.announced === undefined, 'Anthropic parses active tentative retirement dates without an announcement date')
 assert(anthropicTentative?.source === PROVIDERS.anthropic.deprecationsUrl, 'Anthropic tentative entries carry deprecations-page provenance')
 const anthropicExact = anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805')
 assert(anthropicExact?.shutdown === '2026-08-05' && anthropicExact.announced === '2026-06-05' && anthropicExact.date_precision === undefined, 'Anthropic announcement rows take precedence over duplicate status rows')
@@ -418,6 +439,35 @@ const staleCurrent = mergeFeed({
 })
 assert(staleCurrent.feed.models[0].shutdown === undefined && staleCurrent.feed.models[0].announced === undefined, 'endpoint presence clears stale lifecycle fields')
 
+const anthropicRetiredStatusMerge = mergeFeed({
+  ...minimalCommitted,
+  publisher: 'anthropic',
+  source: PROVIDERS.anthropic.deprecationsUrl,
+  models: [{ id: 'claude-retired-without-announcement' }],
+}, {
+  deprecations: [anthropicRetiredStatus],
+  generated: '2026-08-01T00:00:00Z',
+  provider: PROVIDERS.anthropic,
+})
+const mergedRetiredStatus = anthropicRetiredStatusMerge.feed.models[0]
+assert(mergedRetiredStatus.announced === '2026-06-01' && mergedRetiredStatus.shutdown === '2026-08-01', 'Anthropic status lifecycle dates fill an entry without committed lifecycle data')
+
+const anthropicRetiredStatusPreserve = mergeFeed({
+  ...minimalCommitted,
+  publisher: 'anthropic',
+  source: PROVIDERS.anthropic.deprecationsUrl,
+  models: [
+    { id: 'claude-retired-without-announcement', announced: '2026-05-01', shutdown: '2026-07-01', replacement: 'claude-next' },
+    { id: 'claude-next' },
+  ],
+}, {
+  deprecations: [anthropicRetiredStatus],
+  generated: '2026-08-01T00:00:00Z',
+  provider: PROVIDERS.anthropic,
+})
+const preservedRetiredStatus = anthropicRetiredStatusPreserve.feed.models.find(model => model.id === 'claude-retired-without-announcement')
+assert(preservedRetiredStatus.announced === '2026-05-01' && preservedRetiredStatus.shutdown === '2026-07-01' && preservedRetiredStatus.replacement === 'claude-next', 'Anthropic status rows never replace committed exact lifecycle and replacement fields')
+
 const anthropicTentativeMerge = mergeFeed({
   ...minimalCommitted,
   publisher: 'anthropic',
@@ -430,7 +480,21 @@ const anthropicTentativeMerge = mergeFeed({
   provider: PROVIDERS.anthropic,
 })
 const mergedTentative = anthropicTentativeMerge.feed.models[0]
-assert(mergedTentative.shutdown === '2027-02-05' && mergedTentative.date_precision === 'earliest' && mergedTentative.announced === undefined, 'Anthropic tentative status fills a current model without lifecycle dates')
+assert(mergedTentative.shutdown === '2027-02-05' && mergedTentative.date_precision === 'tentative' && mergedTentative.announced === undefined, 'Anthropic tentative status fills a current model without lifecycle dates')
+
+const anthropicAnnouncedFloorMerge = mergeFeed({
+  ...minimalCommitted,
+  publisher: 'anthropic',
+  source: PROVIDERS.anthropic.deprecationsUrl,
+  models: [{ id: 'claude-opus-4-6', announced: '2026-06-01' }],
+}, {
+  currentIds: ['claude-opus-4-6'],
+  deprecations: [anthropicEntries.find(entry => entry.id === 'claude-opus-4-6')],
+  generated: '2026-08-01T00:00:00Z',
+  provider: PROVIDERS.anthropic,
+})
+const announcedFloor = anthropicAnnouncedFloorMerge.feed.models[0]
+assert(announcedFloor.announced === '2026-06-01' && announcedFloor.shutdown === '2027-02-05' && announcedFloor.date_precision === 'tentative', 'Anthropic tentative status preserves a committed announcement while filling its shutdown')
 
 const anthropicExactMerge = mergeFeed({
   ...minimalCommitted,
@@ -444,27 +508,44 @@ const anthropicExactMerge = mergeFeed({
   provider: PROVIDERS.anthropic,
 })
 const preservedExact = anthropicExactMerge.feed.models.find(model => model.id === 'claude-opus-4-6')
-assert(preservedExact.shutdown === '2026-12-01' && preservedExact.announced === '2026-06-01' && preservedExact.date_precision === undefined, 'Anthropic tentative status never overwrites an exact shutdown')
+assert(preservedExact.shutdown === '2026-12-01' && preservedExact.announced === '2026-06-01' && preservedExact.replacement === 'claude-next' && preservedExact.date_precision === undefined, 'Anthropic tentative status preserves exact lifecycle and replacement fields')
+
+const anthropicBareExactMerge = mergeFeed({
+  ...minimalCommitted,
+  publisher: 'anthropic',
+  source: PROVIDERS.anthropic.deprecationsUrl,
+  models: [{ id: 'claude-opus-4-6', shutdown: '2026-06-01' }],
+}, {
+  currentIds: ['claude-opus-4-6'],
+  deprecations: [anthropicEntries.find(entry => entry.id === 'claude-opus-4-6')],
+  generated: '2026-08-01T00:00:00Z',
+  provider: PROVIDERS.anthropic,
+})
+const preservedBareExact = anthropicBareExactMerge.feed.models[0]
+assert(preservedBareExact.shutdown === '2026-06-01' && preservedBareExact.date_precision === undefined, 'Anthropic tentative status never overwrites a committed exact shutdown')
 
 const anthropicTentativeDrop = mergeFeed({
   ...minimalCommitted,
   publisher: 'anthropic',
   source: PROVIDERS.anthropic.deprecationsUrl,
-  models: [{ id: 'claude-no-tentative-date', shutdown: '2027-01-01', date_precision: 'earliest' }],
+  models: [
+    { id: 'claude-no-tentative-date', announced: '2026-06-01', shutdown: '2027-01-01', date_precision: 'tentative', replacement: 'claude-next' },
+    { id: 'claude-next' },
+  ],
 }, {
-  currentIds: ['claude-no-tentative-date'],
+  currentIds: ['claude-no-tentative-date', 'claude-next'],
   deprecations: [anthropicStatusEdges.find(entry => entry.id === 'claude-no-tentative-date')],
   generated: '2026-08-01T00:00:00Z',
   provider: PROVIDERS.anthropic,
 })
-const droppedTentative = anthropicTentativeDrop.feed.models[0]
-assert(droppedTentative.shutdown === undefined && droppedTentative.date_precision === undefined, 'Anthropic status N/A drops a committed tentative shutdown')
+const droppedTentative = anthropicTentativeDrop.feed.models.find(model => model.id === 'claude-no-tentative-date')
+assert(droppedTentative.shutdown === undefined && droppedTentative.date_precision === undefined && droppedTentative.announced === '2026-06-01' && droppedTentative.replacement === 'claude-next', 'Anthropic status N/A drops only a committed tentative shutdown')
 
 const anthropicTentativeMove = mergeFeed({
   ...minimalCommitted,
   publisher: 'anthropic',
   source: PROVIDERS.anthropic.deprecationsUrl,
-  models: [{ id: 'claude-opus-4-6', shutdown: '2027-01-01', date_precision: 'earliest' }],
+  models: [{ id: 'claude-opus-4-6', shutdown: '2027-01-01', date_precision: 'tentative' }],
 }, {
   currentIds: ['claude-opus-4-6'],
   deprecations: [anthropicEntries.find(entry => entry.id === 'claude-opus-4-6')],
@@ -472,7 +553,7 @@ const anthropicTentativeMove = mergeFeed({
   provider: PROVIDERS.anthropic,
 })
 const movedTentative = anthropicTentativeMove.feed.models[0]
-assert(movedTentative.shutdown === '2027-02-05' && movedTentative.date_precision === 'earliest', 'Anthropic status replaces a committed tentative shutdown with the current floor')
+assert(movedTentative.shutdown === '2027-02-05' && movedTentative.date_precision === 'tentative', 'Anthropic status replaces a committed tentative shutdown with the current floor')
 
 const unconfirmedMerge = mergeFeed({
   ...minimalCommitted,
@@ -675,9 +756,9 @@ const precisionDiff = renderSemanticDiff({ ...oldFeed, models: [{ id: 'precision
 assert(precisionDiff.includes('2026-10-01') && precisionDiff.includes('(earliest)'), 'semantic diff renders earliest date precision')
 const tentativeDateDiff = renderSemanticDiff(
   { ...oldFeed, models: [{ id: 'tentative-date' }] },
-  { ...oldFeed, models: [{ id: 'tentative-date', shutdown: '2027-06-09', date_precision: 'earliest' }] },
+  { ...oldFeed, models: [{ id: 'tentative-date', shutdown: '2027-06-09', date_precision: 'tentative' }] },
 )
-assert(tentativeDateDiff.includes('## Shutdown date changes') && tentativeDateDiff.includes('`not set` -> `2027-06-09` (earliest)'), 'semantic diff renders a newly added tentative shutdown in the existing date section')
+assert(tentativeDateDiff.includes('## Shutdown date changes') && tentativeDateDiff.includes('`not set` -> `2027-06-09` (tentative)'), 'semantic diff renders a newly added tentative shutdown in the existing date section')
 
 const statusOld = { ...oldFeed, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', announced: '2026-03-01', shutdown: '2026-09-01', status: 'legacy' }] }] }
 const statusNew = { ...statusOld, models: [{ id: 'bedrock-status', distributions: [{ via: 'aws-bedrock', announced: '2026-03-01', shutdown: '2026-09-01', status: 'extended-access' }] }] }
@@ -1236,11 +1317,23 @@ const corruptRun = run(['--provider', 'anthropic', '--out', corruptOut, '--fixtu
 assert(corruptRun.code === 1, 'corrupted fixture exits nonzero')
 assert(!fs.existsSync(corruptOut), 'corrupted fixture produces no output directory')
 
+const malformedStatusDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-malformed-status-'))
+fs.copyFileSync(path.join(fixtures, 'anthropic-models.json'), path.join(malformedStatusDir, 'anthropic-models.json'))
+fs.writeFileSync(
+  path.join(malformedStatusDir, 'anthropic-deprecations.html'),
+  anthropicStatusTable('claude-malformed-status-floor', 'Active', 'N/A', 'Not sooner than Q4 2027'),
+)
+const malformedStatusOut = path.join(malformedStatusDir, 'out')
+const malformedStatusRun = run(['--provider', 'anthropic', '--check', '--out', malformedStatusOut, '--fixtures', malformedStatusDir])
+assert(malformedStatusRun.code === 1 && malformedStatusRun.err.includes('claude-malformed-status-floor') && malformedStatusRun.err.includes('Not sooner than Q4 2027'), 'Anthropic refresh check fails loudly on an unparseable status floor')
+assert(!fs.existsSync(malformedStatusOut), 'an unparseable Anthropic status floor writes no feed output')
+
 fs.rmSync(outputDir, { recursive: true, force: true })
 fs.rmSync(mixedDistributorOut, { recursive: true, force: true })
 fs.rmSync(corruptBedrockDir, { recursive: true, force: true })
 fs.rmSync(corruptOpenAIDir, { recursive: true, force: true })
 fs.rmSync(corruptDir, { recursive: true, force: true })
+fs.rmSync(malformedStatusDir, { recursive: true, force: true })
 
 console.log(failures ? `\n${failures} failure(s)` : '\nall refresh assertions passed')
 process.exit(failures ? 1 : 0)

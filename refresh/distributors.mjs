@@ -410,7 +410,7 @@ function dateField(value, field, modelId, via) {
 
 function precisionField(value, modelId, via) {
   if (value === undefined) return undefined
-  if (!['exact', 'earliest'].includes(value)) {
+  if (!['exact', 'earliest', 'tentative'].includes(value)) {
     throw new Error(`${via} record ${modelId} has an invalid date_precision`)
   }
   return value

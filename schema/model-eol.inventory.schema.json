@@ -60,7 +60,7 @@
         "evidence": { "type": "string", "minLength": 1 },
         "status": { "$ref": "#/definitions/status" },
         "shutdown": { "type": ["string", "null"], "format": "date" },
-        "date_precision": { "enum": ["exact", "earliest", null] },
+        "date_precision": { "enum": ["exact", "earliest", "tentative", null] },
         "distribution_status": { "enum": ["active", "legacy", "extended-access", "retired", null] },
         "via": { "type": ["string", "null"], "minLength": 1 },
         "requested_via": { "type": ["string", "null"], "minLength": 1 },

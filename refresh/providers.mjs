@@ -514,26 +514,38 @@ function anthropicStatusHeaderIndexes(rows) {
     const deprecated = labels.indexOf('deprecated')
     const retirement = labels.indexOf('tentative retirement date')
     if ([model, state, deprecated, retirement].every(cell => cell >= 0)) {
-      return { row: index, model, state, retirement }
+      return { row: index, model, state, deprecated, retirement }
     }
   }
   return undefined
 }
 
-function anthropicTentativeShutdown(text) {
-  const match = plainText(text).match(/^not sooner than\s+(.+)$/i)
-  if (!match) return undefined
+function anthropicStatusDate(text, id, field, cellText = text) {
+  const value = plainText(text)
+  let date
   try {
-    return dateFromText(match[1])
-  } catch {
-    return undefined
+    date = dateFromText(value)
+  } catch {}
+  const residual = value.replace(DATE_PATTERN, '').replace(HUMAN_DATE_PATTERN, '').trim()
+  if (!date || residual) {
+    throw new Error(`anthropic model status row ${id} has an unrecognised ${field}: ${plainText(cellText) || '(empty)'}`)
   }
+  return date
 }
+
+function anthropicTentativeShutdown(text, id) {
+  const value = plainText(text)
+  if (!value || /^n\/a$/i.test(value)) return undefined
+  const match = value.match(/^not sooner than\s+(.+)$/i)
+  if (!match) throw new Error(`anthropic model status row ${id} has an unrecognised tentative retirement date: ${value}`)
+  return anthropicStatusDate(match[1], id, 'tentative retirement date', value)
+}
+
+const anthropicStatusRecords = new WeakSet()
 
 function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
   const records = []
-  const parserNotes = []
   let recognisedTables = 0
   for (const table of tables) {
     const rows = tableRows(table[1])
@@ -551,13 +563,20 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
       }
       if (announcementIds.has(id)) continue
       const state = row.cells[headers.state]?.text.toLowerCase()
-      if (state !== 'active') {
-        parserNotes.push({ reason: 'non-active-status-without-announcement', id, state: state || 'unknown' })
-        continue
-      }
-      const shutdown = anthropicTentativeShutdown(row.cells[headers.retirement]?.text)
       const item = { id, source: sourceUrl }
-      if (shutdown) Object.assign(item, { shutdown, date_precision: 'earliest' })
+      if (state === 'active') {
+        const shutdown = anthropicTentativeShutdown(row.cells[headers.retirement]?.text, id)
+        if (shutdown) Object.assign(item, { shutdown, date_precision: 'tentative' })
+      } else {
+        item.announced = anthropicStatusDate(row.cells[headers.deprecated]?.text, id, 'deprecated date')
+        const retirementText = plainText(row.cells[headers.retirement]?.text)
+        if (!/^n\/a$/i.test(retirementText)) {
+          item.shutdown = anthropicStatusDate(retirementText, id, 'retirement date')
+        } else if (state === 'retired') {
+          throw new Error(`anthropic model status row ${id} is retired without a shutdown date: ${retirementText}`)
+        }
+      }
+      anthropicStatusRecords.add(item)
       records.push(item)
     }
   }
@@ -568,11 +587,11 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
       unique.set(record.id, record)
       continue
     }
-    if (previous.shutdown !== record.shutdown || previous.date_precision !== record.date_precision) {
+    if (previous.announced !== record.announced || previous.shutdown !== record.shutdown || previous.date_precision !== record.date_precision) {
       throw new Error(`anthropic model status table has conflicting rows for ${record.id}`)
     }
   }
-  return { records: [...unique.values()], parserNotes, recognisedTables }
+  return { records: [...unique.values()], recognisedTables }
 }
 
 export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
@@ -589,7 +608,6 @@ export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic
   if (!announcements.length && !status.recognisedTables) throw announcementError
   const records = [...announcements, ...status.records]
   if (!records.length) throw new Error('anthropic deprecations page has no model entries')
-  Object.defineProperty(records, 'parserNotes', { value: status.parserNotes })
   return records
 }
 
@@ -934,9 +952,17 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
       if (owner && owner !== target) absorb(target, owner, aliases)
       aliases.add(alias)
     }
-    const anthropicStatus = provider.publisher === 'anthropic' && record.announced === undefined
-    const preserveShutdown = target.shutdown && target.date_precision !== 'earliest'
-    if (anthropicStatus && preserveShutdown) {
+    const anthropicStatus = provider.publisher === 'anthropic' && (record.announced === undefined || anthropicStatusRecords.has(record))
+    if (anthropicStatus) {
+      if (target.announced === undefined && record.announced !== undefined) target.announced = record.announced
+      const preserveShutdown = target.shutdown && target.date_precision !== 'tentative'
+      if (!preserveShutdown) {
+        delete target.shutdown
+        delete target.date_precision
+        if (record.shutdown !== undefined) target.shutdown = record.shutdown
+        if (record.date_precision !== undefined) target.date_precision = record.date_precision
+      }
+      if (target.source === undefined && record.source !== undefined) target.source = record.source
       if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
       else delete target.aliases
       confirmed.add(target.id)
@@ -1095,9 +1121,5 @@ export async function loadProviderSources(config, options = {}) {
       : config.publisher === 'anthropic'
         ? parseAnthropicDeprecations(html, config.deprecationsUrl)
         : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
-  const parserNotes = deprecations.parserNotes ?? []
-  for (const note of parserNotes) {
-    notice(`notice: anthropic status row ${note.id} was skipped: ${note.reason} (${note.state})`)
-  }
-  return { currentIds, endpointAvailable, deprecations, parserNotes }
+  return { currentIds, endpointAvailable, deprecations }
 }

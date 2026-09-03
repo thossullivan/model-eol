@@ -32,7 +32,7 @@
         "confidence": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/confidence" },
         "status": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/status" },
         "shutdown": { "type": ["string", "null"], "format": "date" },
-        "date_precision": { "enum": ["exact", "earliest", null] },
+        "date_precision": { "enum": ["exact", "earliest", "tentative", null] },
         "distribution_status": { "enum": ["active", "legacy", "extended-access", "retired", null] },
         "via": { "type": ["string", "null"], "minLength": 1 },
         "days": { "type": ["integer", "null"] },
