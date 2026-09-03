@@ -22,7 +22,10 @@ const output = path.join(temp, 'site')
 const receiptFile = path.join(temp, 'feed-refresh-receipt.json')
 const checkedAt = '2026-08-18T12:34:56Z'
 const refreshRun = 'https://github.com/thossullivan/model-eol/actions/runs/123456'
+const refreshWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'feed-refresh.yml'), 'utf8')
 let server = null
+
+assert(refreshWorkflow.includes('startswith("feed-refresh/")') && refreshWorkflow.includes('gh pr edit'), 'feed refresh workflow reuses an open refresh PR')
 
 const runGit = args => {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' })

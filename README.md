@@ -406,7 +406,8 @@ node scripts/feed-changelog.mjs                       # local rendering of the h
 Parse failures fail loudly and never emit a guessed feed. This runs automatically:
 a weekly workflow (`.github/workflows/feed-refresh.yml`, Mondays 05:23 UTC) checks
 the live sources and opens a PR with the semantic diff - and an auto-updated
-README freshness line - when anything material changed. The first live runs earned
+README freshness line - when anything material changed. An unreviewed refresh PR
+is updated in place instead of duplicated. The first live runs earned
 their keep: they caught the hand-compiled feeds drifting from Anthropic's
 recommendations within one week, and corrected a hand-compiled Bedrock date that
 was three months wrong.
