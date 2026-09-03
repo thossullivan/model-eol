@@ -249,15 +249,33 @@ function tableRows(table) {
   })
 }
 
+const normaliseHeaderLabel = cell => plainText(cell?.text)
+  .toLowerCase()
+  .replace(/\[\s*\d+\s*\]|\(\s*\d+\s*\)/gu, ' ')
+  .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹*†‡]+/gu, ' ')
+  .replace(/[\p{P}\p{S}]+$/gu, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+const hasAnthropicStatusSignature = label => label.includes('tentative retirement')
+
+function anthropicStatusHeaderRow(rows) {
+  const first = rows[0]
+  if (!first?.cells.length) return undefined
+  const allHeaders = first.cells.every(cell => cell.kind === 'th')
+  const tableHasHeaders = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
+  if (!allHeaders && tableHasHeaders) return undefined
+  const labels = first.cells.map(normaliseHeaderLabel)
+  if (!labels.some(hasAnthropicStatusSignature)) return undefined
+  return { row: 0, labels }
+}
+
 function headerIndexes(rows, provider) {
+  if (provider === 'anthropic' && anthropicStatusHeaderRow(rows)) {
+    return { rejectedReason: 'anthropic-model-status-table' }
+  }
   for (const [index, row] of rows.entries()) {
     const labels = row.cells.map(cell => cell.text.toLowerCase())
-    const headerLabels = row.cells
-      .filter(cell => cell.kind === 'th')
-      .map(cell => plainText(cell.text).toLowerCase())
-    if (provider === 'anthropic' && headerLabels.includes('tentative retirement date')) {
-      return { rejectedReason: 'anthropic-model-status-table' }
-    }
     const date = labels.findIndex(label => /(shutdown|retirement|sunset|removal).*date|date.*(shutdown|retirement|sunset|removal)/i.test(label))
     const model = labels.findIndex(label => /\bmodel\b|\bsystem\b/i.test(label))
     const endpointLike = endpointLikeLabels(labels)
@@ -512,34 +530,30 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
 }
 
 function anthropicStatusHeaderIndexes(rows) {
-  const required = ['api model name', 'current state', 'deprecated', 'tentative retirement date']
-  for (const [index, row] of rows.entries()) {
-    const labels = new Map()
-    const counts = new Map()
-    for (const [cellIndex, cell] of row.cells.entries()) {
-      if (cell.kind !== 'th') continue
-      const label = plainText(cell.text).toLowerCase()
-      labels.set(label, cellIndex)
-      counts.set(label, (counts.get(label) ?? 0) + 1)
+  const header = anthropicStatusHeaderRow(rows)
+  if (!header) return undefined
+  const required = [
+    ['model', 'api model name', label => label.includes('api model name')],
+    ['state', 'current state', label => label.includes('current state')],
+    ['deprecated', 'deprecated', label => label.includes('deprecated')],
+    ['retirement', 'tentative retirement', hasAnthropicStatusSignature],
+  ]
+  const indexes = {}
+  const missing = []
+  for (const [key, name, matches] of required) {
+    const found = header.labels
+      .map((label, index) => matches(label) ? index : -1)
+      .filter(index => index >= 0)
+    if (found.length > 1) {
+      throw new Error(`anthropic model status table header has duplicate required column: ${name}`)
     }
-    const duplicate = required.find(label => (counts.get(label) ?? 0) > 1)
-    if (duplicate) {
-      throw new Error(`anthropic model status table header has duplicate required column: ${duplicate}`)
-    }
-    if (!labels.has('tentative retirement date')) continue
-    const missing = required.filter(label => !labels.has(label))
-    if (missing.length) {
-      throw new Error(`anthropic model status table header is missing required columns: ${missing.join(', ')}`)
-    }
-    return {
-      row: index,
-      model: labels.get('api model name'),
-      state: labels.get('current state'),
-      deprecated: labels.get('deprecated'),
-      retirement: labels.get('tentative retirement date'),
-    }
+    if (!found.length) missing.push(name)
+    else indexes[key] = found[0]
   }
-  return undefined
+  if (missing.length) {
+    throw new Error(`anthropic model status table header is missing required columns: ${missing.join(', ')}`)
+  }
+  return { row: header.row, ...indexes }
 }
 
 function anthropicStatusDate(text, id, field, cellText = text) {
