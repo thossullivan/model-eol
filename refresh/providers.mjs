@@ -507,14 +507,22 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
 
 function anthropicStatusHeaderIndexes(rows) {
   for (const [index, row] of rows.entries()) {
-    const labels = row.cells.map(cell => cell.text.toLowerCase())
-    if (labels.length !== 4 || row.cells.some(cell => cell.kind !== 'th')) continue
-    const model = labels.indexOf('api model name')
-    const state = labels.indexOf('current state')
-    const deprecated = labels.indexOf('deprecated')
-    const retirement = labels.indexOf('tentative retirement date')
-    if ([model, state, deprecated, retirement].every(cell => cell >= 0)) {
-      return { row: index, model, state, deprecated, retirement }
+    const labels = new Map()
+    for (const [cellIndex, cell] of row.cells.entries()) {
+      if (cell.kind === 'th') labels.set(plainText(cell.text).toLowerCase(), cellIndex)
+    }
+    if (!labels.has('tentative retirement date')) continue
+    const required = ['api model name', 'current state', 'deprecated', 'tentative retirement date']
+    const missing = required.filter(label => !labels.has(label))
+    if (missing.length) {
+      throw new Error(`anthropic model status table header is missing required columns: ${missing.join(', ')}`)
+    }
+    return {
+      row: index,
+      model: labels.get('api model name'),
+      state: labels.get('current state'),
+      deprecated: labels.get('deprecated'),
+      retirement: labels.get('tentative retirement date'),
     }
   }
   return undefined
@@ -541,7 +549,7 @@ function anthropicTentativeShutdown(text, id) {
   return anthropicStatusDate(match[1], id, 'tentative retirement date', value)
 }
 
-const anthropicStatusRecords = new WeakSet()
+const anthropicStatusStates = new WeakMap()
 
 function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
@@ -587,7 +595,7 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
         }
       }
       if (announcementIds.has(id)) continue
-      anthropicStatusRecords.add(item)
+      anthropicStatusStates.set(item, state)
       records.push(item)
     }
   }
@@ -598,7 +606,12 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
       unique.set(record.id, record)
       continue
     }
-    if (previous.announced !== record.announced || previous.shutdown !== record.shutdown || previous.date_precision !== record.date_precision) {
+    if (
+      anthropicStatusStates.get(previous) !== anthropicStatusStates.get(record) ||
+      previous.announced !== record.announced ||
+      previous.shutdown !== record.shutdown ||
+      previous.date_precision !== record.date_precision
+    ) {
       throw new Error(`anthropic model status table has conflicting rows for ${record.id}`)
     }
   }
@@ -607,16 +620,14 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
 
 export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
   let announcements = []
-  let announcementError
   try {
     announcements = parseDeprecationsHtml(html, sourceUrl, 'anthropic')
   } catch (error) {
     if (!error.message.includes('has no recognised model tables')) throw error
-    announcementError = error
   }
   const announcementIds = new Set(announcements.map(record => record.id))
   const status = parseAnthropicStatusTables(html, sourceUrl, announcementIds)
-  if (!announcements.length && !status.recognisedTables) throw announcementError
+  if (!status.recognisedTables) throw new Error('anthropic deprecations page has no model status table')
   const records = [...announcements, ...status.records]
   if (!records.length) throw new Error('anthropic deprecations page has no model entries')
   return records
@@ -963,15 +974,18 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
       if (owner && owner !== target) absorb(target, owner, aliases)
       aliases.add(alias)
     }
-    const anthropicStatus = provider.publisher === 'anthropic' && (record.announced === undefined || anthropicStatusRecords.has(record))
+    const anthropicStatus = provider.publisher === 'anthropic'
+      ? anthropicStatusStates.get(record)
+      : undefined
     if (anthropicStatus) {
-      if (target.announced === undefined && record.announced !== undefined) target.announced = record.announced
-      const preserveShutdown = target.shutdown && target.date_precision !== 'tentative'
-      if (!preserveShutdown) {
-        delete target.shutdown
-        delete target.date_precision
+      if (anthropicStatus === 'active') {
+        for (const field of ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']) delete target[field]
         if (record.shutdown !== undefined) target.shutdown = record.shutdown
         if (record.date_precision !== undefined) target.date_precision = record.date_precision
+      } else {
+        for (const field of ['announced', 'shutdown', 'date_precision']) delete target[field]
+        target.announced = record.announced
+        if (record.shutdown !== undefined) target.shutdown = record.shutdown
       }
       if (target.source === undefined && record.source !== undefined) target.source = record.source
       if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
