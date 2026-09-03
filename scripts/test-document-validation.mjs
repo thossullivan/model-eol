@@ -91,6 +91,16 @@ unprovenDistributionAnnouncement.models[0].distributions = [
 ]
 assert(validateFeed(unprovenDistributionAnnouncement).some(error => error.path === 'models[0].distributions[0]' && error.message.includes('dated distribution needs a source')), 'the runtime feed validator requires provenance for announced-only distributor dates')
 
+const tentativePrecisionFeed = validFeed()
+tentativePrecisionFeed.models[0] = {
+  id: 'tentative-model',
+  shutdown: '2027-06-09',
+  date_precision: 'tentative',
+  distributions: [{ via: 'test-channel', shutdown: '2027-07-01', date_precision: 'tentative' }],
+}
+assert.equal(validateJsonSchema(tentativePrecisionFeed, catalog.byType.get('feed')).length, 0, 'the feed schema accepts tentative publisher and distributor dates')
+assert.equal(validateFeed(tentativePrecisionFeed).length, 0, 'the runtime feed validator accepts tentative publisher and distributor dates')
+
 const credentialEnvironmentNames = [
   'GITHUB_TOKEN', 'gh_auth', 'Actions_Runtime_URL', 'ssh_auth_sock',
   'AWS_SECRET_ACCESS_KEY', 'MODEL_EOL_SECRET', 'database_password', 'credential_file',
@@ -277,6 +287,41 @@ try {
   const strictCheckFinding = structuredClone(generated.get('check'))
   strictCheckFinding.findings[0].unexpected = true
   assert(validateDocument(strictCheckFinding, { type: 'check' }).errors.some(error => error.path === '$.findings[0].unexpected' && error.keyword === 'additionalProperties'), 'check findings reject unknown nested fields')
+
+  const tentativeRoot = path.join(tempRoot, 'tentative-documents')
+  const tentativeFeeds = path.join(tentativeRoot, 'feeds')
+  fs.mkdirSync(tentativeFeeds, { recursive: true })
+  fs.writeFileSync(path.join(tentativeRoot, 'app.py'), 'MODEL = "tentative-document-model"\n')
+  writeJson(path.join(tentativeFeeds, 'anthropic.json'), {
+    spec: 'model-eol/0.1',
+    publisher: 'anthropic',
+    generated: '2026-09-03T00:00:00Z',
+    source: 'https://example.invalid/anthropic',
+    policy: { min_notice_days: 60, source: 'https://example.invalid/anthropic' },
+    models: [{ id: 'tentative-document-model', shutdown: '2026-09-29', date_precision: 'tentative' }],
+  })
+  const tentativeDocuments = new Map()
+  for (const [type, args] of [
+    ['check', ['check', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30', '--json']],
+    ['inventory', ['inventory', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30', '--json']],
+    ['schedule', ['schedule', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30', '--json']],
+    ['alert', ['alert', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30', '--json']],
+    ['plan', ['plan', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30']],
+  ]) {
+    const report = run(args)
+    assert.equal(report.code, 0, `${type} emits a tentative-floor document without failing: ${report.err}`)
+    const document = JSON.parse(report.out)
+    tentativeDocuments.set(type, document)
+    const file = path.join(tempRoot, `tentative-${type}.json`)
+    writeJson(file, document)
+    const validation = run(['validate', file])
+    assert.equal(validation.code, 0, `a ${type} document derived from a tentative finding validates: ${validation.err}`)
+  }
+  assert.equal(tentativeDocuments.get('check').findings[0].date_precision, 'tentative', 'check preserves tentative precision')
+  assert.equal(tentativeDocuments.get('inventory').model_references[0].date_precision, 'tentative', 'inventory preserves tentative precision')
+  assert.equal(tentativeDocuments.get('schedule').items[0].date_precision, 'tentative', 'schedule preserves tentative precision')
+  assert.equal(tentativeDocuments.get('alert').warnings[0].date_precision, 'tentative', 'alert preserves tentative precision')
+  assert.equal(tentativeDocuments.get('plan').items.length, 0, 'plan creates no migration item for a tentative finding')
   const artifactInventory = JSON.parse(run(['inventory', tempRoot, '--json']).out)
   assert(!artifactInventory.model_references.some(reference => reference.file.endsWith('/check.json')), 'a generated check report is not re-ingested as repository model usage')
   assert(artifactInventory.scan_notes.some(note => note.reason === 'model-eol-document-skipped' && note.file.endsWith('/check.json')), 'scanner records the generated check report as an intentional product artifact skip')

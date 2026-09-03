@@ -357,7 +357,7 @@ write(path.join(tentativeBotFeeds, 'anthropic.json'), JSON.stringify({
   generated: '2026-09-03T00:00:00Z',
   source: 'https://example.invalid/anthropic',
   policy: { min_notice_days: 60, source: 'https://example.invalid/anthropic' },
-  models: [{ id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'earliest' }],
+  models: [{ id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'tentative' }],
 }))
 const tentativeBotRepo = makeRepo({
   name: 'tentative-floor',

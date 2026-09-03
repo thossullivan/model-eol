@@ -49,10 +49,9 @@ A feed is a JSON document: metadata + a list of model entries.
 | `replacement_note` | no | Free-text guidance such as parameter requirements or provider platform alternatives |
 | `notes` | no | Human context: structural differences, migration gotchas |
 | `distributions` | no | Per-distributor lifecycles - the same weights on different clocks (Azure, Bedrock, Vertex). Each entry: `via`, optional `announced`/`shutdown`/`status`/`date_precision`, `source` |
-| `date_precision` | no | Qualifies `shutdown`: absent or `"exact"` means the stated day; `"earliest"` means the provider commits only that the event happens no sooner (Google's "earliest possible" dates). Consumers treat an earliest date as the scheduled date - it is the soonest legal death - and display it as a lower bound |
+| `date_precision` | no | Qualifies `shutdown`: absent or `"exact"` means the stated day; `"earliest"` is a scheduled date that cannot move earlier; `"tentative"` means the publisher lists a not-before retirement date without announcing deprecation |
 
-Publisher "tentative" or "not sooner than" dates for active models use `earliest`.
-These entries can omit `announced` when the publisher gives no announcement date.
+Tentative entries carry no `announced`. Consumers must not treat their dates as scheduled retirements. The reference checker reports them as `scheduled` and never fails on them.
 
 Dates are ISO 8601, UTC. A model with no `announced` and no `shutdown` is an
 affirmative statement of "no retirement scheduled as of `generated`" - the absence

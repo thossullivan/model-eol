@@ -990,65 +990,85 @@ const tentativeFloorFinding = findingFromRef({
   file: 'fixture.py',
   line: 1,
   matched: 'tentative-floor-model',
-  entry: { id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'earliest' },
+  entry: { id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'tentative' },
   publisher: 'anthropic',
   usage: 'model-reference',
   resolved_provider: 'anthropic',
   confidence: 'medium',
   policy: tentativePolicy,
-  generated: '2026-09-03T00:00:00Z',
+  generated: '2026-08-18T00:00:00Z',
 }, { days: 30, today: tentativeToday })
-assert(tentativeFloorFinding.status === 'scheduled' && tentativeFloorFinding.date_precision === 'earliest', 'a tentative publisher floor remains scheduled inside the threshold')
-assert(tentativeFloorFinding.safe_until === '2026-11-02' && tentativeFloorFinding.days === 60, 'a tentative floor uses the later policy date for safe_until and days')
+assert(tentativeFloorFinding.status === 'scheduled' && tentativeFloorFinding.date_precision === 'tentative', 'a tentative publisher floor remains scheduled inside the threshold')
+assert(tentativeFloorFinding.safe_until === '2026-10-17' && tentativeFloorFinding.days === 44, 'a tentative floor uses the later policy date for safe_until and days')
 const pastTentativeFloor = lifecycleFor({
   shutdown: '2026-08-01',
-  date_precision: 'earliest',
+  date_precision: 'tentative',
 }, {
   days: 30,
   today: tentativeToday,
   policy: tentativePolicy,
-  generated: '2026-09-03T00:00:00Z',
+  generated: '2026-08-18T00:00:00Z',
 })
-assert(pastTentativeFloor.status === 'scheduled' && pastTentativeFloor.shutdown === '2026-08-01' && pastTentativeFloor.safe_until === '2026-11-02', 'a past tentative publisher floor never becomes retired')
-const announcedEarliestFinding = findingFromRef({
+assert(pastTentativeFloor.status === 'scheduled' && pastTentativeFloor.shutdown === '2026-08-01' && pastTentativeFloor.safe_until === '2026-10-17', 'a past tentative publisher floor never becomes retired')
+assert(pastTentativeFloor.days === 44, 'a past tentative floor reports days from the later policy date')
+const pastEarliestFinding = findingFromRef({
   file: 'fixture.py',
   line: 1,
-  matched: 'announced-earliest-model',
-  entry: { id: 'announced-earliest-model', announced: '2026-07-01', shutdown: '2026-09-29', date_precision: 'earliest' },
+  matched: 'past-earliest-model',
+  entry: { id: 'past-earliest-model', shutdown: '2026-06-01', date_precision: 'earliest' },
   publisher: 'google',
   usage: 'model-reference',
   resolved_provider: 'google',
   confidence: 'medium',
 }, { days: 30, today: tentativeToday })
-assert(announcedEarliestFinding.status === 'retiring', 'an announced Google earliest date remains retiring inside the threshold')
+assert(pastEarliestFinding.status === 'retired', 'a Google earliest date without an announcement becomes retired after its date')
+const earliestFinding = findingFromRef({
+  file: 'fixture.py',
+  line: 1,
+  matched: 'earliest-model',
+  entry: { id: 'earliest-model', shutdown: '2026-09-29', date_precision: 'earliest' },
+  publisher: 'google',
+  usage: 'model-reference',
+  resolved_provider: 'google',
+  confidence: 'medium',
+}, { days: 30, today: tentativeToday })
+assert(earliestFinding.status === 'retiring', 'an earliest date without an announcement becomes retiring inside the threshold')
 const distributorEarliest = lifecycleFor({
   distributions: [{ via: 'test-channel', shutdown: '2026-09-29', date_precision: 'earliest' }],
 }, { days: 30, via: 'test-channel', today: tentativeToday })
 assert(distributorEarliest.status === 'retiring', 'a distributor earliest date keeps threshold behavior without an announcement')
-const earliestCheck = formatCheck({ findings: [tentativeFloorFinding], bad: [], scannedFiles: 1, days: 30, scope: 'all' })
-const tentativeHumanText = 'scheduled - tentative, not announced: no earlier than 2026-09-29, guaranteed until 2026-11-02 by anthropic policy'
-assert(earliestCheck.includes(tentativeHumanText), 'human check output identifies the tentative unannounced floor')
-const optionsCheck = formatCheck({ findings: [{ ...announcedEarliestFinding, replacement: null, replacement_options: ['first-choice', 'second-choice'] }], bad: [announcedEarliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
+const distributorTentative = lifecycleFor({
+  announced: '2026-07-01',
+  distributions: [{ via: 'test-channel', shutdown: '2026-08-01', date_precision: 'tentative' }],
+}, { days: 30, via: 'test-channel', today: tentativeToday, policy: tentativePolicy, generated: '2026-08-18T00:00:00Z' })
+assert(distributorTentative.status === 'scheduled' && distributorTentative.via === 'test-channel', 'a tentative distributor floor remains scheduled regardless of announcement or date')
+const tentativeCheck = formatCheck({ findings: [tentativeFloorFinding], bad: [], scannedFiles: 1, days: 30, scope: 'all' })
+const tentativeHumanText = 'scheduled - tentative, not announced: not sooner than 2026-09-29, guaranteed until 2026-10-17 by anthropic policy'
+assert(tentativeCheck.includes(tentativeHumanText), 'human check output identifies the tentative unannounced floor')
+const optionsCheck = formatCheck({ findings: [{ ...earliestFinding, replacement: null, replacement_options: ['first-choice', 'second-choice'] }], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
 assert(optionsCheck.includes('options: first-choice | second-choice'), 'human check output renders replacement options compactly')
 const earliestSchedule = formatSchedule({
   items: [tentativeFloorFinding],
   candidate_model_references: [],
   unresolved_integrations: [],
-  earliest_risk: { safe_until: '2026-11-02', id: 'tentative-floor-model' },
+  earliest_risk: { safe_until: '2026-10-17', id: 'tentative-floor-model' },
 }, 30)
 assert(earliestSchedule.includes(tentativeHumanText), 'human schedule output identifies the tentative unannounced floor')
 
 const tentativeFloorDir = path.join(tempRoot, 'tentative-floor')
 const tentativeFloorFeeds = path.join(tentativeFloorDir, 'feeds')
 fs.mkdirSync(tentativeFloorFeeds, { recursive: true })
-fs.writeFileSync(path.join(tentativeFloorDir, 'app.py'), 'MODEL = "tentative-floor-model"\n')
+fs.writeFileSync(path.join(tentativeFloorDir, 'app.py'), 'MODEL = "tentative-floor-model"\nPAST_MODEL = "past-tentative-floor-model"\n')
 fs.writeFileSync(path.join(tentativeFloorFeeds, 'anthropic.json'), JSON.stringify({
   spec: 'model-eol/0.1',
   publisher: 'anthropic',
-  generated: '2026-09-03T00:00:00Z',
+  generated: '2026-08-18T00:00:00Z',
   source: 'https://example.invalid/anthropic',
   policy: tentativePolicy,
-  models: [{ id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'earliest' }],
+  models: [
+    { id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'tentative' },
+    { id: 'past-tentative-floor-model', shutdown: '2026-08-01', date_precision: 'tentative' },
+  ],
 }))
 const tentativeFloorCheck = run(['check', tentativeFloorDir, '--feeds', tentativeFloorFeeds, '--days', '30'])
 const tentativeFloorSchedule = run(['schedule', tentativeFloorDir, '--feeds', tentativeFloorFeeds, '--days', '30'])
@@ -1057,6 +1077,29 @@ assert(tentativeFloorCheck.code === 0, 'check exits zero for a tentative floor i
 assert(tentativeFloorCheck.out.includes(tentativeHumanText), 'check renders the tentative-floor policy guarantee')
 assert(tentativeFloorSchedule.out.includes(tentativeHumanText), 'schedule renders the tentative-floor policy guarantee')
 assert(tentativeFloorInventory.out.includes(tentativeHumanText), 'inventory renders the tentative-floor policy guarantee')
+const tentativeFeedPath = path.join(tentativeFloorFeeds, 'anthropic.json')
+const validTentativeFeed = run(['validate', tentativeFeedPath])
+assert(validTentativeFeed.code === 0, 'validate accepts tentative model precision')
+const invalidPrecisionFeed = JSON.parse(fs.readFileSync(tentativeFeedPath, 'utf8'))
+invalidPrecisionFeed.models[0].date_precision = 'approximate'
+const invalidPrecisionPath = path.join(tentativeFloorDir, 'invalid-precision.json')
+fs.writeFileSync(invalidPrecisionPath, JSON.stringify(invalidPrecisionFeed))
+const invalidPrecisionValidation = run(['validate', invalidPrecisionPath])
+assert(invalidPrecisionValidation.code === 2 && invalidPrecisionValidation.err.includes('date_precision'), 'validate rejects an unknown date precision')
+
+const earliestRegressionDir = path.join(tempRoot, 'earliest-regression')
+const earliestRegressionFeeds = path.join(earliestRegressionDir, 'feeds')
+fs.mkdirSync(earliestRegressionFeeds, { recursive: true })
+fs.writeFileSync(path.join(earliestRegressionDir, 'app.py'), 'MODEL = "gemini-2.0-flash"\n')
+fs.writeFileSync(path.join(earliestRegressionFeeds, 'google.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'google',
+  generated: '2026-09-03T00:00:00Z',
+  source: 'https://example.invalid/google',
+  models: [{ id: 'gemini-2.0-flash', shutdown: '2026-06-01', date_precision: 'earliest' }],
+}))
+const earliestRegressionCheck = run(['check', earliestRegressionDir, '--feeds', earliestRegressionFeeds, '--days', '90'])
+assert(earliestRegressionCheck.code === 1 && earliestRegressionCheck.out.includes('RETIRED no earlier than 2026-06-01'), 'check fails for a past Google earliest date without an announcement')
 
 const duplicateFeeds = path.join(tempRoot, 'duplicate-feeds')
 fs.mkdirSync(duplicateFeeds)
