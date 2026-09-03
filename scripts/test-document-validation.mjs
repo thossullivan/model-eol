@@ -14,7 +14,7 @@ import {
 } from '../lib/validate-document.mjs'
 import { normalizeConfig } from '../lib/config.mjs'
 import { loadFeeds } from '../lib/feeds.mjs'
-import { validateJsonSchema } from '../lib/json-schema.mjs'
+import { JsonSchemaRegistry, validateJsonSchema } from '../lib/json-schema.mjs'
 import { formatInventoryCycloneDX } from '../lib/reports.mjs'
 import { validateFeed } from '../lib/validate-feed.mjs'
 
@@ -22,6 +22,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const cli = path.join(root, 'check.mjs')
 const fixture = path.join(root, 'test/fixture')
 const canonicalBase = 'https://thossullivan.github.io/model-eol/schema/0.1/'
+const schema052Directory = path.join(fixture, 'schemas-0.5.2')
+const schema052 = new Map(['check', 'inventory', 'plan'].map(type => [
+  type,
+  JSON.parse(fs.readFileSync(path.join(schema052Directory, `model-eol.${type}.schema.json`), 'utf8')),
+]))
 
 const run = (args, { cwd = root } = {}) => {
   const result = spawnSync(process.execPath, [cli, ...args], {
@@ -359,11 +364,21 @@ try {
     assert.match(validation.out, new RegExp(`valid ${type} document`), `${type} is automatically selected by discriminator`)
   }
 
-  assert(generated.get('check').findings.every(item => Object.hasOwn(item, 'waiver')), 'check findings always emit nullable waiver metadata')
-  assert(generated.get('inventory').model_references.every(item => Object.hasOwn(item, 'waiver')), 'inventory findings always emit nullable waiver metadata')
-  assert(generated.get('schedule').items.every(item => Object.hasOwn(item, 'waiver')), 'schedule findings always emit nullable waiver metadata')
-  assert(generated.get('alert').errors.every(item => Object.hasOwn(item, 'waiver')), 'alert model findings always emit nullable waiver metadata')
-  assert([...generated.get('plan').items, ...generated.get('plan').issues].every(item => Object.hasOwn(item, 'waiver')), 'plan findings always emit nullable waiver metadata')
+  for (const type of ['check', 'inventory', 'schedule', 'alert', 'plan']) {
+    assert.deepEqual(generated.get(type), withoutWaiverFields(generated.get(type)), `default-config ${type} output omits unmatched waiver fields`)
+  }
+
+  for (const [type, schema, registered] of [
+    ['check', schema052.get('check'), [schema052.get('check'), schema052.get('inventory')]],
+    ['inventory', schema052.get('inventory'), [schema052.get('inventory')]],
+    ['schedule', catalog.byType.get('schedule'), [catalog.byType.get('schedule'), schema052.get('inventory')]],
+    ['alert', catalog.byType.get('alert'), [catalog.byType.get('alert'), schema052.get('inventory')]],
+    ['plan', schema052.get('plan'), [schema052.get('plan')]],
+  ]) {
+    const registry = new JsonSchemaRegistry(registered)
+    registry.assertReferences()
+    assert.equal(validateJsonSchema(generated.get(type), schema, { registry }).length, 0, `default-config ${type} output validates against the pinned 0.5.2 schema contract`)
+  }
 
   for (const type of ['check', 'inventory', 'plan']) {
     const preWaiverDocument = withoutWaiverFields(generated.get(type))

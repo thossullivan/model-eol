@@ -201,7 +201,8 @@ fixtures, caches, vendored catalogs - that is not a live dependency. A **waiver*
 records a deliberate exception on a live dependency: which model, why, who owns
 it, and the absolute date it expires. A waiver never hides its finding. The
 reference stays in `check`, `inventory`, `schedule`, `alert`, `plan`, and the
-CycloneDX export with its reason, owner, expiry, and active state attached:
+CycloneDX export with its reason, owner, expiry, and active state attached. The
+`waiver` field appears on a finding only when a waiver matched it:
 
 ```
 ✗ app.py:2  o3-deep-research  RETIRED 2026-07-23 (42 days ago) -> gpt-5.6-sol  [waived until 2026-12-31 by @research-platform: Research pipeline pinned until the Q4 rerun.]

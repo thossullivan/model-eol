@@ -1998,7 +1998,7 @@ assert(baseDriftError?.message.includes('evaluated base commit') && baseDriftErr
 assert(baseDriftGithub.calls.length === 0, 'evaluated-base drift is rejected before any GitHub read or write')
 
 const unavailableChecker = path.join(tempRoot, 'shutdown-unavailable-checker.mjs')
-write(unavailableChecker, `console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:[],items:[],issues:[{file:"direct.py",line:1,matched:"retired-without-date",id:"retired-without-date",publisher:"google",usage:"direct-api",confidence:"high",status:"retired",shutdown:null,via:"vertex-ai",requested_via:"vertex-ai",waiver:null,reason:"shutdown-date-unavailable",sources:[],notes:null}]}))\n`)
+write(unavailableChecker, `console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:[],items:[],issues:[{file:"direct.py",line:1,matched:"retired-without-date",id:"retired-without-date",publisher:"google",usage:"direct-api",confidence:"high",status:"retired",shutdown:null,via:"vertex-ai",requested_via:"vertex-ai",reason:"shutdown-date-unavailable",sources:[],notes:null}]}))\n`)
 const unavailableRepo = makeRepo({ name: 'shutdown-unavailable', files: baseFiles })
 const unavailableResult = await runBot({
   repo: 'example/shutdown-unavailable',
