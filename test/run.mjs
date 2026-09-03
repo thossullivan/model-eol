@@ -2,6 +2,7 @@
 // Smoke test for the reference checker. Time-stable assertions only:
 // o3-deep-research's shutdown (2026-07-23) is in the past forever, and
 // claude-opus-4-1's (2026-08-05) is either retiring or retired - both flag.
+import { validateFeed } from '../lib/validate-feed.mjs'
 import crypto from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -1246,6 +1247,23 @@ assert(retiredDistributorTentative.status === 'retired', 'retired distributor st
 const tentativeCheck = formatCheck({ findings: [tentativeFloorFinding], bad: [], scannedFiles: 1, days: 30, scope: 'all' })
 const tentativeHumanText = 'scheduled - tentative, not announced: not sooner than 2026-09-29, guaranteed until 2026-10-17 by anthropic policy'
 assert(tentativeCheck.includes(tentativeHumanText), 'human check output identifies the tentative unannounced floor')
+const distributorTentativeFinding = findingFromRef({
+  file: 'fixture.py',
+  line: 1,
+  matched: 'distributor-tentative-model',
+  entry: { id: 'distributor-tentative-model', distributions: [{ via: 'aws-bedrock', shutdown: '2026-09-01', date_precision: 'tentative' }] },
+  publisher: 'anthropic',
+  usage: 'model-reference',
+  resolved_provider: 'anthropic',
+  confidence: 'medium',
+  policy: tentativePolicy,
+  generated: '2026-08-18T00:00:00Z',
+}, { days: 30, via: 'aws-bedrock', today: tentativeToday })
+const distributorTentativeCheck = formatCheck({ findings: [distributorTentativeFinding], bad: [], scannedFiles: 1, days: 30, scope: 'all' })
+assert(distributorTentativeCheck.includes('scheduled - tentative, not announced: not sooner than 2026-09-01') && !distributorTentativeCheck.includes('policy'), 'a distributor tentative floor never cites publisher policy')
+const tentativeFeedBase = { spec: 'model-eol/0.1', publisher: 'anthropic', generated: '2026-09-03T00:00:00Z', source: 'https://example.invalid/anthropic' }
+assert(validateFeed({ ...tentativeFeedBase, models: [{ id: 'floorless', date_precision: 'tentative' }] }).some(error => error.path.endsWith('.shutdown')), 'tentative precision requires a shutdown date')
+assert(validateFeed({ ...tentativeFeedBase, models: [{ id: 'floorless', distributions: [{ via: 'aws-bedrock', date_precision: 'tentative', source: 'https://example.invalid/bedrock' }] }] }).some(error => error.path.endsWith('.shutdown')), 'tentative distribution precision requires a shutdown date')
 const optionsCheck = formatCheck({ findings: [{ ...earliestFinding, replacement: null, replacement_options: ['first-choice', 'second-choice'] }], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
 assert(optionsCheck.includes('options: first-choice | second-choice'), 'human check output renders replacement options compactly')
 const earliestSchedule = formatSchedule({
