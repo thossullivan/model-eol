@@ -329,6 +329,8 @@ const spacerRowRecords = parseAnthropicDeprecations(`<table>${anthropicStatusHea
 assert(spacerRowRecords.length === 1 && spacerRowRecords[0].id === 'claude-kept-row', 'a wholly empty spacer row is still skipped')
 const renamedSignatureReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than June 9, 2027')}<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Retirement date</th></tr><tr><td><code>claude-drifted-status</code></td><td>Active</td><td>N/A</td><td>September 1, 2027</td></tr></table>`)
 assert(renamedSignatureReason.includes('missing required columns: tentative retirement'), 'a status-shaped table with a renamed tentative column fails closed instead of parsing as an announcement')
+const twoDateCellReason = anthropicStatusError(anthropicStatusTable('claude-two-dates', 'Retired', 'June 1, 2026', '2026-08-01 August 5, 2026'))
+assert(twoDateCellReason.includes('unrecognised retirement date'), 'a status date cell with two date candidates fails closed')
 const missingDeprecatedReason = anthropicStatusError(anthropicStatusTable('claude-missing-deprecated-date', 'Deprecated', 'N/A', 'September 1, 2027'))
 assert(missingDeprecatedReason.includes('claude-missing-deprecated-date') && missingDeprecatedReason.includes('N/A'), 'Anthropic rejects a non-active status row without a deprecated date')
 const unknownStateReason = anthropicStatusError(anthropicStatusTable('claude-preview-state', 'Preview', 'N/A', 'N/A'))

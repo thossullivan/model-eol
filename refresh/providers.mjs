@@ -592,7 +592,11 @@ function anthropicStatusDate(text, id, field, cellText = text) {
     date = dateFromText(value)
   } catch {}
   const residual = value.replace(DATE_PATTERN, '').replace(HUMAN_DATE_PATTERN, '').trim()
-  if (!date || residual) {
+  let candidates = 0
+  try {
+    candidates = dateCandidates(value).length
+  } catch {}
+  if (!date || residual || candidates !== 1) {
     throw new Error(`anthropic model status row ${id} has an unrecognised ${field}: ${plainText(cellText) || '(empty)'}`)
   }
   return date
