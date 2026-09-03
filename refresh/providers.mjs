@@ -126,6 +126,14 @@ function modelId(fragment) {
   return text.replace(/\s+\(including\b[\s\S]*$/i, '').trim()
 }
 
+function anthropicAnnouncementAliases(fragment, id) {
+  const tokens = codeText(fragment)
+    .map(token => token.replace(/^`|`$/g, '').trim())
+    .filter(token => MODEL_ID_PATTERN.test(token))
+  if (tokens.length < 2) return []
+  return [...new Set(tokens)].filter(token => token !== id)
+}
+
 const likelyReplacementToken = token => /[-_]/.test(token) || /\d/.test(token)
 
 const addUnique = (values, value) => {
@@ -349,12 +357,19 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
         throw new Error(`${provider} deprecations table refused row: ${reason}: ${id}`)
       }
       const shutdownCell = row.cells[headers.date]
-      const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
-      if (!shutdown) throw new Error(`${provider} deprecations entry ${id} has no valid shutdown date`)
+      const shutdownText = plainText(shutdownCell?.text)
+      const noShutdown = provider === 'anthropic' && /^n\/a$/i.test(shutdownText)
+      const shutdown = noShutdown ? undefined : dateFromText(shutdownText)
+      if (!shutdown && !noShutdown) throw new Error(`${provider} deprecations entry ${id} has no valid shutdown date`)
       const replacementCell = headers.recommended >= 0 ? row.cells[headers.recommended] : undefined
-      const item = { id, announced: tableAnnounced, shutdown, source: sourceUrl }
+      const item = { id, announced: tableAnnounced, source: sourceUrl }
+      if (shutdown) item.shutdown = shutdown
+      if (provider === 'anthropic') {
+        const aliases = anthropicAnnouncementAliases(modelCell.html, id)
+        if (aliases.length) item.aliases = aliases
+      }
       if (replacementCell) Object.assign(item, extractReplacementFields(replacementCell.html))
-      if (item.announced && item.shutdown < item.announced) {
+      if (item.shutdown && item.shutdown < item.announced) {
         throw new Error(`${provider} deprecations entry ${id} has shutdown before announcement`)
       }
       records.push(item)
@@ -379,6 +394,12 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
       throw new Error(`${provider} deprecations page has conflicting rows for ${record.id}`)
     }
     if (!hasReplacementPayload(previous) && hasReplacementPayload(record)) copyReplacementPayload(previous, record)
+    if (provider === 'anthropic') {
+      const aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
+        .filter(alias => alias !== previous.id)
+      if (aliases.length) previous.aliases = aliases
+      else delete previous.aliases
+    }
   }
   return [...unique.values()]
 }
@@ -604,11 +625,8 @@ function assertAnthropicStatusMatchesAnnouncement(id, state, status, announcemen
   if (status.announced !== announcement.announced) {
     throw new Error(`anthropic model status row ${id} conflicts with announcement: status deprecated ${status.announced}; announcement announced ${announcement.announced}`)
   }
-  if (status.shutdown !== undefined && status.shutdown !== announcement.shutdown) {
-    throw new Error(`anthropic model status row ${id} conflicts with announcement: status retirement ${status.shutdown}; announcement shutdown ${announcement.shutdown}`)
-  }
-  if (state === 'retired' && status.shutdown === undefined && announcement.shutdown !== undefined) {
-    throw new Error(`anthropic model status row ${id} conflicts with announcement: status retirement N/A; announcement shutdown ${announcement.shutdown}`)
+  if (status.shutdown !== announcement.shutdown) {
+    throw new Error(`anthropic model status row ${id} conflicts with announcement: status retirement ${status.shutdown ?? 'N/A'}; announcement shutdown ${announcement.shutdown ?? 'N/A'}`)
   }
 }
 
