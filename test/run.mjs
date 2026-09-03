@@ -1186,6 +1186,18 @@ const pastTentativeFloor = lifecycleFor({
 })
 assert(pastTentativeFloor.status === 'scheduled' && pastTentativeFloor.shutdown === '2026-08-01' && pastTentativeFloor.safe_until === '2026-10-17', 'a past tentative publisher floor never becomes retired')
 assert(pastTentativeFloor.days === 44, 'a past tentative floor reports days from the later policy date')
+const distributorTentativeFloor = lifecycleFor({
+  id: 'distributor-tentative-model',
+  distributions: [{ via: 'aws-bedrock', shutdown: '2026-09-01', date_precision: 'tentative' }],
+}, {
+  days: 30,
+  via: 'aws-bedrock',
+  today: tentativeToday,
+  policy: tentativePolicy,
+  generated: '2026-08-18T00:00:00Z',
+})
+assert(distributorTentativeFloor.status === 'scheduled' && distributorTentativeFloor.via === 'aws-bedrock', 'a distributor tentative floor remains scheduled on its own clock')
+assert(distributorTentativeFloor.safe_until === '2026-09-01' && distributorTentativeFloor.days === -2, 'publisher notice policy never extends a distributor tentative floor')
 const pastEarliestFinding = findingFromRef({
   file: 'fixture.py',
   line: 1,
