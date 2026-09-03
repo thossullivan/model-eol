@@ -14,7 +14,7 @@ import {
 } from '../lib/validate-document.mjs'
 import { normalizeConfig } from '../lib/config.mjs'
 import { loadFeeds } from '../lib/feeds.mjs'
-import { validateJsonSchema } from '../lib/json-schema.mjs'
+import { JsonSchemaRegistry, validateJsonSchema } from '../lib/json-schema.mjs'
 import { formatInventoryCycloneDX } from '../lib/reports.mjs'
 import { validateFeed } from '../lib/validate-feed.mjs'
 
@@ -22,6 +22,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const cli = path.join(root, 'check.mjs')
 const fixture = path.join(root, 'test/fixture')
 const canonicalBase = 'https://thossullivan.github.io/model-eol/schema/0.1/'
+const schema052Directory = path.join(fixture, 'schemas-0.5.2')
+const schema052 = new Map(['check', 'inventory', 'plan'].map(type => [
+  type,
+  JSON.parse(fs.readFileSync(path.join(schema052Directory, `model-eol.${type}.schema.json`), 'utf8')),
+]))
 
 const run = (args, { cwd = root } = {}) => {
   const result = spawnSync(process.execPath, [cli, ...args], {
@@ -50,6 +55,14 @@ const referencesIn = value => {
     ...(typeof value.$ref === 'string' ? [value.$ref] : []),
     ...Object.values(value).flatMap(referencesIn),
   ]
+}
+
+const withoutWaiverFields = value => {
+  if (Array.isArray(value)) return value.map(withoutWaiverFields)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => key !== 'waiver')
+    .map(([key, child]) => [key, withoutWaiverFields(child)]))
 }
 
 const catalog = loadDocumentSchemaCatalog()
@@ -91,6 +104,34 @@ unprovenDistributionAnnouncement.models[0].distributions = [
 ]
 assert(validateFeed(unprovenDistributionAnnouncement).some(error => error.path === 'models[0].distributions[0]' && error.message.includes('dated distribution needs a source')), 'the runtime feed validator requires provenance for announced-only distributor dates')
 
+const tentativePrecisionFeed = validFeed()
+tentativePrecisionFeed.models[0] = {
+  id: 'tentative-model',
+  shutdown: '2027-06-09',
+  date_precision: 'tentative',
+  distributions: [{ via: 'test-channel', shutdown: '2027-07-01', date_precision: 'tentative' }],
+}
+assert.equal(validateJsonSchema(tentativePrecisionFeed, catalog.byType.get('feed')).length, 0, 'the feed schema accepts tentative publisher and distributor dates')
+assert.equal(validateFeed(tentativePrecisionFeed).length, 0, 'the runtime feed validator accepts tentative publisher and distributor dates')
+
+const announcedTentativeModel = structuredClone(tentativePrecisionFeed)
+announcedTentativeModel.models[0].announced = '2026-08-01'
+assert(validateFeed(announcedTentativeModel).some(error => error.path === 'models[0].announced' && error.message.includes('tentative')), 'the runtime feed validator rejects announced tentative models')
+
+const announcedTentativeDistribution = structuredClone(tentativePrecisionFeed)
+announcedTentativeDistribution.models[0].distributions[0].announced = '2026-08-01'
+assert(validateFeed(announcedTentativeDistribution).some(error => error.path === 'models[0].distributions[0].announced' && error.message.includes('tentative')), 'the runtime feed validator rejects announced tentative distributions')
+
+const retiredTentativeDistribution = structuredClone(tentativePrecisionFeed)
+retiredTentativeDistribution.models[0].distributions[0].status = 'retired'
+assert(validateFeed(retiredTentativeDistribution).some(error => error.path === 'models[0].distributions[0].status' && error.message.includes('tentative')), 'the runtime feed validator rejects retired tentative distributions')
+
+for (const via of ['publisher', 'publisher-fallback', 'Publisher', 'PUBLISHER-FALLBACK']) {
+  const reservedDistribution = validFeed()
+  reservedDistribution.models[0].distributions = [{ via }]
+  assert(validateFeed(reservedDistribution).some(error => error.path === 'models[0].distributions[0].via' && error.message.includes('reserved publisher clock')), `the runtime feed validator rejects reserved clock ${via}`)
+}
+
 const credentialEnvironmentNames = [
   'GITHUB_TOKEN', 'gh_auth', 'Actions_Runtime_URL', 'ssh_auth_sock',
   'AWS_SECRET_ACCESS_KEY', 'MODEL_EOL_SECRET', 'database_password', 'credential_file',
@@ -102,6 +143,23 @@ for (const name of credentialEnvironmentNames) {
 }
 assert.equal(validateJsonSchema({ eval: { pass_env: ['OPENAI_API_KEY', 'MODEL_EOL_REPORT', 'AWS_REGION'] } }, catalog.byType.get('config')).length, 0, 'the standalone config schema permits explicit non-credential eval inputs')
 
+const validWaiver = {
+  model: 'test-model',
+  paths: ['services/legacy/**'],
+  via: 'aws-bedrock',
+  reason: 'A migration is scheduled.',
+  owner: '@platform-team',
+  expires: '2026-12-31',
+}
+assert.equal(validateJsonSchema({ waivers: [validWaiver] }, catalog.byType.get('config')).length, 0, 'the standalone config schema accepts a bounded owned waiver')
+assert.equal(normalizeConfig({ overrides: [{ paths: ['services/**'], waivers: [validWaiver] }] }).overrides[0].waivers.length, 1, 'runtime config normalization accepts waivers inside path overrides')
+const aggregateWaiverConfig = {
+  waivers: Array.from({ length: 500 }, () => validWaiver),
+  overrides: [{ paths: ['services/**'], waivers: [validWaiver] }],
+}
+assert.equal(validateJsonSchema(aggregateWaiverConfig, catalog.byType.get('config')).length, 0, 'portable config structure leaves the aggregate waiver cap to semantic validation')
+assert.throws(() => normalizeConfig(aggregateWaiverConfig), /at most 500 waivers/, 'runtime config normalization enforces the aggregate waiver cap across root and overrides')
+
 const cycloneDxReference = ({
   file,
   line,
@@ -111,6 +169,7 @@ const cycloneDxReference = ({
   status,
   shutdown,
   distributionStatus = null,
+  waiver = null,
 }) => ({
   file,
   line,
@@ -128,9 +187,11 @@ const cycloneDxReference = ({
   replacement: 'next-model',
   replacement_options: null,
   replacement_note: null,
+  waiver,
 })
+const sharedActiveWaiver = { reason: 'Migration scheduled.', owner: '@platform-team', expires: '2026-12-31', active: true }
 const mixedClockReferences = [
-  cycloneDxReference({ file: 'z-direct.py', line: 9, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01' }),
+  cycloneDxReference({ file: 'z-direct.py', line: 9, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: sharedActiveWaiver }),
   cycloneDxReference({ file: 'a-direct.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retiring', shutdown: '2026-08-01' }),
   cycloneDxReference({ file: 'a-direct.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retiring', shutdown: '2026-08-01' }),
   cycloneDxReference({ file: 'custom-publisher/service.ts', line: 3, usage: 'gateway', requestedVia: 'publisher', via: 'publisher', status: 'scheduled', shutdown: '2027-02-01' }),
@@ -151,6 +212,10 @@ assert.equal(new Set(mixedClockCycloneDx.components.map(component => component['
 assert(mixedClockCycloneDx.components.every(component => component['bom-ref'].includes(`:${encodeURIComponent(cycloneDxProperty(component, 'model-eol:lifecycle_channel'))}`)), 'each component bom-ref carries its lifecycle channel')
 assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:status'), 'retired', 'direct publisher lifecycle does not inherit a distributor status')
 assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:shutdown'), '2026-08-01', 'direct publisher lifecycle keeps its own shutdown clock')
+assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:waiver_active'), 'partial', 'CycloneDX marks a component with mixed waived and unwaived occurrences as partially waived')
+assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:waiver_owner'), undefined, 'partial CycloneDX waiver state omits ownership details')
+assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:waiver_expires'), undefined, 'partial CycloneDX waiver state omits expiry details')
+assert.equal(cycloneDxProperty(componentForChannel('publisher-direct'), 'model-eol:waiver_reason'), undefined, 'partial CycloneDX waiver state omits reason details')
 assert.equal(cycloneDxProperty(componentForChannel('publisher'), 'model-eol:shutdown'), '2027-02-01', 'a custom distribution literally named publisher does not collide with the direct publisher clock')
 assert.equal(cycloneDxProperty(componentForChannel('azure-ai-foundry'), 'model-eol:shutdown'), '2027-01-01', 'Azure lifecycle keeps its separate shutdown clock')
 assert.equal(cycloneDxProperty(componentForChannel('aws-bedrock'), 'model-eol:distribution_status'), 'extended-access', 'Bedrock lifecycle keeps its channel-specific distribution status')
@@ -163,6 +228,42 @@ assert.deepEqual(
   mixedClockCycloneDx,
   'CycloneDX component identities, lifecycle properties, and occurrences are independent of input order',
 )
+
+const fullyWaivedCycloneDx = formatInventoryCycloneDX(cycloneDxInventory([
+  cycloneDxReference({ file: 'first.py', line: 1, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: sharedActiveWaiver }),
+  cycloneDxReference({ file: 'second.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: sharedActiveWaiver }),
+]))
+const fullyWaivedComponent = fullyWaivedCycloneDx.components[0]
+assert.equal(cycloneDxProperty(fullyWaivedComponent, 'model-eol:waiver_active'), 'true', 'CycloneDX marks a component as waived when every occurrence has an active waiver')
+assert.equal(cycloneDxProperty(fullyWaivedComponent, 'model-eol:waiver_owner'), '@platform-team', 'a shared active waiver exposes its owner in CycloneDX')
+assert.equal(cycloneDxProperty(fullyWaivedComponent, 'model-eol:waiver_expires'), '2026-12-31', 'a shared active waiver exposes its expiry in CycloneDX')
+assert.equal(cycloneDxProperty(fullyWaivedComponent, 'model-eol:waiver_reason'), 'Migration scheduled.', 'a shared active waiver exposes its reason in CycloneDX')
+
+const distinctWaiversCycloneDx = formatInventoryCycloneDX(cycloneDxInventory([
+  cycloneDxReference({ file: 'first.py', line: 1, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: sharedActiveWaiver }),
+  cycloneDxReference({ file: 'second.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: { reason: 'Second migration.', owner: '@second-team', expires: '2026-11-30', active: true } }),
+]))
+const distinctWaiversComponent = distinctWaiversCycloneDx.components[0]
+assert.equal(cycloneDxProperty(distinctWaiversComponent, 'model-eol:waiver_active'), 'true', 'CycloneDX marks every-occurrence coverage as waived across distinct active waivers')
+assert.equal(cycloneDxProperty(distinctWaiversComponent, 'model-eol:waiver_expires'), '2026-11-30', 'distinct active waivers expose their earliest expiry in CycloneDX')
+assert.equal(cycloneDxProperty(distinctWaiversComponent, 'model-eol:waiver_owner'), undefined, 'distinct active waivers omit ambiguous ownership from CycloneDX')
+assert.equal(cycloneDxProperty(distinctWaiversComponent, 'model-eol:waiver_reason'), undefined, 'distinct active waivers omit ambiguous reasons from CycloneDX')
+
+const distinctExpiredWaiversCycloneDx = formatInventoryCycloneDX(cycloneDxInventory([
+  cycloneDxReference({ file: 'first.py', line: 1, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: { reason: 'First expired waiver.', owner: '@first-team', expires: '2026-10-31', active: false } }),
+  cycloneDxReference({ file: 'second.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: { reason: 'Second expired waiver.', owner: '@second-team', expires: '2026-11-30', active: false } }),
+]))
+const distinctExpiredWaiversComponent = distinctExpiredWaiversCycloneDx.components[0]
+assert.equal(cycloneDxProperty(distinctExpiredWaiversComponent, 'model-eol:waiver_active'), 'false', 'CycloneDX records expired waiver evidence when no occurrence is actively waived')
+assert.equal(cycloneDxProperty(distinctExpiredWaiversComponent, 'model-eol:waiver_expires'), '2026-11-30', 'distinct expired waivers expose their latest expiry in CycloneDX')
+assert.equal(cycloneDxProperty(distinctExpiredWaiversComponent, 'model-eol:waiver_owner'), undefined, 'distinct expired waivers omit ambiguous ownership from CycloneDX')
+assert.equal(cycloneDxProperty(distinctExpiredWaiversComponent, 'model-eol:waiver_reason'), undefined, 'distinct expired waivers omit ambiguous reasons from CycloneDX')
+
+const unwaivedCycloneDx = formatInventoryCycloneDX(cycloneDxInventory([
+  cycloneDxReference({ file: 'first.py', line: 1, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01' }),
+  cycloneDxReference({ file: 'second.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01' }),
+]))
+assert.equal(cycloneDxProperty(unwaivedCycloneDx.components[0], 'model-eol:waiver_active'), undefined, 'CycloneDX omits waiver properties when no occurrence is actively waived')
 
 const oneOfSchema = {
   $id: 'https://example.test/one-of.schema.json',
@@ -273,10 +374,69 @@ try {
     assert.match(validation.out, new RegExp(`valid ${type} document`), `${type} is automatically selected by discriminator`)
   }
 
+  for (const type of ['check', 'inventory', 'schedule', 'alert', 'plan']) {
+    assert.deepEqual(generated.get(type), withoutWaiverFields(generated.get(type)), `default-config ${type} output omits unmatched waiver fields`)
+  }
+
+  for (const [type, schema, registered] of [
+    ['check', schema052.get('check'), [schema052.get('check'), schema052.get('inventory')]],
+    ['inventory', schema052.get('inventory'), [schema052.get('inventory')]],
+    ['schedule', catalog.byType.get('schedule'), [catalog.byType.get('schedule'), schema052.get('inventory')]],
+    ['alert', catalog.byType.get('alert'), [catalog.byType.get('alert'), schema052.get('inventory')]],
+    ['plan', schema052.get('plan'), [schema052.get('plan')]],
+  ]) {
+    const registry = new JsonSchemaRegistry(registered)
+    registry.assertReferences()
+    assert.equal(validateJsonSchema(generated.get(type), schema, { registry }).length, 0, `default-config ${type} output validates against the pinned 0.5.2 schema contract`)
+  }
+
+  for (const type of ['check', 'inventory', 'plan']) {
+    const preWaiverDocument = withoutWaiverFields(generated.get(type))
+    assert.equal(validateDocument(preWaiverDocument, { type }).errors.length, 0, `pre-waiver 0.1 ${type} documents remain schema-compatible`)
+    const preWaiverPath = path.join(tempRoot, `pre-waiver-${type}.json`)
+    writeJson(preWaiverPath, preWaiverDocument)
+    const preWaiverValidation = run(['validate', preWaiverPath, '--type', type])
+    assert.equal(preWaiverValidation.code, 0, `model-eol validate accepts a pre-waiver 0.1 ${type} document: ${preWaiverValidation.err}`)
+  }
+
   assert.equal(generated.get('check').schema, 'model-eol/check@0.1', 'check --json emits its stable public discriminator')
   const strictCheckFinding = structuredClone(generated.get('check'))
   strictCheckFinding.findings[0].unexpected = true
   assert(validateDocument(strictCheckFinding, { type: 'check' }).errors.some(error => error.path === '$.findings[0].unexpected' && error.keyword === 'additionalProperties'), 'check findings reject unknown nested fields')
+  const tentativeRoot = path.join(tempRoot, 'tentative-documents')
+  const tentativeFeeds = path.join(tentativeRoot, 'feeds')
+  fs.mkdirSync(tentativeFeeds, { recursive: true })
+  fs.writeFileSync(path.join(tentativeRoot, 'app.py'), 'MODEL = "tentative-document-model"\n')
+  writeJson(path.join(tentativeFeeds, 'anthropic.json'), {
+    spec: 'model-eol/0.1',
+    publisher: 'anthropic',
+    generated: '2026-09-03T00:00:00Z',
+    source: 'https://example.invalid/anthropic',
+    policy: { min_notice_days: 60, source: 'https://example.invalid/anthropic' },
+    models: [{ id: 'tentative-document-model', shutdown: '2026-09-29', date_precision: 'tentative' }],
+  })
+  const tentativeDocuments = new Map()
+  for (const [type, args] of [
+    ['check', ['check', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30', '--json']],
+    ['inventory', ['inventory', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30', '--json']],
+    ['schedule', ['schedule', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30', '--json']],
+    ['alert', ['alert', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30', '--json']],
+    ['plan', ['plan', tentativeRoot, '--feeds', tentativeFeeds, '--days', '30']],
+  ]) {
+    const report = run(args)
+    assert.equal(report.code, 0, `${type} emits a tentative-floor document without failing: ${report.err}`)
+    const document = JSON.parse(report.out)
+    tentativeDocuments.set(type, document)
+    const file = path.join(tempRoot, `tentative-${type}.json`)
+    writeJson(file, document)
+    const validation = run(['validate', file])
+    assert.equal(validation.code, 0, `a ${type} document derived from a tentative finding validates: ${validation.err}`)
+  }
+  assert.equal(tentativeDocuments.get('check').findings[0].date_precision, 'tentative', 'check preserves tentative precision')
+  assert.equal(tentativeDocuments.get('inventory').model_references[0].date_precision, 'tentative', 'inventory preserves tentative precision')
+  assert.equal(tentativeDocuments.get('schedule').items[0].date_precision, 'tentative', 'schedule preserves tentative precision')
+  assert.equal(tentativeDocuments.get('alert').warnings[0].date_precision, 'tentative', 'alert preserves tentative precision')
+  assert.equal(tentativeDocuments.get('plan').items.length, 0, 'plan creates no migration item for a tentative finding')
   const artifactInventory = JSON.parse(run(['inventory', tempRoot, '--json']).out)
   assert(!artifactInventory.model_references.some(reference => reference.file.endsWith('/check.json')), 'a generated check report is not re-ingested as repository model usage')
   assert(artifactInventory.scan_notes.some(note => note.reason === 'model-eol-document-skipped' && note.file.endsWith('/check.json')), 'scanner records the generated check report as an intentional product artifact skip')
@@ -398,6 +558,12 @@ try {
   const missingRouteModel = run(['validate', missingRouteModelPath, '--type', 'config'])
   assert.equal(missingRouteModel.code, 2, 'Draft-07 property dependencies are enforced')
   assert.match(missingRouteModel.err, /\.model: is required when match is present/, 'dependency errors identify the missing peer')
+
+  const aggregateWaiverPath = path.join(tempRoot, 'aggregate-waivers.json')
+  writeJson(aggregateWaiverPath, aggregateWaiverConfig)
+  const aggregateWaivers = run(['validate', aggregateWaiverPath, '--type', 'config'])
+  assert.equal(aggregateWaivers.code, 2, 'public config validation enforces the aggregate waiver cap')
+  assert.match(aggregateWaivers.err, /at most 500 waivers/, 'aggregate waiver cap errors name the semantic resource bound')
 
   const crossedSchedule = structuredClone(generated.get('schedule'))
   crossedSchedule.scan_notes = [{ reason: 'test', unexpected: true }]

@@ -126,6 +126,14 @@ function modelId(fragment) {
   return text.replace(/\s+\(including\b[\s\S]*$/i, '').trim()
 }
 
+function anthropicAnnouncementAliases(fragment, id) {
+  const tokens = codeText(fragment)
+    .map(token => token.replace(/^`|`$/g, '').trim())
+    .filter(token => MODEL_ID_PATTERN.test(token))
+  if (tokens.length < 2) return []
+  return [...new Set(tokens)].filter(token => token !== id)
+}
+
 const likelyReplacementToken = token => /[-_]/.test(token) || /\d/.test(token)
 
 const addUnique = (values, value) => {
@@ -249,7 +257,39 @@ function tableRows(table) {
   })
 }
 
-function headerIndexes(rows) {
+const normaliseHeaderLabel = cell => plainText(cell?.text)
+  .toLowerCase()
+  .replace(/\[\s*\d+\s*\]|\(\s*\d+\s*\)/gu, ' ')
+  .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹*†‡]+/gu, ' ')
+  .replace(/[\p{P}\p{S}]+$/gu, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+const hasAnthropicStatusSignature = label => label.includes('tentative retirement')
+
+const isAnthropicStatusHeader = labels => labels.some(label => hasAnthropicStatusSignature(label) || label.includes('current state'))
+
+function anthropicStatusHeaderRow(rows) {
+  const tableHasHeaders = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
+  const firstDataRow = tableHasHeaders
+    ? rows.findIndex(row => !row.cells.length || row.cells.some(cell => cell.kind !== 'th'))
+    : Math.min(1, rows.length)
+  const dataRow = firstDataRow < 0 ? rows.length : firstDataRow
+  const headerRows = rows.slice(0, dataRow)
+  const signatures = headerRows
+    .map((row, index) => ({ row: index, labels: row.cells.map(normaliseHeaderLabel) }))
+    .filter(header => isAnthropicStatusHeader(header.labels))
+  if (signatures.length > 1) {
+    throw new Error('anthropic model status table has ambiguous signature rows')
+  }
+  if (!signatures.length) return undefined
+  return { ...signatures[0], dataRow }
+}
+
+function headerIndexes(rows, provider) {
+  if (provider === 'anthropic' && anthropicStatusHeaderRow(rows)) {
+    return { rejectedReason: 'anthropic-model-status-table' }
+  }
   for (const [index, row] of rows.entries()) {
     const labels = row.cells.map(cell => cell.text.toLowerCase())
     const date = labels.findIndex(label => /(shutdown|retirement|sunset|removal).*date|date.*(shutdown|retirement|sunset|removal)/i.test(label))
@@ -298,7 +338,7 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
   let recognisedTables = 0
   for (const table of tables) {
     const rows = tableRows(table[1])
-    const headers = headerIndexes(rows)
+    const headers = headerIndexes(rows, provider)
     if (!headers) continue
     if (headers.rejectedReason) {
       skippedReasons.add(headers.rejectedReason)
@@ -319,12 +359,19 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
         throw new Error(`${provider} deprecations table refused row: ${reason}: ${id}`)
       }
       const shutdownCell = row.cells[headers.date]
-      const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
-      if (!shutdown) throw new Error(`${provider} deprecations entry ${id} has no valid shutdown date`)
+      const shutdownText = plainText(shutdownCell?.text)
+      const noShutdown = provider === 'anthropic' && /^n\/a$/i.test(shutdownText)
+      const shutdown = noShutdown ? undefined : dateFromText(shutdownText)
+      if (!shutdown && !noShutdown) throw new Error(`${provider} deprecations entry ${id} has no valid shutdown date`)
       const replacementCell = headers.recommended >= 0 ? row.cells[headers.recommended] : undefined
-      const item = { id, announced: tableAnnounced, shutdown, source: sourceUrl }
+      const item = { id, announced: tableAnnounced, source: sourceUrl }
+      if (shutdown) item.shutdown = shutdown
+      if (provider === 'anthropic') {
+        const aliases = anthropicAnnouncementAliases(modelCell.html, id)
+        if (aliases.length) item.aliases = aliases
+      }
       if (replacementCell) Object.assign(item, extractReplacementFields(replacementCell.html))
-      if (item.announced && item.shutdown < item.announced) {
+      if (item.shutdown && item.shutdown < item.announced) {
         throw new Error(`${provider} deprecations entry ${id} has shutdown before announcement`)
       }
       records.push(item)
@@ -349,6 +396,12 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
       throw new Error(`${provider} deprecations page has conflicting rows for ${record.id}`)
     }
     if (!hasReplacementPayload(previous) && hasReplacementPayload(record)) copyReplacementPayload(previous, record)
+    if (provider === 'anthropic') {
+      const aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
+        .filter(alias => alias !== previous.id)
+      if (aliases.length) previous.aliases = aliases
+      else delete previous.aliases
+    }
   }
   return [...unique.values()]
 }
@@ -505,8 +558,175 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
   return [...unique.values()]
 }
 
-export const parseAnthropicDeprecations = (html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) =>
-  parseDeprecationsHtml(html, sourceUrl, 'anthropic')
+function anthropicStatusHeaderIndexes(rows) {
+  const header = anthropicStatusHeaderRow(rows)
+  if (!header) return undefined
+  const required = [
+    ['model', 'api model name', label => label.includes('api model name')],
+    ['state', 'current state', label => label.includes('current state')],
+    ['deprecated', 'deprecated', label => label.includes('deprecated')],
+    ['retirement', 'tentative retirement', hasAnthropicStatusSignature],
+  ]
+  const indexes = {}
+  const missing = []
+  for (const [key, name, matches] of required) {
+    const found = header.labels
+      .map((label, index) => matches(label) ? index : -1)
+      .filter(index => index >= 0)
+    if (found.length > 1) {
+      throw new Error(`anthropic model status table header has duplicate required column: ${name}`)
+    }
+    if (!found.length) missing.push(name)
+    else indexes[key] = found[0]
+  }
+  if (missing.length) {
+    throw new Error(`anthropic model status table header is missing required columns: ${missing.join(', ')}`)
+  }
+  return { row: header.row, dataRow: header.dataRow, ...indexes }
+}
+
+function anthropicStatusDate(text, id, field, cellText = text) {
+  const value = plainText(text)
+  let date
+  try {
+    date = dateFromText(value)
+  } catch {}
+  const residual = value.replace(DATE_PATTERN, '').replace(HUMAN_DATE_PATTERN, '').trim()
+  let candidates = 0
+  try {
+    candidates = dateCandidates(value).length
+  } catch {}
+  if (!date || residual || candidates !== 1) {
+    throw new Error(`anthropic model status row ${id} has an unrecognised ${field}: ${plainText(cellText) || '(empty)'}`)
+  }
+  return date
+}
+
+function anthropicTentativeShutdown(text, id) {
+  const value = plainText(text)
+  if (!value || /^n\/a$/i.test(value)) return undefined
+  const match = value.match(/^not sooner than\s+(.+)$/i)
+  if (!match) throw new Error(`anthropic model status row ${id} has an unrecognised tentative retirement date: ${value}`)
+  return anthropicStatusDate(match[1], id, 'tentative retirement date', value)
+}
+
+const anthropicStatusStates = new WeakMap()
+
+function anthropicAnnouncementIndex(announcements) {
+  const index = new Map()
+  for (const announcement of announcements) {
+    for (const id of [announcement.id, ...(announcement.aliases ?? [])]) {
+      const matches = index.get(id) ?? []
+      if (!matches.includes(announcement)) matches.push(announcement)
+      index.set(id, matches)
+    }
+  }
+  return index
+}
+
+function assertAnthropicStatusMatchesAnnouncement(id, state, status, announcement) {
+  if (state === 'active') {
+    throw new Error(`anthropic model status row ${id} conflicts with announcement: status state Active; announcement shutdown ${announcement.shutdown}`)
+  }
+  if (status.announced !== announcement.announced) {
+    throw new Error(`anthropic model status row ${id} conflicts with announcement: status deprecated ${status.announced}; announcement announced ${announcement.announced}`)
+  }
+  if (status.shutdown !== announcement.shutdown) {
+    throw new Error(`anthropic model status row ${id} conflicts with announcement: status retirement ${status.shutdown ?? 'N/A'}; announcement shutdown ${announcement.shutdown ?? 'N/A'}`)
+  }
+}
+
+function parseAnthropicStatusTables(html, sourceUrl, announcements) {
+  const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+  const announcementIndex = anthropicAnnouncementIndex(announcements)
+  const records = []
+  let recognisedTables = 0
+  for (const table of tables) {
+    const rows = tableRows(table[1])
+    const headers = anthropicStatusHeaderIndexes(rows)
+    if (!headers) continue
+    recognisedTables++
+    let parsedRows = 0
+    for (const row of rows.slice(headers.dataRow)) {
+      const modelCell = row.cells[headers.model]
+      if (row.cells.every(cell => !plainText(cell.text))) continue
+      if (!plainText(modelCell?.text)) throw new Error('anthropic model status table contains a populated row without a model id')
+      const id = modelId(modelCell.html)
+      if (!id) throw new Error('anthropic model status table contains a row without a model id')
+      if (!MODEL_ID_PATTERN.test(id)) {
+        const reason = /[\s/]/.test(id) ? 'endpoint-or-product-row' : 'invalid-model-id'
+        throw new Error(`anthropic model status table refused row: ${reason}: ${id}`)
+      }
+      const stateText = plainText(row.cells[headers.state]?.text)
+      const state = stateText.toLowerCase()
+      if (!['active', 'deprecated', 'retired'].includes(state)) {
+        throw new Error(`anthropic model status row ${id} has an unrecognised state: ${stateText || '(empty)'}`)
+      }
+      const deprecatedText = plainText(row.cells[headers.deprecated]?.text)
+      const retirementText = plainText(row.cells[headers.retirement]?.text)
+      const matchingAnnouncements = announcementIndex.get(id) ?? []
+      const item = { id, source: sourceUrl }
+      if (state === 'active') {
+        if (deprecatedText && !/^n\/a$/i.test(deprecatedText)) {
+          throw new Error(`anthropic model status row ${id} is active with a deprecated date: ${deprecatedText}`)
+        }
+        const shutdown = anthropicTentativeShutdown(retirementText, id)
+        if (shutdown) Object.assign(item, { shutdown, date_precision: 'tentative' })
+      } else {
+        item.announced = anthropicStatusDate(deprecatedText, id, 'deprecated date')
+        if (!/^n\/a$/i.test(retirementText)) {
+          item.shutdown = anthropicStatusDate(retirementText, id, 'retirement date')
+          if (item.shutdown < item.announced) {
+            throw new Error(`anthropic model status row ${id} has retirement before deprecated date: ${retirementText}`)
+          }
+        } else if (state === 'retired') {
+          throw new Error(`anthropic model status row ${id} is retired without a shutdown date: ${retirementText}`)
+        }
+      }
+      parsedRows++
+      if (matchingAnnouncements.length) {
+        for (const announcement of matchingAnnouncements) {
+          assertAnthropicStatusMatchesAnnouncement(id, state, item, announcement)
+        }
+        continue
+      }
+      anthropicStatusStates.set(item, state)
+      records.push(item)
+    }
+    if (!parsedRows) throw new Error('anthropic model status table has no rows')
+  }
+  const unique = new Map()
+  for (const record of records) {
+    const previous = unique.get(record.id)
+    if (!previous) {
+      unique.set(record.id, record)
+      continue
+    }
+    if (
+      anthropicStatusStates.get(previous) !== anthropicStatusStates.get(record) ||
+      previous.announced !== record.announced ||
+      previous.shutdown !== record.shutdown ||
+      previous.date_precision !== record.date_precision
+    ) {
+      throw new Error(`anthropic model status table has conflicting rows for ${record.id}`)
+    }
+  }
+  return { records: [...unique.values()], recognisedTables }
+}
+
+export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
+  let announcements = []
+  try {
+    announcements = parseDeprecationsHtml(html, sourceUrl, 'anthropic')
+  } catch (error) {
+    if (!error.message.includes('has no recognised model tables')) throw error
+  }
+  const status = parseAnthropicStatusTables(html, sourceUrl, announcements)
+  if (!status.recognisedTables) throw new Error('anthropic deprecations page has no model status table')
+  const records = [...announcements, ...status.records]
+  if (!records.length) throw new Error('anthropic deprecations page has no model entries')
+  return records
+}
 
 function googleModelId(fragment) {
   const fromCode = codeText(fragment)[0]
@@ -849,6 +1069,27 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, gen
       if (owner && owner !== target) absorb(target, owner, aliases)
       aliases.add(alias)
     }
+    const anthropicStatus = provider.publisher === 'anthropic'
+      ? anthropicStatusStates.get(record)
+      : undefined
+    if (anthropicStatus) {
+      if (anthropicStatus === 'active') {
+        for (const field of ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']) delete target[field]
+        if (record.shutdown !== undefined) target.shutdown = record.shutdown
+        if (record.date_precision !== undefined) target.date_precision = record.date_precision
+      } else {
+        for (const field of ['announced', 'shutdown', 'date_precision']) delete target[field]
+        target.announced = record.announced
+        if (record.shutdown !== undefined) target.shutdown = record.shutdown
+      }
+      if (target.source === undefined && record.source !== undefined) target.source = record.source
+      if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
+      else delete target.aliases
+      confirmed.add(target.id)
+      deprecationConfirmed.add(target.id)
+      index = identityIndex(models)
+      continue
+    }
     for (const field of ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']) delete target[field]
     Object.assign(target, clone(record), { id: canonicalId })
     if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
@@ -997,6 +1238,8 @@ export async function loadProviderSources(config, options = {}) {
     ? parseOpenAIDeprecations(html, config.deprecationsUrl)
     : config.publisher === 'google'
       ? parseGoogleDeprecations(html, config.deprecationsUrl)
-      : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
+      : config.publisher === 'anthropic'
+        ? parseAnthropicDeprecations(html, config.deprecationsUrl)
+        : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
   return { currentIds, endpointAvailable, deprecations }
 }

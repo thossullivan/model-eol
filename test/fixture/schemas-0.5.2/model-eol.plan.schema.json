@@ -36,7 +36,6 @@
         "effective_scope": { "enum": ["all", "direct"] },
         "policy_provenance": { "$ref": "#/definitions/policyProvenance" },
         "mapped_from": { "type": "string", "minLength": 1 },
-        "waiver": { "$ref": "#/definitions/waiver" },
         "sources": { "type": "array", "items": { "type": "string" } },
         "notes": { "type": ["string", "null"] }
       },
@@ -70,7 +69,6 @@
         },
         "replacement_note": { "type": "string" },
         "provider": { "type": "string" },
-        "waiver": { "$ref": "#/definitions/waiver" },
         "reason": { "type": "string", "minLength": 1 },
         "sources": { "type": "array", "items": { "type": "string" } },
         "notes": { "type": ["string", "null"] }
@@ -99,17 +97,6 @@
           "items": { "type": "integer", "minimum": 0 }
         },
         "route_index": { "type": ["integer", "null"], "minimum": 0 }
-      },
-      "additionalProperties": false
-    },
-    "waiver": {
-      "type": ["object", "null"],
-      "required": ["reason", "owner", "expires", "active"],
-      "properties": {
-        "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
-        "owner": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "expires": { "type": "string", "format": "date" },
-        "active": { "type": "boolean" }
       },
       "additionalProperties": false
     }

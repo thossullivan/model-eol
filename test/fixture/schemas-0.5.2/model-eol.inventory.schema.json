@@ -60,7 +60,7 @@
         "evidence": { "type": "string", "minLength": 1 },
         "status": { "$ref": "#/definitions/status" },
         "shutdown": { "type": ["string", "null"], "format": "date" },
-        "date_precision": { "enum": ["exact", "earliest", "tentative", null] },
+        "date_precision": { "enum": ["exact", "earliest", null] },
         "distribution_status": { "enum": ["active", "legacy", "extended-access", "retired", null] },
         "via": { "type": ["string", "null"], "minLength": 1 },
         "requested_via": { "type": ["string", "null"], "minLength": 1 },
@@ -77,7 +77,6 @@
           "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
         },
         "replacement_note": { "type": "string", "minLength": 1 },
-        "waiver": { "$ref": "#/definitions/waiver" },
         "source": { "type": ["string", "null"], "format": "uri" },
         "policy": {
           "type": ["object", "null"],
@@ -146,17 +145,6 @@
           "items": { "type": "integer", "minimum": 0 }
         },
         "route_index": { "type": ["integer", "null"], "minimum": 0 }
-      },
-      "additionalProperties": false
-    },
-    "waiver": {
-      "type": ["object", "null"],
-      "required": ["reason", "owner", "expires", "active"],
-      "properties": {
-        "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
-        "owner": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "expires": { "type": "string", "format": "date" },
-        "active": { "type": "boolean" }
       },
       "additionalProperties": false
     }

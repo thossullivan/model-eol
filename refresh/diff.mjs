@@ -212,7 +212,7 @@ export function compareFeeds(committed, generated, options = {}) {
   }
 }
 
-const dateValue = (date, precision) => `${code(date)}${precision === 'earliest' ? ' (earliest)' : ''}`
+const dateValue = (date, precision) => `${code(date)}${precision === 'earliest' || precision === 'tentative' ? ` (${precision})` : ''}`
 
 const dateLine = model => `announced: ${code(model.announced)}; shutdown: ${dateValue(model.shutdown, model.date_precision)}`
 

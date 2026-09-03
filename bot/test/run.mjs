@@ -349,6 +349,28 @@ const contextRecords = new Map([
 ])
 assert(contextFor(contextRecords, 'openai', 'clocked-model', 'azure-ai-foundry').announced === null, 'explicit distribution without announced date does not use publisher announcement')
 
+const tentativeBotFeeds = path.join(tempRoot, 'tentative-floor-feeds')
+fs.mkdirSync(tentativeBotFeeds)
+write(path.join(tentativeBotFeeds, 'anthropic.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'anthropic',
+  generated: '2026-09-03T00:00:00Z',
+  source: 'https://example.invalid/anthropic',
+  policy: { min_notice_days: 60, source: 'https://example.invalid/anthropic' },
+  models: [{ id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'tentative' }],
+}))
+const tentativeBotRepo = makeRepo({
+  name: 'tentative-floor',
+  files: { 'app.py': 'MODEL = "tentative-floor-model"\n' },
+})
+const tentativeBotResult = await runBot({
+  dryRun: true,
+  targetDir: tentativeBotRepo.work,
+  vendoredFeeds: tentativeBotFeeds,
+  now: new Date('2026-09-03T00:00:00Z'),
+})
+assert(tentativeBotResult.plan.items.length === 0 && tentativeBotResult.decisions.length === 0, 'tentative-floor models produce no migration item or bot work')
+
 const httpsAuth = gitAuthentication('https://github.com/example/private.git', 'private-token')
 assert(httpsAuth?.key === 'http.https://github.com/.extraheader', 'GitHub HTTPS authentication is scoped to the remote host')
 assert(httpsAuth?.value.startsWith('AUTHORIZATION: basic ') && !httpsAuth.value.includes('private-token'), 'GitHub token is passed to Git via an encoded header instead of a remote URL')
@@ -663,6 +685,88 @@ git(staleRepo.work, ['push', 'origin', 'main'])
 const staleThird = await staleRun()
 assert(staleThird.decisions.some(record => record.group.kind === 'model' && record.action === 'create'), 'a finding reappearing after automated stale PR closure creates fresh work')
 assert(staleGithub.callsFor('POST', '/pulls').length === 2, 'automated stale PR closure never permanently suppresses recurrence')
+
+const waiverRepo = makeRepo({
+  name: 'waiver-reconciliation',
+  files: {
+    ...baseFiles,
+    'generic.yaml': 'model: "o3-deep-research"\n',
+  },
+  config: { issues: { enabled: true } },
+})
+const waiverGithub = new FakeGitHub()
+const waiverRun = () => runBot({
+  repo: 'example/waiver-reconciliation',
+  targetDir: waiverRepo.work,
+  token: 'test-token',
+  transport: waiverGithub.transport.bind(waiverGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const waiverFirst = await waiverRun()
+const waiverPull = waiverGithub.pulls.find(item => item.state === 'open')
+const waiverIssue = waiverGithub.issues.find(item => item.state === 'open')
+assert(waiverFirst.decisions.filter(item => item.action === 'create').length === 2 && waiverPull && waiverIssue, 'waiver fixture starts with open bot PR and issue work')
+write(path.join(waiverRepo.work, '.model-eol.json'), JSON.stringify({
+  issues: { enabled: true },
+  waivers: [{
+    model: 'o3-deep-research',
+    reason: 'A contract requires a delayed migration.',
+    owner: '@platform-team',
+    expires: '2099-12-31',
+  }],
+}, null, 2))
+git(waiverRepo.work, ['add', '.model-eol.json'])
+git(waiverRepo.work, ['commit', '-m', 'activate model waiver'])
+git(waiverRepo.work, ['push', 'origin', 'main'])
+const waiverActive = await waiverRun()
+assert(waiverActive.decisions.filter(item => item.action === 'close-stale').length === 2 && waiverPull.state === 'closed' && waiverIssue.state === 'closed', 'an active waiver stale-closes open bot PR and issue work')
+const waiverClosureComments = waiverGithub.callsFor('POST', '/comments').map(call => call.body.body)
+assert(waiverClosureComments.filter(comment => comment.includes('@platform-team') && comment.includes('2099-12-31')).length === 2, 'waiver stale-closure comments name the owner and expiry')
+write(path.join(waiverRepo.work, '.model-eol.json'), JSON.stringify({
+  issues: { enabled: true },
+  waivers: [{
+    model: 'o3-deep-research',
+    reason: 'A contract required a delayed migration.',
+    owner: '@platform-team',
+    expires: '2000-01-01',
+  }],
+}, null, 2))
+git(waiverRepo.work, ['add', '.model-eol.json'])
+git(waiverRepo.work, ['commit', '-m', 'expire model waiver'])
+git(waiverRepo.work, ['push', 'origin', 'main'])
+const waiverExpired = await waiverRun()
+const waiverReplacementPull = waiverGithub.pulls.find(item => item.state === 'open')
+const waiverReplacementIssue = waiverGithub.issues.find(item => item.state === 'open')
+assert(waiverExpired.decisions.filter(item => item.action === 'create').length === 2 && waiverReplacementPull?.number !== waiverPull.number && waiverReplacementIssue?.number !== waiverIssue.number, 'an expired waiver creates fresh PR and issue work without reopening stale work')
+
+const dismissedWaiverRepo = makeRepo({ name: 'dismissed-before-waiver-expiry', files: baseFiles, config: { issues: { enabled: false } } })
+const dismissedWaiverGithub = new FakeGitHub()
+const dismissedWaiverRun = () => runBot({
+  repo: 'example/dismissed-before-waiver-expiry',
+  targetDir: dismissedWaiverRepo.work,
+  token: 'test-token',
+  transport: dismissedWaiverGithub.transport.bind(dismissedWaiverGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+await dismissedWaiverRun()
+const preWaiverDismissal = dismissedWaiverGithub.pulls[0]
+preWaiverDismissal.state = 'closed'
+write(path.join(dismissedWaiverRepo.work, '.model-eol.json'), JSON.stringify({
+  issues: { enabled: false },
+  waivers: [{
+    model: 'o3-deep-research',
+    reason: 'The temporary waiver already expired.',
+    owner: '@platform-team',
+    expires: '2000-01-01',
+  }],
+}, null, 2))
+git(dismissedWaiverRepo.work, ['add', '.model-eol.json'])
+git(dismissedWaiverRepo.work, ['commit', '-m', 'record expired waiver'])
+git(dismissedWaiverRepo.work, ['push', 'origin', 'main'])
+const dismissedWaiverExpired = await dismissedWaiverRun()
+assert(dismissedWaiverExpired.decisions.some(item => item.action === 'skip-dismissed') && dismissedWaiverGithub.pulls.length === 1, 'an expired waiver preserves a pre-waiver human dismissal')
 
 const unrelatedMarkerRepo = makeRepo({ name: 'unrelated-marker', files: baseFiles, config: { issues: { enabled: false } } })
 const unrelatedMarkerGithub = new FakeGitHub()

@@ -49,7 +49,9 @@ A feed is a JSON document: metadata + a list of model entries.
 | `replacement_note` | no | Free-text guidance such as parameter requirements or provider platform alternatives |
 | `notes` | no | Human context: structural differences, migration gotchas |
 | `distributions` | no | Per-distributor lifecycles - the same weights on different clocks (Azure, Bedrock, Vertex). Each entry: `via`, optional `announced`/`shutdown`/`status`/`date_precision`, `source` |
-| `date_precision` | no | Qualifies `shutdown`: absent or `"exact"` means the stated day; `"earliest"` means the provider commits only that the event happens no sooner (Google's "earliest possible" dates). Consumers treat an earliest date as the scheduled date - it is the soonest legal death - and display it as a lower bound |
+| `date_precision` | no | Qualifies `shutdown`: absent or `"exact"` means the stated day; `"earliest"` is a scheduled date that cannot move earlier; `"tentative"` means the publisher lists a not-before retirement date without announcing deprecation |
+
+Tentative entries carry no `announced`. Consumers must not treat their dates as scheduled retirements. The reference checker reports them as `scheduled` and never fails on them.
 
 Dates are ISO 8601, UTC. A model with no `announced` and no `shutdown` is an
 affirmative statement of "no retirement scheduled as of `generated`" - the absence
@@ -133,6 +135,15 @@ Repository tools that export CycloneDX SHOULD represent a canonical model once
 per lifecycle channel, with a deterministic channel-qualified `bom-ref`. This
 keeps direct publisher and distributor clocks distinct and binds each source
 occurrence to the lifecycle decision that evaluated it.
+
+**Compatibility within 0.1.** The `model-eol/0.1` line evolves additively: new
+optional fields and new enumeration values (such as `date_precision:
+"tentative"`, added in 2026-09) may appear in feeds and reports without a
+version change. A consumer that validates strictly against a snapshot of these
+schemas should expect to refresh that snapshot when it upgrades, and a consumer
+that reads defensively should ignore fields and values it does not recognise
+rather than reject the document. Removing a field or changing the meaning of an
+existing value is a new spec line.
 
 ## Non-goals (v0.1)
 

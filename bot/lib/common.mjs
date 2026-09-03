@@ -80,6 +80,12 @@ export const parseMetadata = body => {
 
 export const itemDigest = items => sortedJsonDigest(items)
 
+export const activeWaiver = item => item?.waiver?.active === true ? item.waiver : null
+
+export const staleWorkComment = (kind, waiver = null) => waiver
+  ? `model-eol is closing this bot-owned ${kind} because an active waiver makes its finding non-actionable. The waiver expires ${waiver.expires}, is owned by ${markdownText(waiver.owner)}, and records: ${markdownText(waiver.reason)}`
+  : `model-eol is closing this bot-owned ${kind} because its finding is no longer actionable on the repository's current default branch. The reference may have been removed, ignored, retracted by the feed, moved to another clock, or disabled by repository configuration.`
+
 const entityMap = new Map([
   ['&', '&amp;'],
   ['<', '&lt;'],
