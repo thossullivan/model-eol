@@ -1,7 +1,7 @@
 # Weekly feed refresh - regenerates feeds/ from the live provider pages and the
 # AWS Bedrock and Google Vertex AI lifecycle pages, updates the README freshness
 # line, and opens a PR with the semantic diff for human review. Never pushes to
-# main directly.
+# main directly. An unreviewed refresh PR is updated in place, never duplicated.
 #
 # Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY enable
 # the models endpoints so current-model entries (and policy-floor horizons)
@@ -83,21 +83,40 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MODEL_EOL_BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          branch="feed-refresh/${{ github.run_id }}"
+          set -euo pipefail
+          existing=$(gh pr list --state open --limit 1000 --json headRefName,url,number,isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("feed-refresh/")))][0] | if . then [.headRefName, (.number | tostring), .url] | @tsv else "" end')
+          reusing=false
+          if [ -n "$existing" ]; then
+            IFS=$'\t' read -r branch pr_number pr_url <<< "$existing"
+            reusing=true
+          else
+            branch="feed-refresh/${{ github.run_id }}"
+          fi
           git config user.name "model-eol feed refresh"
           git config user.email "actions@users.noreply.github.com"
           git checkout -b "$branch"
           git add feeds/ README.md
           git commit -m "Refresh feeds from live sources ($(date -u +%Y-%m-%d))"
-          git push origin "$branch"
+          if [ "$reusing" = true ]; then
+            git push --force origin "$branch"
+          else
+            git push origin "$branch"
+          fi
           {
+            if [ "$reusing" = true ]; then
+              echo "Superseded the previous unreviewed refresh on $(date -u +%Y-%m-%d); this diff is against main as of this run."
+              echo
+            fi
             echo "Automated weekly refresh. Review the semantic diff - a broken parse reads as a nonsense diff, not silently wrong data."
             echo
             # Include only the sources that materially changed.
             if [ "${{ steps.check.outputs.providers }}" = "3" ]; then cat provider-diff.md; echo; fi
             if [ "${{ steps.check.outputs.distributors }}" = "3" ]; then cat distributor-diff.md; fi
           } > pr-body.md
-          if ! pr_url=$(gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md --label model-eol); then
+          if [ "$reusing" = true ]; then
+            gh pr edit "$pr_number" --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md
+          elif ! pr_url=$(gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md --label model-eol); then
             pr_url=$(gh pr create --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md)
           fi
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
