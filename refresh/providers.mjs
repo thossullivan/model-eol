@@ -643,7 +643,8 @@ function parseAnthropicStatusTables(html, sourceUrl, announcements) {
     let parsedRows = 0
     for (const row of rows.slice(headers.dataRow)) {
       const modelCell = row.cells[headers.model]
-      if (!modelCell?.text) continue
+      if (row.cells.every(cell => !plainText(cell.text))) continue
+      if (!plainText(modelCell?.text)) throw new Error('anthropic model status table contains a populated row without a model id')
       const id = modelId(modelCell.html)
       if (!id) throw new Error('anthropic model status table contains a row without a model id')
       if (!MODEL_ID_PATTERN.test(id)) {
