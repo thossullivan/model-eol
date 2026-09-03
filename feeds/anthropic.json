@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-08-18T12:06:03.442Z",
+  "generated": "2026-09-03T22:28:01.292Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "policy": {
     "min_notice_days": 60,
@@ -222,34 +222,70 @@
       "replacement": "claude-haiku-4-5-20251001"
     },
     {
-      "id": "claude-opus-5"
+      "id": "claude-opus-5",
+      "shutdown": "2027-07-24",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-sonnet-5"
+      "id": "claude-sonnet-5",
+      "shutdown": "2027-06-30",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-fable-5"
+      "id": "claude-fable-5",
+      "shutdown": "2027-06-09",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-opus-4-8"
+      "id": "claude-opus-4-8",
+      "shutdown": "2027-05-28",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-opus-4-7"
+      "id": "claude-opus-4-7",
+      "shutdown": "2027-04-16",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-sonnet-4-6"
+      "id": "claude-sonnet-4-6",
+      "shutdown": "2027-02-17",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-opus-4-6"
+      "id": "claude-opus-4-6",
+      "shutdown": "2027-02-05",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-opus-4-5-20251101"
+      "id": "claude-opus-4-5-20251101",
+      "shutdown": "2026-11-24",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-haiku-4-5-20251001"
+      "id": "claude-haiku-4-5-20251001",
+      "shutdown": "2026-10-15",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
-      "id": "claude-sonnet-4-5-20250929"
+      "id": "claude-sonnet-4-5-20250929",
+      "shutdown": "2026-09-29",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+      "id": "claude-fable-5-1",
+      "shutdown": "2027-09-01",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     }
   ]
 }

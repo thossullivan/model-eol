@@ -938,9 +938,9 @@
     },
     {
       "id": "whisper-1",
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-08-26",
       "shutdown": "2027-02-26",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement_options": [
         "gpt-live-transcribe",
         "gpt-transcribe"
@@ -996,9 +996,9 @@
     },
     {
       "id": "gpt-4o-transcribe",
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-08-26",
       "shutdown": "2027-02-26",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement_options": [
         "gpt-live-transcribe",
         "gpt-transcribe"
@@ -1006,9 +1006,9 @@
     },
     {
       "id": "gpt-4o-mini-transcribe",
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-08-26",
       "shutdown": "2027-02-26",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement_options": [
         "gpt-live-transcribe",
         "gpt-transcribe"
@@ -1031,9 +1031,9 @@
     },
     {
       "id": "gpt-4o-transcribe-diarize",
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-08-26",
       "shutdown": "2027-02-26",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement_options": [
         "gpt-live-transcribe",
         "gpt-transcribe"

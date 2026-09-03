@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-08-31T05:30:20.090Z",
+  "generated": "2026-09-03T22:28:01.897Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -509,11 +509,13 @@
     },
     {
       "id": "lyria-3-clip-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "replacement": "lyria-3.5-clip-preview"
     },
     {
       "id": "lyria-3-pro-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "replacement": "lyria-3.5-pro-preview"
     },
     {
       "id": "lyria-realtime-exp",
@@ -628,6 +630,27 @@
     {
       "id": "gemini-omni-1.1-flash",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "distributions": [
+        {
+          "via": "vertex-ai",
+          "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
+        }
+      ]
+    },
+    {
+      "id": "lyria-3.5-clip-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "lyria-3.5-pro-preview",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "lyria-3.5"
     }
   ]
 }
