@@ -672,7 +672,7 @@ function parseAnthropicStatusTables(html, sourceUrl, announcements) {
           if (item.shutdown < item.announced) {
             throw new Error(`anthropic model status row ${id} has retirement before deprecated date: ${retirementText}`)
           }
-        } else if (state === 'retired' && !matchingAnnouncements.length) {
+        } else if (state === 'retired') {
           throw new Error(`anthropic model status row ${id} is retired without a shutdown date: ${retirementText}`)
         }
       }

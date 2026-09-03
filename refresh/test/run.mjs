@@ -321,6 +321,8 @@ const plainActiveDateReason = anthropicStatusError(anthropicStatusTable('claude-
 assert(plainActiveDateReason.includes('claude-plain-active-date') && plainActiveDateReason.includes('September 1, 2027'), 'Anthropic rejects an active retirement date without the not-sooner-than prefix')
 const retiredWithoutShutdownReason = anthropicStatusError(anthropicStatusTable('claude-retired-without-shutdown', 'Retired', 'June 1, 2026', 'N/A'))
 assert(retiredWithoutShutdownReason.includes('claude-retired-without-shutdown') && retiredWithoutShutdownReason.includes('N/A'), 'Anthropic rejects a retired status row without a shutdown date')
+const matchedRetiredWithoutShutdownReason = anthropicStatusError(`${anthropicAnnouncementTable('claude-matched-retired', 'June 1, 2026', 'N/A')}${anthropicStatusTable('claude-matched-retired', 'Retired', 'June 1, 2026', 'N/A')}`)
+assert(matchedRetiredWithoutShutdownReason.includes('retired without a shutdown date'), 'a matched Retired row without a shutdown date still fails closed')
 const missingDeprecatedReason = anthropicStatusError(anthropicStatusTable('claude-missing-deprecated-date', 'Deprecated', 'N/A', 'September 1, 2027'))
 assert(missingDeprecatedReason.includes('claude-missing-deprecated-date') && missingDeprecatedReason.includes('N/A'), 'Anthropic rejects a non-active status row without a deprecated date')
 const unknownStateReason = anthropicStatusError(anthropicStatusTable('claude-preview-state', 'Preview', 'N/A', 'N/A'))
