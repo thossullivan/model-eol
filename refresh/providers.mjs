@@ -561,21 +561,32 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
         const reason = /[\s/]/.test(id) ? 'endpoint-or-product-row' : 'invalid-model-id'
         throw new Error(`anthropic model status table refused row: ${reason}: ${id}`)
       }
-      if (announcementIds.has(id)) continue
-      const state = row.cells[headers.state]?.text.toLowerCase()
+      const stateText = plainText(row.cells[headers.state]?.text)
+      const state = stateText.toLowerCase()
+      if (!['active', 'deprecated', 'retired'].includes(state)) {
+        throw new Error(`anthropic model status row ${id} has an unrecognised state: ${stateText || '(empty)'}`)
+      }
+      const deprecatedText = plainText(row.cells[headers.deprecated]?.text)
+      const retirementText = plainText(row.cells[headers.retirement]?.text)
       const item = { id, source: sourceUrl }
       if (state === 'active') {
-        const shutdown = anthropicTentativeShutdown(row.cells[headers.retirement]?.text, id)
+        if (deprecatedText && !/^n\/a$/i.test(deprecatedText)) {
+          throw new Error(`anthropic model status row ${id} is active with a deprecated date: ${deprecatedText}`)
+        }
+        const shutdown = anthropicTentativeShutdown(retirementText, id)
         if (shutdown) Object.assign(item, { shutdown, date_precision: 'tentative' })
       } else {
-        item.announced = anthropicStatusDate(row.cells[headers.deprecated]?.text, id, 'deprecated date')
-        const retirementText = plainText(row.cells[headers.retirement]?.text)
+        item.announced = anthropicStatusDate(deprecatedText, id, 'deprecated date')
         if (!/^n\/a$/i.test(retirementText)) {
           item.shutdown = anthropicStatusDate(retirementText, id, 'retirement date')
+          if (item.shutdown < item.announced) {
+            throw new Error(`anthropic model status row ${id} has retirement before deprecated date: ${retirementText}`)
+          }
         } else if (state === 'retired') {
           throw new Error(`anthropic model status row ${id} is retired without a shutdown date: ${retirementText}`)
         }
       }
+      if (announcementIds.has(id)) continue
       anthropicStatusRecords.add(item)
       records.push(item)
     }
