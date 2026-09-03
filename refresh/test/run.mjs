@@ -165,7 +165,7 @@ const bedrockHtml = fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'
 const googleHtml = fs.readFileSync(path.join(fixtures, 'google-deprecations.html'), 'utf8')
 const vertexHtml = fs.readFileSync(path.join(fixtures, 'vertex-model-versions.html'), 'utf8')
 const endpointLookalikeHtml = fs.readFileSync(path.join(fixtures, 'anthropic-endpoint-lookalike.html'), 'utf8')
-const statusExtraColumnHtml = '<table><tr><th>Notes</th><th>Current state</th><th>API model name</th><th>Tentative retirement date</th><th>Deprecated</th></tr><tr><td>Current generation</td><td>Active</td><td><code>claude-extra-column</code></td><td>Not sooner than September 1, 2027</td><td>N/A</td></tr></table>'
+const statusExtraColumnHtml = '<table><tr><th>Recommended replacement</th><th>Current state</th><th>API model name</th><th>Tentative retirement date</th><th>Deprecated</th></tr><tr><td><code>claude-next</code></td><td>Active</td><td><code>claude-extra-column</code></td><td>Not sooner than September 1, 2027</td><td>N/A</td></tr></table>'
 const statusRenamedColumnHtml = '<table><tr><th>API model name</th><th>Lifecycle state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-renamed-column</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>'
 const openaiEntries = parseOpenAIDeprecations(openaiHtml)
 const anthropicEntries = parseAnthropicDeprecations(anthropicHtml)
@@ -182,7 +182,6 @@ const googleFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'google.j
 const amazonFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'amazon.json'), 'utf8'))
 const openaiById = new Map(openaiEntries.map(entry => [entry.id, entry]))
 const anthropicStatusHeader = '<tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>'
-const emptyAnthropicStatusTable = `<table>${anthropicStatusHeader}</table>`
 const anthropicStatusTable = (id, state, deprecated, retirement) => `<table>${anthropicStatusHeader}<tr><td><code>${id}</code></td><td>${state}</td><td>${deprecated}</td><td>${retirement}</td></tr></table>`
 
 let endpointLookalikeReason = ''
@@ -193,7 +192,7 @@ try {
 }
 assert(endpointLookalikeReason.includes('missing required columns') && endpointLookalikeReason.includes('api model name'), 'Anthropic rejects an endpoint lookalike carrying the status retirement header')
 
-const mixedEndpointHtml = `<h2>2026-01-01: Endpoint notice</h2><table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table><h2>2025-01-01: Model notice</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-mixed</code></td><td><code>claude-next</code></td></tr></table>${emptyAnthropicStatusTable}`
+const mixedEndpointHtml = `<h2>2026-01-01: Endpoint notice</h2><table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table><h2>2025-01-01: Model notice</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-mixed</code></td><td><code>claude-next</code></td></tr></table>${anthropicStatusTable('claude-mixed', 'Retired', '2025-01-01', '2027-01-01')}`
 const mixedEndpointEntries = parseAnthropicDeprecations(mixedEndpointHtml)
 assert(mixedEndpointEntries.length === 1 && mixedEndpointEntries[0].id === 'claude-mixed', 'generic deprecation parser skips endpoint tables while retaining model tables')
 
@@ -236,9 +235,9 @@ try {
 }
 assert(googleInvalidRowReason.includes('refused row') && googleInvalidRowReason.includes('endpoint-or-product-row'), 'Google model rows enforce the model identifier grammar')
 
-const anthropicApiModelHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>API model name</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-api-model</code></td><td><code>claude-next</code></td></tr></table>${emptyAnthropicStatusTable}`
+const anthropicApiModelHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>API model name</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-api-model</code></td><td><code>claude-next</code></td></tr></table>${anthropicStatusTable('claude-api-model', 'Retired', '2026-01-01', '2027-01-01')}`
 const anthropicApiModel = parseAnthropicDeprecations(anthropicApiModelHtml)
-assert(anthropicApiModel.length === 1 && anthropicApiModel[0].id === 'claude-api-model', 'Anthropic API model name headers remain model tables')
+assert(anthropicApiModel.length === 1 && anthropicApiModel[0].id === 'claude-api-model' && anthropicApiModel[0].replacement === 'claude-next', 'Anthropic announcement tables keep their recommended replacement column')
 
 const ambiguousAnnouncementHtml = '<h1>Model deprecations</h1><h2>Announcement context</h2><p>Notified 2025-01-01; retirement 2026-01-01.</p><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-ambiguous</code></td><td><code>claude-next</code></td></tr></table>'
 let ambiguousAnnouncementReason = ''
@@ -267,11 +266,15 @@ const anthropicStatusError = html => {
   }
 }
 const extraColumnStatus = parseAnthropicDeprecations(statusExtraColumnHtml)
-assert(extraColumnStatus.length === 1 && extraColumnStatus[0].id === 'claude-extra-column' && extraColumnStatus[0].date_precision === 'tentative', 'Anthropic status parsing accepts reordered required headers and an extra column')
+assert(extraColumnStatus.length === 1 && extraColumnStatus[0].id === 'claude-extra-column' && extraColumnStatus[0].date_precision === 'tentative' && extraColumnStatus[0].replacement === undefined, 'Anthropic status parsing owns a table with an extra recommended replacement column')
 const renamedColumnReason = anthropicStatusError(statusRenamedColumnHtml)
 assert(renamedColumnReason.includes('missing required columns') && renamedColumnReason.includes('current state'), 'Anthropic status parsing fails loudly on a renamed required column')
 const missingStatusReason = anthropicStatusError('<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th></tr><tr><td>2027-01-01</td><td><code>claude-no-status-table</code></td></tr></table>')
 assert(missingStatusReason === 'anthropic deprecations page has no model status table', 'Anthropic parsing requires a recognised model status table')
+const headerOnlyStatusReason = anthropicStatusError(`<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-header-only-status</code></td><td><code>claude-next</code></td></tr></table><table>${anthropicStatusHeader}</table>`)
+assert(headerOnlyStatusReason === 'anthropic model status table has no rows', 'Anthropic rejects a header-only status table even when announcements parsed')
+const duplicateStatusHeaderReason = anthropicStatusError('<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-duplicate-header</code></td><td>Active</td><td>N/A</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>')
+assert(duplicateStatusHeaderReason.includes('duplicate required column') && duplicateStatusHeaderReason.includes('deprecated'), 'Anthropic rejects duplicate required status headers')
 const anthropicDeprecatedExact = parseAnthropicDeprecations(anthropicStatusTable('claude-deprecated-exact', 'Deprecated', 'July 1, 2026', 'October 1, 2026'))[0]
 assert(anthropicDeprecatedExact.announced === '2026-07-01' && anthropicDeprecatedExact.shutdown === '2026-10-01', 'Anthropic parses a deprecated status row with exact lifecycle dates')
 const unparseableTentativeReason = anthropicStatusError(anthropicStatusTable('claude-unparseable-tentative-date', 'Active', 'N/A', 'Not sooner than Q4 2027'))
@@ -403,7 +406,7 @@ assert(googleEntries.find(entry => entry.id === 'gemini-2.5-pro')?.date_precisio
 assert(googleEntries.find(entry => entry.id === 'gemini-2.5-pro')?.shutdown === '2026-10-16', 'Google parses a human shutdown date')
 assert(googleEntries.find(entry => entry.id === 'gemini-3.6-flash')?.shutdown === undefined, 'Google preserves models without a shutdown date')
 assert(googleIds.length === 3 && googleIds.includes('gemini-2.5-pro'), 'Google models endpoint fixture strips the models/ prefix')
-const genericStructuredHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>generic-structured</code></td><td><code>first-model</code> or <code>second-model</code></td></tr></table>${emptyAnthropicStatusTable}`
+const genericStructuredHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>generic-structured</code></td><td><code>first-model</code> or <code>second-model</code></td></tr></table>${anthropicStatusTable('generic-structured', 'Retired', '2026-01-01', '2027-01-01')}`
 const googleStructuredHtml = '<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>google-structured</code></td><td>2027-01-01</td><td>first-model or second-model*</td></tr></table>'
 const genericStructured = parseAnthropicDeprecations(genericStructuredHtml)[0]
 const googleStructured = parseGoogleDeprecations(googleStructuredHtml)[0]
