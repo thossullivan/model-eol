@@ -11,6 +11,7 @@ import {
   BEDROCK_LIFECYCLE_URL,
   VERTEX_MODEL_VERSIONS_URL,
   mergeBedrockDistributions,
+  mergeDistributions,
   mergeVertexDistributions,
   normalizeBedrockId,
   normalizeVertexId,
@@ -144,6 +145,16 @@ try {
 }
 assert(tentativeWithoutAnnouncementValid, 'feed validation permits tentative shutdown dates without announced dates')
 
+for (const via of ['publisher', 'publisher-fallback']) {
+  let reservedClockReason = ''
+  try {
+    mergeDistributions([], { records: [], sourceUrl: 'https://example.invalid/distributor', via })
+  } catch (error) {
+    reservedClockReason = error.message
+  }
+  assert(reservedClockReason.includes('reserved distributor clock') && reservedClockReason.includes(via), `refresh rejects reserved distributor clock ${via}`)
+}
+
 const unknownFlag = run(['--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown refresh flags exit 2 with the bad flag and help hint')
 
@@ -258,6 +269,12 @@ const retiredWithoutShutdownReason = anthropicStatusError(anthropicStatusTable('
 assert(retiredWithoutShutdownReason.includes('claude-retired-without-shutdown') && retiredWithoutShutdownReason.includes('N/A'), 'Anthropic rejects a retired status row without a shutdown date')
 const missingDeprecatedReason = anthropicStatusError(anthropicStatusTable('claude-missing-deprecated-date', 'Deprecated', 'N/A', 'September 1, 2027'))
 assert(missingDeprecatedReason.includes('claude-missing-deprecated-date') && missingDeprecatedReason.includes('N/A'), 'Anthropic rejects a non-active status row without a deprecated date')
+const unknownStateReason = anthropicStatusError(anthropicStatusTable('claude-preview-state', 'Preview', 'N/A', 'N/A'))
+assert(unknownStateReason.includes('claude-preview-state') && unknownStateReason.includes('Preview'), 'Anthropic rejects an undocumented model state')
+const activeDeprecatedReason = anthropicStatusError(anthropicStatusTable('claude-active-deprecated', 'Active', 'June 1, 2026', 'Not sooner than September 1, 2027'))
+assert(activeDeprecatedReason.includes('claude-active-deprecated') && activeDeprecatedReason.includes('June 1, 2026'), 'Anthropic rejects an active row with a deprecated date')
+const reversedLifecycleReason = anthropicStatusError(anthropicStatusTable('claude-reversed-lifecycle', 'Retired', 'August 1, 2026', 'June 1, 2026'))
+assert(reversedLifecycleReason.includes('claude-reversed-lifecycle') && reversedLifecycleReason.includes('before'), 'Anthropic rejects retirement before deprecation')
 
 assert(openaiEntries.every(entry => !/[\s/]/.test(entry.id)), 'OpenAI endpoint and product retirement rows are excluded from the model feed')
 assert(normalizeBedrockId('anthropic.claude-3-haiku-20240307-v1:0') === 'claude-3-haiku-20240307', 'Bedrock normalization strips a known provider prefix and v1 suffix')

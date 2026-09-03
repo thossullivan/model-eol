@@ -101,6 +101,24 @@ tentativePrecisionFeed.models[0] = {
 assert.equal(validateJsonSchema(tentativePrecisionFeed, catalog.byType.get('feed')).length, 0, 'the feed schema accepts tentative publisher and distributor dates')
 assert.equal(validateFeed(tentativePrecisionFeed).length, 0, 'the runtime feed validator accepts tentative publisher and distributor dates')
 
+const announcedTentativeModel = structuredClone(tentativePrecisionFeed)
+announcedTentativeModel.models[0].announced = '2026-08-01'
+assert(validateFeed(announcedTentativeModel).some(error => error.path === 'models[0].announced' && error.message.includes('tentative')), 'the runtime feed validator rejects announced tentative models')
+
+const announcedTentativeDistribution = structuredClone(tentativePrecisionFeed)
+announcedTentativeDistribution.models[0].distributions[0].announced = '2026-08-01'
+assert(validateFeed(announcedTentativeDistribution).some(error => error.path === 'models[0].distributions[0].announced' && error.message.includes('tentative')), 'the runtime feed validator rejects announced tentative distributions')
+
+const retiredTentativeDistribution = structuredClone(tentativePrecisionFeed)
+retiredTentativeDistribution.models[0].distributions[0].status = 'retired'
+assert(validateFeed(retiredTentativeDistribution).some(error => error.path === 'models[0].distributions[0].status' && error.message.includes('tentative')), 'the runtime feed validator rejects retired tentative distributions')
+
+for (const via of ['publisher', 'publisher-fallback', 'Publisher', 'PUBLISHER-FALLBACK']) {
+  const reservedDistribution = validFeed()
+  reservedDistribution.models[0].distributions = [{ via }]
+  assert(validateFeed(reservedDistribution).some(error => error.path === 'models[0].distributions[0].via' && error.message.includes('reserved publisher clock')), `the runtime feed validator rejects reserved clock ${via}`)
+}
+
 const credentialEnvironmentNames = [
   'GITHUB_TOKEN', 'gh_auth', 'Actions_Runtime_URL', 'ssh_auth_sock',
   'AWS_SECRET_ACCESS_KEY', 'MODEL_EOL_SECRET', 'database_password', 'credential_file',

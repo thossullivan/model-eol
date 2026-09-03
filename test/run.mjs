@@ -1041,7 +1041,21 @@ const distributorTentative = lifecycleFor({
   announced: '2026-07-01',
   distributions: [{ via: 'test-channel', shutdown: '2026-08-01', date_precision: 'tentative' }],
 }, { days: 30, via: 'test-channel', today: tentativeToday, policy: tentativePolicy, generated: '2026-08-18T00:00:00Z' })
-assert(distributorTentative.status === 'scheduled' && distributorTentative.via === 'test-channel', 'a tentative distributor floor remains scheduled regardless of announcement or date')
+assert(distributorTentative.status === 'scheduled' && distributorTentative.via === 'test-channel', 'a tentative distributor clock ignores a publisher announcement')
+const announcedPastTentative = lifecycleFor({
+  announced: '2026-07-01',
+  shutdown: '2026-08-01',
+  date_precision: 'tentative',
+}, { days: 30, today: tentativeToday, policy: tentativePolicy, generated: '2026-08-18T00:00:00Z' })
+assert(announcedPastTentative.status === 'retired', 'an announced tentative publisher date cannot bypass retirement')
+const announcedDistributorTentative = lifecycleFor({
+  distributions: [{ via: 'test-channel', announced: '2026-07-01', shutdown: '2026-08-01', date_precision: 'tentative' }],
+}, { days: 30, via: 'test-channel', today: tentativeToday, policy: tentativePolicy, generated: '2026-08-18T00:00:00Z' })
+assert(announcedDistributorTentative.status === 'retired', 'an announced tentative distributor date cannot bypass retirement')
+const retiredDistributorTentative = lifecycleFor({
+  distributions: [{ via: 'test-channel', shutdown: '2026-09-29', date_precision: 'tentative', status: 'retired' }],
+}, { days: 30, via: 'test-channel', today: tentativeToday, policy: tentativePolicy, generated: '2026-08-18T00:00:00Z' })
+assert(retiredDistributorTentative.status === 'retired', 'retired distributor status overrides tentative precision')
 const tentativeCheck = formatCheck({ findings: [tentativeFloorFinding], bad: [], scannedFiles: 1, days: 30, scope: 'all' })
 const tentativeHumanText = 'scheduled - tentative, not announced: not sooner than 2026-09-29, guaranteed until 2026-10-17 by anthropic policy'
 assert(tentativeCheck.includes(tentativeHumanText), 'human check output identifies the tentative unannounced floor')

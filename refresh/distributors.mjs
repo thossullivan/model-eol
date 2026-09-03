@@ -490,6 +490,9 @@ export function mergeDistributions(feeds, {
   sourceUrl,
   via,
 } = {}) {
+  if (typeof via === 'string' && ['publisher', 'publisher-fallback'].includes(via.toLowerCase())) {
+    throw new Error(`reserved distributor clock ${via}`)
+  }
   if (!via || !DISTRIBUTORS[via]) throw new Error(`unknown distributor ${via || '(empty)'}`)
   const config = DISTRIBUTORS[via]
   const source = sourceUrl ?? config.sourceUrl
