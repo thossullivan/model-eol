@@ -984,28 +984,79 @@ assert(statusOnlyHuman.code === 1 && statusOnlyHuman.out.includes('RETIRED (shut
 const statusOnlyPlan = JSON.parse(run(['plan', statusOnlyDir, '--feeds', statusOnlyFeeds, '--via', 'custom-hub']).out)
 assert(statusOnlyPlan.items.length === 0 && statusOnlyPlan.issues.some(issue => issue.reason === 'shutdown-date-unavailable'), 'status-only retirement remains non-patchable until a shutdown date is known')
 
-const earliestFinding = findingFromRef({
+const tentativePolicy = { min_notice_days: 60, source: 'https://example.invalid/anthropic' }
+const tentativeToday = new Date('2026-09-03T00:00:00Z')
+const tentativeFloorFinding = findingFromRef({
   file: 'fixture.py',
   line: 1,
-  matched: 'earliest-model',
-  entry: { id: 'earliest-model', shutdown: '2026-08-20', date_precision: 'earliest' },
+  matched: 'tentative-floor-model',
+  entry: { id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'earliest' },
+  publisher: 'anthropic',
+  usage: 'model-reference',
+  resolved_provider: 'anthropic',
+  confidence: 'medium',
+  policy: tentativePolicy,
+  generated: '2026-09-03T00:00:00Z',
+}, { days: 30, today: tentativeToday })
+assert(tentativeFloorFinding.status === 'scheduled' && tentativeFloorFinding.date_precision === 'earliest', 'a tentative publisher floor remains scheduled inside the threshold')
+assert(tentativeFloorFinding.safe_until === '2026-11-02' && tentativeFloorFinding.days === 60, 'a tentative floor uses the later policy date for safe_until and days')
+const pastTentativeFloor = lifecycleFor({
+  shutdown: '2026-08-01',
+  date_precision: 'earliest',
+}, {
+  days: 30,
+  today: tentativeToday,
+  policy: tentativePolicy,
+  generated: '2026-09-03T00:00:00Z',
+})
+assert(pastTentativeFloor.status === 'scheduled' && pastTentativeFloor.shutdown === '2026-08-01' && pastTentativeFloor.safe_until === '2026-11-02', 'a past tentative publisher floor never becomes retired')
+const announcedEarliestFinding = findingFromRef({
+  file: 'fixture.py',
+  line: 1,
+  matched: 'announced-earliest-model',
+  entry: { id: 'announced-earliest-model', announced: '2026-07-01', shutdown: '2026-09-29', date_precision: 'earliest' },
   publisher: 'google',
   usage: 'model-reference',
   resolved_provider: 'google',
   confidence: 'medium',
-}, { days: 30, today: testToday })
-assert(earliestFinding.date_precision === 'earliest', 'findings carry date precision')
-const earliestCheck = formatCheck({ findings: [earliestFinding], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
-assert(earliestCheck.includes('no earlier than 2026-08-20'), 'human check output renders earliest shutdown as a lower bound')
-const optionsCheck = formatCheck({ findings: [{ ...earliestFinding, replacement: null, replacement_options: ['first-choice', 'second-choice'] }], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
+}, { days: 30, today: tentativeToday })
+assert(announcedEarliestFinding.status === 'retiring', 'an announced Google earliest date remains retiring inside the threshold')
+const distributorEarliest = lifecycleFor({
+  distributions: [{ via: 'test-channel', shutdown: '2026-09-29', date_precision: 'earliest' }],
+}, { days: 30, via: 'test-channel', today: tentativeToday })
+assert(distributorEarliest.status === 'retiring', 'a distributor earliest date keeps threshold behavior without an announcement')
+const earliestCheck = formatCheck({ findings: [tentativeFloorFinding], bad: [], scannedFiles: 1, days: 30, scope: 'all' })
+const tentativeHumanText = 'scheduled - tentative, not announced: no earlier than 2026-09-29, guaranteed until 2026-11-02 by anthropic policy'
+assert(earliestCheck.includes(tentativeHumanText), 'human check output identifies the tentative unannounced floor')
+const optionsCheck = formatCheck({ findings: [{ ...announcedEarliestFinding, replacement: null, replacement_options: ['first-choice', 'second-choice'] }], bad: [announcedEarliestFinding], scannedFiles: 1, days: 30, scope: 'all' })
 assert(optionsCheck.includes('options: first-choice | second-choice'), 'human check output renders replacement options compactly')
 const earliestSchedule = formatSchedule({
-  items: [earliestFinding],
+  items: [tentativeFloorFinding],
   candidate_model_references: [],
   unresolved_integrations: [],
-  earliest_risk: { safe_until: '2026-08-20', id: 'earliest-model' },
+  earliest_risk: { safe_until: '2026-11-02', id: 'tentative-floor-model' },
 }, 30)
-assert(earliestSchedule.includes('no earlier than 2026-08-20'), 'human schedule output renders earliest shutdown as a lower bound')
+assert(earliestSchedule.includes(tentativeHumanText), 'human schedule output identifies the tentative unannounced floor')
+
+const tentativeFloorDir = path.join(tempRoot, 'tentative-floor')
+const tentativeFloorFeeds = path.join(tentativeFloorDir, 'feeds')
+fs.mkdirSync(tentativeFloorFeeds, { recursive: true })
+fs.writeFileSync(path.join(tentativeFloorDir, 'app.py'), 'MODEL = "tentative-floor-model"\n')
+fs.writeFileSync(path.join(tentativeFloorFeeds, 'anthropic.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'anthropic',
+  generated: '2026-09-03T00:00:00Z',
+  source: 'https://example.invalid/anthropic',
+  policy: tentativePolicy,
+  models: [{ id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'earliest' }],
+}))
+const tentativeFloorCheck = run(['check', tentativeFloorDir, '--feeds', tentativeFloorFeeds, '--days', '30'])
+const tentativeFloorSchedule = run(['schedule', tentativeFloorDir, '--feeds', tentativeFloorFeeds, '--days', '30'])
+const tentativeFloorInventory = run(['inventory', tentativeFloorDir, '--feeds', tentativeFloorFeeds, '--days', '30', '--format', 'text'])
+assert(tentativeFloorCheck.code === 0, 'check exits zero for a tentative floor inside the threshold')
+assert(tentativeFloorCheck.out.includes(tentativeHumanText), 'check renders the tentative-floor policy guarantee')
+assert(tentativeFloorSchedule.out.includes(tentativeHumanText), 'schedule renders the tentative-floor policy guarantee')
+assert(tentativeFloorInventory.out.includes(tentativeHumanText), 'inventory renders the tentative-floor policy guarantee')
 
 const duplicateFeeds = path.join(tempRoot, 'duplicate-feeds')
 fs.mkdirSync(duplicateFeeds)

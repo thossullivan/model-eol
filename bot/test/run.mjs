@@ -349,6 +349,28 @@ const contextRecords = new Map([
 ])
 assert(contextFor(contextRecords, 'openai', 'clocked-model', 'azure-ai-foundry').announced === null, 'explicit distribution without announced date does not use publisher announcement')
 
+const tentativeBotFeeds = path.join(tempRoot, 'tentative-floor-feeds')
+fs.mkdirSync(tentativeBotFeeds)
+write(path.join(tentativeBotFeeds, 'anthropic.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'anthropic',
+  generated: '2026-09-03T00:00:00Z',
+  source: 'https://example.invalid/anthropic',
+  policy: { min_notice_days: 60, source: 'https://example.invalid/anthropic' },
+  models: [{ id: 'tentative-floor-model', shutdown: '2026-09-29', date_precision: 'earliest' }],
+}))
+const tentativeBotRepo = makeRepo({
+  name: 'tentative-floor',
+  files: { 'app.py': 'MODEL = "tentative-floor-model"\n' },
+})
+const tentativeBotResult = await runBot({
+  dryRun: true,
+  targetDir: tentativeBotRepo.work,
+  vendoredFeeds: tentativeBotFeeds,
+  now: new Date('2026-09-03T00:00:00Z'),
+})
+assert(tentativeBotResult.plan.items.length === 0 && tentativeBotResult.decisions.length === 0, 'tentative-floor models produce no migration item or bot work')
+
 const httpsAuth = gitAuthentication('https://github.com/example/private.git', 'private-token')
 assert(httpsAuth?.key === 'http.https://github.com/.extraheader', 'GitHub HTTPS authentication is scoped to the remote host')
 assert(httpsAuth?.value.startsWith('AUTHORIZATION: basic ') && !httpsAuth.value.includes('private-token'), 'GitHub token is passed to Git via an encoded header instead of a remote URL')

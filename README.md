@@ -34,7 +34,9 @@ second, so the existing trackers can converge instead of each scraping alone.
   floors. Small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
 - **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (29 entries), Google (89 entries) and OpenAI (194 entries), generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated 2026-08-31<!-- /feeds-status -->. Every
-  dated entry carries a source URL.
+  dated entry carries a source URL. Tentative Anthropic retirement dates use
+  the existing `earliest` date precision. Machine consumers recognize tentative
+  floors by `scheduled`, `earliest`, and `safe_until` on or after `shutdown`.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
   ML-BOM export, retirement schedule, alerts and badges, migration plan/apply,
   and public document validation.

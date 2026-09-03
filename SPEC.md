@@ -51,6 +51,9 @@ A feed is a JSON document: metadata + a list of model entries.
 | `distributions` | no | Per-distributor lifecycles - the same weights on different clocks (Azure, Bedrock, Vertex). Each entry: `via`, optional `announced`/`shutdown`/`status`/`date_precision`, `source` |
 | `date_precision` | no | Qualifies `shutdown`: absent or `"exact"` means the stated day; `"earliest"` means the provider commits only that the event happens no sooner (Google's "earliest possible" dates). Consumers treat an earliest date as the scheduled date - it is the soonest legal death - and display it as a lower bound |
 
+Publisher "tentative" or "not sooner than" dates for active models use `earliest`.
+These entries can omit `announced` when the publisher gives no announcement date.
+
 Dates are ISO 8601, UTC. A model with no `announced` and no `shutdown` is an
 affirmative statement of "no retirement scheduled as of `generated`" - the absence
 is data, which is exactly what scraping HTML can never give you.
