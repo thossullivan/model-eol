@@ -20,7 +20,7 @@
   "definitions": {
     "finding": {
       "type": "object",
-      "required": ["file", "line", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "status", "shutdown", "date_precision", "distribution_status", "via", "days", "safe_until", "replacement", "replacement_options", "replacement_note", "threshold_days", "effective_scope", "requested_via", "waiver"],
+      "required": ["file", "line", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "status", "shutdown", "date_precision", "distribution_status", "via", "days", "safe_until", "replacement", "replacement_options", "replacement_note", "threshold_days", "effective_scope", "requested_via"],
       "properties": {
         "file": { "type": "string", "minLength": 1 },
         "line": { "type": "integer", "minimum": 1 },

@@ -212,8 +212,8 @@ counts, and the alert errors, and the bot opens no migration work for it. On the
 expiry date - UTC, the date itself counts as expired - the finding is actionable
 again and the report says which waiver lapsed and who owned it. `model` matches
 the whole alias family, `paths` takes the same repo-relative globs as
-`ignore.paths`, `via` narrows the waiver to one lifecycle clock, the first active
-match wins, and a policy holds at most 500 waivers across the root and its
+`ignore.paths`, `via` narrows it to one clock - a distributor id, or `publisher`
+for the direct publisher clock - the first active match wins, and a policy holds at most 500 waivers across the root and its
 overrides. Malformed waivers - a missing owner, a relative duration, an unknown
 key - fail closed like any other config error; an expired one is not an error,
 it is just no longer active.

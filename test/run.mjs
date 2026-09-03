@@ -313,6 +313,30 @@ assert(matchingViaRun.code === 0 && JSON.parse(matchingViaRun.out).findings[0]?.
 
 writeWaiverConfig({
   ignore: { paths: ['services/current/**'] },
+  waivers: [{ ...baseWaiver, via: 'publisher' }],
+})
+const publisherWaiverRun = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json'])
+const publisherWaiverFinding = JSON.parse(publisherWaiverRun.out).findings[0]
+assert(publisherWaiverRun.code === 0 && publisherWaiverFinding?.via === 'publisher' && publisherWaiverFinding.waiver?.active === true, 'a publisher-scoped waiver matches the direct publisher clock')
+
+writeWaiverConfig({
+  via: 'vertex-ai',
+  ignore: { paths: ['services/current/**'] },
+  waivers: [{ ...baseWaiver, via: 'publisher-fallback' }],
+})
+const fallbackWaiverRun = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json'])
+const fallbackWaiverFinding = JSON.parse(fallbackWaiverRun.out).findings[0]
+assert(fallbackWaiverRun.code === 0 && fallbackWaiverFinding?.via === 'publisher-fallback' && fallbackWaiverFinding.waiver?.active === true, 'a publisher-fallback waiver matches an explicit publisher fallback clock')
+
+writeWaiverConfig({
+  ignore: { paths: ['services/current/**'] },
+  waivers: [{ ...baseWaiver, via: 'private-mystery-channel' }],
+})
+const unknownWaiverViaRun = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json'])
+assert(unknownWaiverViaRun.code === 2 && unknownWaiverViaRun.err.includes('unknown lifecycle channel "private-mystery-channel"'), 'waivers still reject unknown lifecycle channel names')
+
+writeWaiverConfig({
+  ignore: { paths: ['services/current/**'] },
   waivers: [
     { ...baseWaiver, owner: '@expired-owner', expires: todayDate },
     { ...baseWaiver, owner: '@active-owner' },
