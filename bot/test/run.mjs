@@ -664,6 +664,89 @@ const staleThird = await staleRun()
 assert(staleThird.decisions.some(record => record.group.kind === 'model' && record.action === 'create'), 'a finding reappearing after automated stale PR closure creates fresh work')
 assert(staleGithub.callsFor('POST', '/pulls').length === 2, 'automated stale PR closure never permanently suppresses recurrence')
 
+const waiverRepo = makeRepo({
+  name: 'waiver-reconciliation',
+  files: {
+    ...baseFiles,
+    'generic.yaml': 'model: "o3-deep-research"\n',
+  },
+  config: { issues: { enabled: true } },
+})
+const waiverGithub = new FakeGitHub()
+const waiverRun = () => runBot({
+  repo: 'example/waiver-reconciliation',
+  targetDir: waiverRepo.work,
+  token: 'test-token',
+  transport: waiverGithub.transport.bind(waiverGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const waiverFirst = await waiverRun()
+const waiverPull = waiverGithub.pulls.find(item => item.state === 'open')
+const waiverIssue = waiverGithub.issues.find(item => item.state === 'open')
+assert(waiverFirst.decisions.filter(item => item.action === 'create').length === 2 && waiverPull && waiverIssue, 'waiver fixture starts with open bot PR and issue work')
+write(path.join(waiverRepo.work, '.model-eol.json'), JSON.stringify({
+  issues: { enabled: true },
+  waivers: [{
+    model: 'o3-deep-research',
+    reason: 'A contract requires a delayed migration.',
+    owner: '@platform-team',
+    expires: '2099-12-31',
+  }],
+}, null, 2))
+git(waiverRepo.work, ['add', '.model-eol.json'])
+git(waiverRepo.work, ['commit', '-m', 'activate model waiver'])
+git(waiverRepo.work, ['push', 'origin', 'main'])
+const waiverActive = await waiverRun()
+assert(waiverActive.decisions.filter(item => item.action === 'close-stale').length === 2 && waiverPull.state === 'closed' && waiverIssue.state === 'closed', 'an active waiver stale-closes open bot PR and issue work')
+const waiverClosureComments = waiverGithub.callsFor('POST', '/comments').map(call => call.body.body)
+assert(waiverClosureComments.filter(comment => comment.includes('@platform-team') && comment.includes('2099-12-31')).length === 2, 'waiver stale-closure comments name the owner and expiry')
+write(path.join(waiverRepo.work, '.model-eol.json'), JSON.stringify({
+  issues: { enabled: true },
+  waivers: [{
+    model: 'o3-deep-research',
+    reason: 'A contract required a delayed migration.',
+    owner: '@platform-team',
+    expires: '2000-01-01',
+  }],
+}, null, 2))
+git(waiverRepo.work, ['add', '.model-eol.json'])
+git(waiverRepo.work, ['commit', '-m', 'expire model waiver'])
+git(waiverRepo.work, ['push', 'origin', 'main'])
+const waiverExpired = await waiverRun()
+const waiverReplacementPull = waiverGithub.pulls.find(item => item.state === 'open')
+const waiverReplacementIssue = waiverGithub.issues.find(item => item.state === 'open')
+assert(waiverExpired.decisions.filter(item => item.action === 'create').length === 2 && waiverReplacementPull?.number !== waiverPull.number && waiverReplacementIssue?.number !== waiverIssue.number, 'an expired waiver creates fresh PR and issue work without reopening stale work')
+assert(parseMetadata(waiverReplacementPull?.body)?.waiver_expires === '2000-01-01' && parseMetadata(waiverReplacementIssue?.body)?.waiver_expires === '2000-01-01', 'fresh post-waiver work records its expiry generation')
+
+const dismissedWaiverRepo = makeRepo({ name: 'dismissed-before-waiver-expiry', files: baseFiles, config: { issues: { enabled: false } } })
+const dismissedWaiverGithub = new FakeGitHub()
+const dismissedWaiverRun = () => runBot({
+  repo: 'example/dismissed-before-waiver-expiry',
+  targetDir: dismissedWaiverRepo.work,
+  token: 'test-token',
+  transport: dismissedWaiverGithub.transport.bind(dismissedWaiverGithub),
+  vendoredFeeds: path.join(root, 'feeds'),
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+await dismissedWaiverRun()
+const preWaiverDismissal = dismissedWaiverGithub.pulls[0]
+preWaiverDismissal.state = 'closed'
+write(path.join(dismissedWaiverRepo.work, '.model-eol.json'), JSON.stringify({
+  issues: { enabled: false },
+  waivers: [{
+    model: 'o3-deep-research',
+    reason: 'The temporary waiver already expired.',
+    owner: '@platform-team',
+    expires: '2000-01-01',
+  }],
+}, null, 2))
+git(dismissedWaiverRepo.work, ['add', '.model-eol.json'])
+git(dismissedWaiverRepo.work, ['commit', '-m', 'record expired waiver'])
+git(dismissedWaiverRepo.work, ['push', 'origin', 'main'])
+const dismissedWaiverExpired = await dismissedWaiverRun()
+assert(dismissedWaiverExpired.decisions.some(item => item.action === 'create') && dismissedWaiverGithub.pulls.length === 2, 'an expired waiver does not inherit a pre-waiver human dismissal')
+
 const unrelatedMarkerRepo = makeRepo({ name: 'unrelated-marker', files: baseFiles, config: { issues: { enabled: false } } })
 const unrelatedMarkerGithub = new FakeGitHub()
 unrelatedMarkerGithub.pulls.push({
@@ -1894,7 +1977,7 @@ assert(baseDriftError?.message.includes('evaluated base commit') && baseDriftErr
 assert(baseDriftGithub.calls.length === 0, 'evaluated-base drift is rejected before any GitHub read or write')
 
 const unavailableChecker = path.join(tempRoot, 'shutdown-unavailable-checker.mjs')
-write(unavailableChecker, `console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:[],items:[],issues:[{file:"direct.py",line:1,matched:"retired-without-date",id:"retired-without-date",publisher:"google",usage:"direct-api",confidence:"high",status:"retired",shutdown:null,via:"vertex-ai",requested_via:"vertex-ai",reason:"shutdown-date-unavailable",sources:[],notes:null}]}))\n`)
+write(unavailableChecker, `console.log(JSON.stringify({plan_schema:"model-eol.plan/0.1",generated:new Date().toISOString(),threshold_days:90,via:null,scan_notes:[],items:[],issues:[{file:"direct.py",line:1,matched:"retired-without-date",id:"retired-without-date",publisher:"google",usage:"direct-api",confidence:"high",status:"retired",shutdown:null,via:"vertex-ai",requested_via:"vertex-ai",waiver:null,reason:"shutdown-date-unavailable",sources:[],notes:null}]}))\n`)
 const unavailableRepo = makeRepo({ name: 'shutdown-unavailable', files: baseFiles })
 const unavailableResult = await runBot({
   repo: 'example/shutdown-unavailable',
