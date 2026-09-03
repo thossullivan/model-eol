@@ -67,7 +67,6 @@ export const parseMetadata = body => {
     if (metadata.replacement !== undefined && metadata.replacement !== null && typeof metadata.replacement !== 'string') return null
     if (metadata.replacement_options !== undefined && (!Array.isArray(metadata.replacement_options) || metadata.replacement_options.some(option => typeof option !== 'string'))) return null
     if (metadata.replacement_note !== undefined && metadata.replacement_note !== null && typeof metadata.replacement_note !== 'string') return null
-    if (metadata.waiver_expires !== undefined && metadata.waiver_expires !== null && (typeof metadata.waiver_expires !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(metadata.waiver_expires))) return null
     if (metadata.base_sha !== undefined && metadata.base_sha !== null && (typeof metadata.base_sha !== 'string' || !/^[0-9a-f]{40,64}$/.test(metadata.base_sha))) return null
     if (metadata.stale_closed !== undefined && metadata.stale_closed !== true) return null
     if (typeof metadata.feed_digest !== 'string' || !metadata.feed_digest) return null
@@ -82,11 +81,6 @@ export const parseMetadata = body => {
 export const itemDigest = items => sortedJsonDigest(items)
 
 export const activeWaiver = item => item?.waiver?.active === true ? item.waiver : null
-
-export const waiverExpiryFor = item => item?.waiver?.active === false ? item.waiver.expires : null
-
-export const sameWaiverGeneration = (metadata, group) =>
-  (metadata?.waiver_expires ?? null) === (group.waiverExpires ?? null)
 
 export const staleWorkComment = (kind, waiver = null) => waiver
   ? `model-eol is closing this bot-owned ${kind} because an active waiver makes its finding non-actionable. The waiver expires ${waiver.expires}, is owned by ${markdownText(waiver.owner)}, and records: ${markdownText(waiver.reason)}`

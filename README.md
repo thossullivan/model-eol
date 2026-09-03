@@ -204,9 +204,11 @@ Expired waivers explain why their findings became actionable again.
 
 The expiry date uses UTC calendar dates. A waiver becomes inactive on its expiry
 date. A model alias matches its whole canonical alias family. Optional `paths`
-use the same repository-relative globs as `ignore.paths`. Optional `via` matches
-only the lifecycle clock recorded in the finding. The first active matching
-waiver wins. A config can contain at most 500 waivers across all policy levels.
+use the same repository-relative globs as `ignore.paths`. Omit `via` for any
+clock, name a distributor to narrow to that clock, or use `publisher` for the
+direct publisher clock. Use `publisher-fallback` for an explicit publisher
+fallback clock. The first active matching waiver wins. A config can contain at
+most 500 waivers across all policy levels.
 
 For content-heavy repositories, start with `inventory`, then exclude caches,
 generated catalogs, archived fixtures, and documentation that are not live model

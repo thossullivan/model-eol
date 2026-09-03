@@ -18,7 +18,7 @@
   "definitions": {
     "item": {
       "type": "object",
-      "required": ["file", "line", "occurrence", "matched", "expected_line_sha256", "id", "publisher", "replacement", "shutdown", "days", "status", "waiver", "sources", "notes"],
+      "required": ["file", "line", "occurrence", "matched", "expected_line_sha256", "id", "publisher", "replacement", "shutdown", "days", "status", "sources", "notes"],
       "properties": {
         "file": { "type": "string", "minLength": 1 },
         "line": { "type": "integer", "minimum": 1 },
@@ -44,7 +44,7 @@
     },
     "issue": {
       "type": "object",
-      "required": ["file", "line", "reason", "waiver"],
+      "required": ["file", "line", "reason"],
       "properties": {
         "file": { "type": "string" },
         "line": { "type": "integer", "minimum": 1 },

@@ -46,7 +46,7 @@
     },
     "modelReference": {
       "type": "object",
-      "required": ["file", "line", "kind", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "evidence", "status", "shutdown", "via", "days", "safe_until", "replacement", "waiver", "source"],
+      "required": ["file", "line", "kind", "matched", "id", "publisher", "usage", "resolved_provider", "confidence", "evidence", "status", "shutdown", "via", "days", "safe_until", "replacement", "source"],
       "properties": {
         "file": { "type": "string", "minLength": 1 },
         "line": { "type": "integer", "minimum": 1 },
