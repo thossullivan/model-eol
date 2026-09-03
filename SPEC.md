@@ -136,6 +136,15 @@ per lifecycle channel, with a deterministic channel-qualified `bom-ref`. This
 keeps direct publisher and distributor clocks distinct and binds each source
 occurrence to the lifecycle decision that evaluated it.
 
+**Compatibility within 0.1.** The `model-eol/0.1` line evolves additively: new
+optional fields and new enumeration values (such as `date_precision:
+"tentative"`, added in 2026-09) may appear in feeds and reports without a
+version change. A consumer that validates strictly against a snapshot of these
+schemas should expect to refresh that snapshot when it upgrades, and a consumer
+that reads defensively should ignore fields and values it does not recognise
+rather than reject the document. Removing a field or changing the meaning of an
+existing value is a new spec line.
+
 ## Non-goals (v0.1)
 
 Pricing, capabilities, context windows (models.dev and friends already do this);
