@@ -585,8 +585,36 @@ function anthropicTentativeShutdown(text, id) {
 
 const anthropicStatusStates = new WeakMap()
 
-function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
+function anthropicAnnouncementIndex(announcements) {
+  const index = new Map()
+  for (const announcement of announcements) {
+    for (const id of [announcement.id, ...(announcement.aliases ?? [])]) {
+      const matches = index.get(id) ?? []
+      if (!matches.includes(announcement)) matches.push(announcement)
+      index.set(id, matches)
+    }
+  }
+  return index
+}
+
+function assertAnthropicStatusMatchesAnnouncement(id, state, status, announcement) {
+  if (state === 'active') {
+    throw new Error(`anthropic model status row ${id} conflicts with announcement: status state Active; announcement shutdown ${announcement.shutdown}`)
+  }
+  if (status.announced !== announcement.announced) {
+    throw new Error(`anthropic model status row ${id} conflicts with announcement: status deprecated ${status.announced}; announcement announced ${announcement.announced}`)
+  }
+  if (status.shutdown !== undefined && status.shutdown !== announcement.shutdown) {
+    throw new Error(`anthropic model status row ${id} conflicts with announcement: status retirement ${status.shutdown}; announcement shutdown ${announcement.shutdown}`)
+  }
+  if (state === 'retired' && status.shutdown === undefined && announcement.shutdown !== undefined) {
+    throw new Error(`anthropic model status row ${id} conflicts with announcement: status retirement N/A; announcement shutdown ${announcement.shutdown}`)
+  }
+}
+
+function parseAnthropicStatusTables(html, sourceUrl, announcements) {
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+  const announcementIndex = anthropicAnnouncementIndex(announcements)
   const records = []
   let recognisedTables = 0
   for (const table of tables) {
@@ -611,6 +639,7 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
       }
       const deprecatedText = plainText(row.cells[headers.deprecated]?.text)
       const retirementText = plainText(row.cells[headers.retirement]?.text)
+      const matchingAnnouncements = announcementIndex.get(id) ?? []
       const item = { id, source: sourceUrl }
       if (state === 'active') {
         if (deprecatedText && !/^n\/a$/i.test(deprecatedText)) {
@@ -625,12 +654,17 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
           if (item.shutdown < item.announced) {
             throw new Error(`anthropic model status row ${id} has retirement before deprecated date: ${retirementText}`)
           }
-        } else if (state === 'retired') {
+        } else if (state === 'retired' && !matchingAnnouncements.length) {
           throw new Error(`anthropic model status row ${id} is retired without a shutdown date: ${retirementText}`)
         }
       }
       parsedRows++
-      if (announcementIds.has(id)) continue
+      if (matchingAnnouncements.length) {
+        for (const announcement of matchingAnnouncements) {
+          assertAnthropicStatusMatchesAnnouncement(id, state, item, announcement)
+        }
+        continue
+      }
       anthropicStatusStates.set(item, state)
       records.push(item)
     }
@@ -662,8 +696,7 @@ export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic
   } catch (error) {
     if (!error.message.includes('has no recognised model tables')) throw error
   }
-  const announcementIds = new Set(announcements.map(record => record.id))
-  const status = parseAnthropicStatusTables(html, sourceUrl, announcementIds)
+  const status = parseAnthropicStatusTables(html, sourceUrl, announcements)
   if (!status.recognisedTables) throw new Error('anthropic deprecations page has no model status table')
   const records = [...announcements, ...status.records]
   if (!records.length) throw new Error('anthropic deprecations page has no model entries')

@@ -183,6 +183,7 @@ const amazonFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'amazon.j
 const openaiById = new Map(openaiEntries.map(entry => [entry.id, entry]))
 const anthropicStatusHeader = '<tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>'
 const anthropicStatusTable = (id, state, deprecated, retirement) => `<table>${anthropicStatusHeader}<tr><td><code>${id}</code></td><td>${state}</td><td>${deprecated}</td><td>${retirement}</td></tr></table>`
+const anthropicAnnouncementTable = (id, announced, shutdown) => `<h2>${announced}: Model retirement</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>${shutdown}</td><td><code>${id}</code></td><td><code>claude-next</code></td></tr></table>`
 
 let endpointLookalikeReason = ''
 try {
@@ -265,6 +266,15 @@ const anthropicStatusError = html => {
     return error.message
   }
 }
+const activeAnnouncementConflictId = 'claude-active-announcement-conflict'
+const activeAnnouncementConflictReason = anthropicStatusError(`${anthropicAnnouncementTable(activeAnnouncementConflictId, '2026-01-01', '2027-01-01')}${anthropicStatusTable(activeAnnouncementConflictId, 'Active', 'N/A', 'Not sooner than September 1, 2028')}`)
+assert(activeAnnouncementConflictReason.includes(activeAnnouncementConflictId) && activeAnnouncementConflictReason.includes('Active') && activeAnnouncementConflictReason.includes('2027-01-01'), 'Anthropic rejects an active status row that conflicts with an announcement')
+const shutdownConflictId = 'claude-shutdown-announcement-conflict'
+const shutdownConflictReason = anthropicStatusError(`${anthropicAnnouncementTable(shutdownConflictId, '2026-01-01', '2027-01-01')}${anthropicStatusTable(shutdownConflictId, 'Deprecated', '2026-01-01', '2027-02-01')}`)
+assert(shutdownConflictReason.includes(shutdownConflictId) && shutdownConflictReason.includes('2027-01-01') && shutdownConflictReason.includes('2027-02-01'), 'Anthropic rejects a status shutdown that differs from its announcement')
+const matchingAnnouncementId = 'claude-matching-announcement-status'
+const matchingAnnouncement = parseAnthropicDeprecations(`${anthropicAnnouncementTable(matchingAnnouncementId, '2026-01-01', '2027-01-01')}${anthropicStatusTable(matchingAnnouncementId, 'Deprecated', '2026-01-01', '2027-01-01')}`)
+assert(matchingAnnouncement.length === 1 && matchingAnnouncement[0].id === matchingAnnouncementId && matchingAnnouncement[0].replacement === 'claude-next', 'Anthropic skips a matching deprecated status row and keeps its announcement')
 const extraColumnStatus = parseAnthropicDeprecations(statusExtraColumnHtml)
 assert(extraColumnStatus.length === 1 && extraColumnStatus[0].id === 'claude-extra-column' && extraColumnStatus[0].date_precision === 'tentative' && extraColumnStatus[0].replacement === undefined, 'Anthropic status parsing owns a table with an extra recommended replacement column')
 const footnotedStatusHtml = '<h2>2026-01-01</h2><table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date¹</th><th>Recommended replacement</th></tr><tr><td><code>claude-footnoted-status</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td><td><code>claude-next</code></td></tr></table>'
