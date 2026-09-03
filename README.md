@@ -34,9 +34,8 @@ second, so the existing trackers can converge instead of each scraping alone.
   floors. Small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
 - **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (29 entries), Google (89 entries) and OpenAI (194 entries), generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated 2026-08-31<!-- /feeds-status -->. Every
-  dated entry carries a source URL. Tentative Anthropic retirement dates use
-  the existing `earliest` date precision. Machine consumers recognize tentative
-  floors by `scheduled`, `earliest`, and `safe_until` on or after `shutdown`.
+  dated entry carries a source URL, and Anthropic's tentative "not sooner than"
+  dates for active models ride along as `tentative` planning floors.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
   ML-BOM export, retirement schedule, alerts and badges, migration plan/apply,
   and public document validation.
@@ -197,18 +196,27 @@ defined by
 while `model-eol validate` also enforces runtime semantic and safety checks that
 Draft-07 cannot express cleanly.
 
-Ignores hide inventory noise from non-dependency artifacts. Waivers record owned,
-expiring exceptions for live dependencies. A waiver never hides its finding.
-Every report includes its reason, owner, expiry, and active state. Active waivers
-remove retired or retiring findings from failure and badge totals. Alerts emit
-these findings as warnings. Plans retain them without creating migration work.
-Expired waivers explain why their findings became actionable again.
+Ignores and waivers answer different questions. `ignore` hides inventory noise -
+fixtures, caches, vendored catalogs - that is not a live dependency. A **waiver**
+records a deliberate exception on a live dependency: which model, why, who owns
+it, and the absolute date it expires. A waiver never hides its finding. The
+reference stays in `check`, `inventory`, `schedule`, `alert`, `plan`, and the
+CycloneDX export with its reason, owner, expiry, and active state attached:
 
-The expiry date uses UTC calendar dates. A waiver becomes inactive on its expiry
-date. A model alias matches its whole canonical alias family. Optional `paths`
-use the same repository-relative globs as `ignore.paths`. Optional `via` matches
-only the lifecycle clock recorded in the finding. The first active matching
-waiver wins. A config can contain at most 500 waivers across all policy levels.
+```
+✗ app.py:2  o3-deep-research  RETIRED 2026-07-23 (42 days ago) -> gpt-5.6-sol  [waived until 2026-12-31 by @research-platform: Research pipeline pinned until the Q4 rerun.]
+```
+
+While a waiver is active, that finding drops out of the exit-1 total, the badge
+counts, and the alert errors, and the bot opens no migration work for it. On the
+expiry date - UTC, the date itself counts as expired - the finding is actionable
+again and the report says which waiver lapsed and who owned it. `model` matches
+the whole alias family, `paths` takes the same repo-relative globs as
+`ignore.paths`, `via` narrows the waiver to one lifecycle clock, the first active
+match wins, and a policy holds at most 500 waivers across the root and its
+overrides. Malformed waivers - a missing owner, a relative duration, an unknown
+key - fail closed like any other config error; an expired one is not an error,
+it is just no longer active.
 
 For content-heavy repositories, start with `inventory`, then exclude caches,
 generated catalogs, archived fixtures, and documentation that are not live model
@@ -250,10 +258,11 @@ then apply path policies and a lifecycle channel per reference:
 }
 ```
 
-Matching overrides apply in order: later scalar values win and ignore lists are
-additive. Overrides can also add path-scoped `waivers` with the same shape.
-The last matching route wins. Exact `match`/`model` pairs resolve a
-repository deployment alias without making cloud or gateway references patchable.
+Matching overrides apply in order: later scalar values win, and ignore and waiver
+lists are additive, so an override can carry path-scoped `waivers` with the same
+shape as the root. The last matching route wins. Exact `match`/`model` pairs
+resolve a repository deployment alias without making cloud or gateway references
+patchable.
 Explicit CLI flags and Action inputs still take precedence. JSON inventory and
 plan output records each reference's effective threshold, scope, requested
 channel, and matching rule indexes, so a Bedrock service and a direct publisher
@@ -278,6 +287,24 @@ with a stated minimum notice period (Anthropic states >=60 days) carry a
 `policy` floor, so the schedule can calculate a no-earlier-than planning date
 from the feed refresh. Stated policy, not a contract. OpenAI
 publishes no formal floor, so its feed makes no forward claim.
+
+Anthropic goes one step further and lists a tentative retirement date - "not
+sooner than" - for every active model. The feed carries those as `shutdown` with
+`date_precision: "tentative"` and no `announced` date, because nothing has been
+announced. The checker treats a tentative date as a floor, not a schedule: the
+finding is `scheduled`, never `retiring` or `retired`, and `safe_until` is the
+later of the floor and the policy date. It cannot fail CI, and the bot opens no
+work for it, but it is visible in every schedule so migration planning can start
+before the announcement lands:
+
+```
+· app.py:1  claude-sonnet-4-5-20250929  scheduled - tentative, not announced: not sooner than 2026-09-29, guaranteed until 2026-10-17 by anthropic policy
+```
+
+When Anthropic announces the retirement, the announcement table wins and the
+entry becomes an ordinary exact date with an `announced` date. `earliest` is
+different: Google's "earliest possible" shutdown dates are announced
+deprecations, and the checker treats them as the scheduled date.
 
 ## Direct-first inventory
 
@@ -315,7 +342,9 @@ human. The workflow resolves `model-eol@0` from npm once and reuses that exact
 version across its plan, read-only evaluation, and write-token publication jobs;
 consumer repositories do not copy `check.mjs` or the `bot/` source directory.
 Dismissals are respected, reintroduced retired models create fresh work, and
-bot-owned PRs/issues close when their finding disappears. In a repository without
+bot-owned PRs/issues close when their finding disappears or is waived; when a
+waiver expires, the bot treats the finding as new rather than inheriting the
+earlier dismissal. In a repository without
 a configured eval, preview everything with no GitHub calls and without adding a
 project dependency:
 
@@ -476,7 +505,8 @@ move any of us can make here.
   reports, inventories, schedules, alerts, and plans against the same
   zero-dependency runtime contracts.
 - Current-model entries (and therefore policy-floor horizons) populate only when
-  refresh runs with provider API keys for the models endpoints.
+  refresh runs with provider API keys for the models endpoints. Anthropic's
+  tentative dates come from its public deprecations page and need no key.
 - The checker matches known IDs only - it will not discover models absent from the
   feeds. Deliberate: precision over discovery for a CI gate.
 - Fetchers: OpenAI, Anthropic, Google, aws-bedrock, and vertex-ai are live. Azure
