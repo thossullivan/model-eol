@@ -249,9 +249,15 @@ function tableRows(table) {
   })
 }
 
-function headerIndexes(rows) {
+function headerIndexes(rows, provider) {
   for (const [index, row] of rows.entries()) {
     const labels = row.cells.map(cell => cell.text.toLowerCase())
+    const headerLabels = row.cells
+      .filter(cell => cell.kind === 'th')
+      .map(cell => plainText(cell.text).toLowerCase())
+    if (provider === 'anthropic' && headerLabels.includes('tentative retirement date')) {
+      return { rejectedReason: 'anthropic-model-status-table' }
+    }
     const date = labels.findIndex(label => /(shutdown|retirement|sunset|removal).*date|date.*(shutdown|retirement|sunset|removal)/i.test(label))
     const model = labels.findIndex(label => /\bmodel\b|\bsystem\b/i.test(label))
     const endpointLike = endpointLikeLabels(labels)
@@ -298,7 +304,7 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
   let recognisedTables = 0
   for (const table of tables) {
     const rows = tableRows(table[1])
-    const headers = headerIndexes(rows)
+    const headers = headerIndexes(rows, provider)
     if (!headers) continue
     if (headers.rejectedReason) {
       skippedReasons.add(headers.rejectedReason)
@@ -506,13 +512,21 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
 }
 
 function anthropicStatusHeaderIndexes(rows) {
+  const required = ['api model name', 'current state', 'deprecated', 'tentative retirement date']
   for (const [index, row] of rows.entries()) {
     const labels = new Map()
+    const counts = new Map()
     for (const [cellIndex, cell] of row.cells.entries()) {
-      if (cell.kind === 'th') labels.set(plainText(cell.text).toLowerCase(), cellIndex)
+      if (cell.kind !== 'th') continue
+      const label = plainText(cell.text).toLowerCase()
+      labels.set(label, cellIndex)
+      counts.set(label, (counts.get(label) ?? 0) + 1)
+    }
+    const duplicate = required.find(label => (counts.get(label) ?? 0) > 1)
+    if (duplicate) {
+      throw new Error(`anthropic model status table header has duplicate required column: ${duplicate}`)
     }
     if (!labels.has('tentative retirement date')) continue
-    const required = ['api model name', 'current state', 'deprecated', 'tentative retirement date']
     const missing = required.filter(label => !labels.has(label))
     if (missing.length) {
       throw new Error(`anthropic model status table header is missing required columns: ${missing.join(', ')}`)
@@ -560,6 +574,7 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
     const headers = anthropicStatusHeaderIndexes(rows)
     if (!headers) continue
     recognisedTables++
+    let parsedRows = 0
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       if (!modelCell?.text) continue
@@ -594,10 +609,12 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
           throw new Error(`anthropic model status row ${id} is retired without a shutdown date: ${retirementText}`)
         }
       }
+      parsedRows++
       if (announcementIds.has(id)) continue
       anthropicStatusStates.set(item, state)
       records.push(item)
     }
+    if (!parsedRows) throw new Error('anthropic model status table has no rows')
   }
   const unique = new Map()
   for (const record of records) {
