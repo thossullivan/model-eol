@@ -260,14 +260,20 @@ const normaliseHeaderLabel = cell => plainText(cell?.text)
 const hasAnthropicStatusSignature = label => label.includes('tentative retirement')
 
 function anthropicStatusHeaderRow(rows) {
-  const first = rows[0]
-  if (!first?.cells.length) return undefined
-  const allHeaders = first.cells.every(cell => cell.kind === 'th')
   const tableHasHeaders = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
-  if (!allHeaders && tableHasHeaders) return undefined
-  const labels = first.cells.map(normaliseHeaderLabel)
-  if (!labels.some(hasAnthropicStatusSignature)) return undefined
-  return { row: 0, labels }
+  const firstDataRow = tableHasHeaders
+    ? rows.findIndex(row => !row.cells.length || row.cells.some(cell => cell.kind !== 'th'))
+    : Math.min(1, rows.length)
+  const dataRow = firstDataRow < 0 ? rows.length : firstDataRow
+  const headerRows = rows.slice(0, dataRow)
+  const signatures = headerRows
+    .map((row, index) => ({ row: index, labels: row.cells.map(normaliseHeaderLabel) }))
+    .filter(header => header.labels.some(hasAnthropicStatusSignature))
+  if (signatures.length > 1) {
+    throw new Error('anthropic model status table has ambiguous signature rows')
+  }
+  if (!signatures.length) return undefined
+  return { ...signatures[0], dataRow }
 }
 
 function headerIndexes(rows, provider) {
@@ -553,7 +559,7 @@ function anthropicStatusHeaderIndexes(rows) {
   if (missing.length) {
     throw new Error(`anthropic model status table header is missing required columns: ${missing.join(', ')}`)
   }
-  return { row: header.row, ...indexes }
+  return { row: header.row, dataRow: header.dataRow, ...indexes }
 }
 
 function anthropicStatusDate(text, id, field, cellText = text) {
@@ -589,7 +595,7 @@ function parseAnthropicStatusTables(html, sourceUrl, announcementIds) {
     if (!headers) continue
     recognisedTables++
     let parsedRows = 0
-    for (const row of rows.slice(headers.row + 1)) {
+    for (const row of rows.slice(headers.dataRow)) {
       const modelCell = row.cells[headers.model]
       if (!modelCell?.text) continue
       const id = modelId(modelCell.html)
