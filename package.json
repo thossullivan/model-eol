@@ -1,6 +1,6 @@
 {
   "name": "model-eol",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "AI model deprecation feeds with a zero-dependency checker, inventory CLI, and migration bot.",
   "type": "module",
   "bin": {
