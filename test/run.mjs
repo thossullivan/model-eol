@@ -217,6 +217,7 @@ assert(
   'CycloneDX has one component per unique publisher, canonical model, and requested lifecycle channel',
 )
 assert(property(cyclonedxComponent, 'model-eol:status') === 'retired', 'CycloneDX carries model-eol status property')
+assert(property(cyclonedxComponent, 'model-eol:waiver_active') === undefined, 'CycloneDX omits waiver properties when no occurrence matched a waiver')
 assert(cyclonedxComponent?.evidence?.occurrences.some(item => item.location.endsWith('direct.py#8')), 'CycloneDX carries model reference occurrences')
 assert(!cyclonedx.components.some(item => item.name === 'gpt-9-ultra-20990101'), 'CycloneDX omits candidate model references')
 assert(cyclonedx.metadata?.properties?.some(item => item.name === 'model-eol:generator' && item.value === 'model-eol/inventory-cyclonedx@0.1'), 'CycloneDX records explicit model-eol generator provenance')
@@ -289,8 +290,26 @@ assert(expiredWaiverInventory.model_references[0]?.waiver?.active === false, 'in
 assert(expiredWaiverSchedule.items[0]?.waiver?.active === false, 'schedule preserves an expired matched waiver')
 assert(expiredWaiverAlert.errors[0]?.waiver?.active === false, 'alert preserves an expired matched waiver')
 assert(expiredWaiverPlan.items[0]?.waiver?.active === false, 'plan preserves an expired matched waiver')
+const expiredWaiverCycloneDx = JSON.parse(run(['inventory', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--format', 'cyclonedx']).out)
+const expiredWaiverComponent = expiredWaiverCycloneDx.components.find(component => component.name === 'o3-deep-research-2025-06-26')
+assert(property(expiredWaiverComponent, 'model-eol:waiver_active') === 'false' && property(expiredWaiverComponent, 'model-eol:waiver_owner') === '@platform-team' && property(expiredWaiverComponent, 'model-eol:waiver_expires') === todayDate && property(expiredWaiverComponent, 'model-eol:waiver_reason') === baseWaiver.reason, 'CycloneDX preserves one expired waiver with its audit metadata')
 const expiredWaiverText = run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all'])
 assert(expiredWaiverText.out.includes(`waiver expired on ${todayDate}; owner @platform-team`), 'human check output explains an expired waiver')
+
+writeWaiverConfig({ waivers: [{ ...baseWaiver, expires: todayDate }] })
+const mixedExpiredCycloneDx = JSON.parse(run(['inventory', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--format', 'cyclonedx']).out)
+const mixedExpiredComponent = mixedExpiredCycloneDx.components.find(component => component.name === 'o3-deep-research-2025-06-26')
+assert(property(mixedExpiredComponent, 'model-eol:waiver_active') === 'false' && property(mixedExpiredComponent, 'model-eol:waiver_owner') === '@platform-team' && property(mixedExpiredComponent, 'model-eol:waiver_expires') === todayDate && property(mixedExpiredComponent, 'model-eol:waiver_reason') === baseWaiver.reason, 'CycloneDX preserves expired waiver metadata when other occurrences are unmatched')
+
+writeWaiverConfig({
+  waivers: [
+    baseWaiver,
+    { ...baseWaiver, paths: ['services/current/**'], reason: 'The current path waiver expired.', owner: '@current-team', expires: todayDate },
+  ],
+})
+const activeExpiredCycloneDx = JSON.parse(run(['inventory', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--format', 'cyclonedx']).out)
+const activeExpiredComponent = activeExpiredCycloneDx.components.find(component => component.name === 'o3-deep-research-2025-06-26')
+assert(property(activeExpiredComponent, 'model-eol:waiver_active') === 'partial' && property(activeExpiredComponent, 'model-eol:waiver_owner') === undefined && property(activeExpiredComponent, 'model-eol:waiver_expires') === undefined && property(activeExpiredComponent, 'model-eol:waiver_reason') === undefined, 'CycloneDX marks mixed active and expired occurrence waivers as partial')
 
 writeWaiverConfig({ waivers: [baseWaiver] })
 const pathScopedWaivers = JSON.parse(run(['check', waiverDir, '--config', waiverConfigPath, '--days', '90', '--scope', 'all', '--json']).out).findings

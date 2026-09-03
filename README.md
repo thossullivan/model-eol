@@ -201,7 +201,8 @@ The `waiver` field appears on a finding only when a waiver matched it. It record
 the reason, owner, expiry, and active state. Active waivers remove retired or
 retiring findings from failure and badge totals. Alerts emit these findings as
 warnings. Plans retain them without creating migration work. Expired waivers
-explain why their findings became actionable again.
+explain why their findings became actionable again. CycloneDX records active,
+partial, and expired waiver state per component.
 
 The expiry date uses UTC calendar dates. A waiver becomes inactive on its expiry
 date. A model alias matches its whole canonical alias family. Optional `paths`
