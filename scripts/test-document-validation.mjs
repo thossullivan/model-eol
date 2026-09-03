@@ -249,6 +249,16 @@ assert.equal(cycloneDxProperty(distinctWaiversComponent, 'model-eol:waiver_expir
 assert.equal(cycloneDxProperty(distinctWaiversComponent, 'model-eol:waiver_owner'), undefined, 'distinct active waivers omit ambiguous ownership from CycloneDX')
 assert.equal(cycloneDxProperty(distinctWaiversComponent, 'model-eol:waiver_reason'), undefined, 'distinct active waivers omit ambiguous reasons from CycloneDX')
 
+const distinctExpiredWaiversCycloneDx = formatInventoryCycloneDX(cycloneDxInventory([
+  cycloneDxReference({ file: 'first.py', line: 1, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: { reason: 'First expired waiver.', owner: '@first-team', expires: '2026-10-31', active: false } }),
+  cycloneDxReference({ file: 'second.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01', waiver: { reason: 'Second expired waiver.', owner: '@second-team', expires: '2026-11-30', active: false } }),
+]))
+const distinctExpiredWaiversComponent = distinctExpiredWaiversCycloneDx.components[0]
+assert.equal(cycloneDxProperty(distinctExpiredWaiversComponent, 'model-eol:waiver_active'), 'false', 'CycloneDX records expired waiver evidence when no occurrence is actively waived')
+assert.equal(cycloneDxProperty(distinctExpiredWaiversComponent, 'model-eol:waiver_expires'), '2026-11-30', 'distinct expired waivers expose their latest expiry in CycloneDX')
+assert.equal(cycloneDxProperty(distinctExpiredWaiversComponent, 'model-eol:waiver_owner'), undefined, 'distinct expired waivers omit ambiguous ownership from CycloneDX')
+assert.equal(cycloneDxProperty(distinctExpiredWaiversComponent, 'model-eol:waiver_reason'), undefined, 'distinct expired waivers omit ambiguous reasons from CycloneDX')
+
 const unwaivedCycloneDx = formatInventoryCycloneDX(cycloneDxInventory([
   cycloneDxReference({ file: 'first.py', line: 1, usage: 'direct-api', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01' }),
   cycloneDxReference({ file: 'second.py', line: 2, usage: 'model-reference', requestedVia: null, via: 'publisher', status: 'retired', shutdown: '2026-08-01' }),

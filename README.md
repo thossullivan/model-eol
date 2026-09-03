@@ -201,7 +201,8 @@ fixtures, caches, vendored catalogs - that is not a live dependency. A **waiver*
 records a deliberate exception on a live dependency: which model, why, who owns
 it, and the absolute date it expires. A waiver never hides its finding. The
 reference stays in `check`, `inventory`, `schedule`, `alert`, `plan`, and the
-CycloneDX export with its reason, owner, expiry, and active state attached. The
+CycloneDX export with its reason, owner, expiry, and active state attached; the
+CycloneDX component records active, partial, or expired waiver state. The
 `waiver` field appears on a finding only when a waiver matched it:
 
 ```
