@@ -1,7 +1,7 @@
 # Weekly feed refresh - regenerates feeds/ from the live provider pages and the
 # AWS Bedrock and Google Vertex AI lifecycle pages, updates the README freshness
 # line, and opens a PR with the semantic diff for human review. Never pushes to
-# main directly. An unreviewed refresh PR is updated in place, never duplicated.
+# main directly. PR reuse is ownership-checked and protected by an exact lease.
 #
 # Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY enable
 # the models endpoints so current-model entries (and policy-floor horizons)
@@ -84,12 +84,42 @@ jobs:
           GH_TOKEN: ${{ secrets.MODEL_EOL_BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          existing=$(gh pr list --state open --limit 1000 --json headRefName,url,number,isCrossRepository \
-            --jq '[.[] | select(.isCrossRepository == false and (.headRefName | startswith("feed-refresh/")))][0] | if . then [.headRefName, (.number | tostring), .url] | @tsv else "" end')
+          can_reuse() {
+            local foreign_committer review_decision
+            if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+              git fetch --unshallow origin main || exit 1
+            else
+              git fetch origin main || exit 1
+            fi
+            git fetch origin "refs/heads/$branch" || exit 1
+            remote_sha=$(git rev-parse FETCH_HEAD) || exit 1
+            foreign_committer=$(git log --format=%cn origin/main..FETCH_HEAD |
+              awk '$0 != "model-eol feed refresh" && !found { print; found=1 }') || exit 1
+            if [ -n "$foreign_committer" ]; then
+              echo "::notice::Not reusing PR #$pr_number because it has a commit from $foreign_committer."
+              return 1
+            fi
+            review_decision=$(gh pr view "$pr_number" --json reviewDecision --jq '.reviewDecision // ""') || exit 1
+            if [ "$review_decision" = "APPROVED" ] || [ "$review_decision" = "CHANGES_REQUESTED" ]; then
+              reviewed_pr_number=$pr_number
+              echo "::notice::Not reusing PR #$pr_number because its review decision is $review_decision."
+              return 1
+            fi
+            return 0
+          }
+
+          existing=$(gh pr list --state open --limit 1000 --json headRefName,url,number,isCrossRepository,baseRefName \
+            --jq '[.[] | select(.isCrossRepository == false and .baseRefName == "main" and (.headRefName | startswith("feed-refresh/")))][0] | if . then [.headRefName, (.number | tostring), .url] | @tsv else "" end')
           reusing=false
+          reviewed_pr_number=""
           if [ -n "$existing" ]; then
             IFS=$'\t' read -r branch pr_number pr_url <<< "$existing"
-            reusing=true
+            if can_reuse; then
+              reusing=true
+            else
+              branch="feed-refresh/${{ github.run_id }}"
+              pr_url=""
+            fi
           else
             branch="feed-refresh/${{ github.run_id }}"
           fi
@@ -99,13 +129,16 @@ jobs:
           git add feeds/ README.md
           git commit -m "Refresh feeds from live sources ($(date -u +%Y-%m-%d))"
           if [ "$reusing" = true ]; then
-            git push --force origin "$branch"
+            git push --force-with-lease="refs/heads/$branch:$remote_sha" origin "$branch"
           else
             git push origin "$branch"
           fi
           {
             if [ "$reusing" = true ]; then
               echo "Superseded the previous unreviewed refresh on $(date -u +%Y-%m-%d); this diff is against main as of this run."
+              echo
+            elif [ -n "$reviewed_pr_number" ]; then
+              echo "PR #$reviewed_pr_number already has human review activity, so this refresh uses a new branch."
               echo
             fi
             echo "Automated weekly refresh. Review the semantic diff - a broken parse reads as a nonsense diff, not silently wrong data."

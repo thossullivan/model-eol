@@ -25,7 +25,14 @@ const refreshRun = 'https://github.com/thossullivan/model-eol/actions/runs/12345
 const refreshWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'feed-refresh.yml'), 'utf8')
 let server = null
 
-assert(refreshWorkflow.includes('startswith("feed-refresh/")') && refreshWorkflow.includes('gh pr edit'), 'feed refresh workflow reuses an open refresh PR')
+assert(
+  refreshWorkflow.includes('startswith("feed-refresh/")') &&
+  refreshWorkflow.includes('gh pr edit') &&
+  refreshWorkflow.includes('--force-with-lease=') &&
+  refreshWorkflow.includes('reviewDecision') &&
+  !refreshWorkflow.includes('git push --force origin'),
+  'feed refresh workflow safely reuses an open refresh PR',
+)
 
 const runGit = args => {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' })
