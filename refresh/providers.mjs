@@ -267,6 +267,8 @@ const normaliseHeaderLabel = cell => plainText(cell?.text)
 
 const hasAnthropicStatusSignature = label => label.includes('tentative retirement')
 
+const isAnthropicStatusHeader = labels => labels.some(label => hasAnthropicStatusSignature(label) || label.includes('current state'))
+
 function anthropicStatusHeaderRow(rows) {
   const tableHasHeaders = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
   const firstDataRow = tableHasHeaders
@@ -276,7 +278,7 @@ function anthropicStatusHeaderRow(rows) {
   const headerRows = rows.slice(0, dataRow)
   const signatures = headerRows
     .map((row, index) => ({ row: index, labels: row.cells.map(normaliseHeaderLabel) }))
-    .filter(header => header.labels.some(hasAnthropicStatusSignature))
+    .filter(header => isAnthropicStatusHeader(header.labels))
   if (signatures.length > 1) {
     throw new Error('anthropic model status table has ambiguous signature rows')
   }
