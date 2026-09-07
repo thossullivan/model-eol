@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-09-03T22:28:01.897Z",
+  "generated": "2026-09-07T05:31:03.696Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -509,13 +509,12 @@
     },
     {
       "id": "lyria-3-clip-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "replacement": "lyria-3.5-clip-preview"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
     },
     {
       "id": "lyria-3-pro-preview",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "replacement": "lyria-3.5-pro-preview"
+      "replacement": "lyria-3.5"
     },
     {
       "id": "lyria-realtime-exp",
@@ -650,7 +649,8 @@
       "source": "https://ai.google.dev/gemini-api/docs/deprecations"
     },
     {
-      "id": "lyria-3.5"
+      "id": "lyria-3.5",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
     }
   ]
 }
