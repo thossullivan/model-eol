@@ -105,8 +105,8 @@ try {
   assert(versionGuards.length === 3 && versionGuards.every(line => line.includes('^[0-9]+\\.[0-9]+\\.[0-9]+$')), 'every consumer accepts only a stable x.y.z version before shell use')
   assert(workflow.includes('model-eol-version'), 'resolved exact package version is carried as a workflow artifact')
   const publishJob = workflow.slice(workflow.indexOf('\n  publish:'))
-  assert(!publishJob.includes('OPENAI_API_KEY') && !publishJob.includes('ANTHROPIC_API_KEY') && !publishJob.includes('GOOGLE_API_KEY') && !publishJob.includes('GEMINI_API_KEY'), 'write-capable publish job receives no provider API keys')
-  assert(!/^\s+(?:OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|GEMINI_API_KEY):/m.test(workflow), 'copy-ready workflow injects no provider secret until the consumer explicitly opts in')
+  assert(!publishJob.includes('OPENAI_API_KEY') && !publishJob.includes('ANTHROPIC_API_KEY') && !publishJob.includes('GOOGLE_API_KEY') && !publishJob.includes('GEMINI_API_KEY') && !publishJob.includes('MISTRAL_API_KEY'), 'write-capable publish job receives no provider API keys')
+  assert(!/^\s+(?:OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|GEMINI_API_KEY|MISTRAL_API_KEY):/m.test(workflow), 'copy-ready workflow injects no provider secret until the consumer explicitly opts in')
   assert(workflow.includes('model-eol-bot evaluate') && workflow.includes('MODEL_EOL_EVAL_RESULTS_FILE'), 'consumer workflow uses the isolated evaluator manifest contract')
 
   const packResult = run(npm, ['pack', root, '--json', '--ignore-scripts'], { cwd: tempRoot })

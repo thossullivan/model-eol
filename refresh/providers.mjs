@@ -30,6 +30,14 @@ export const PROVIDERS = {
     keyHeader: 'x-goog-api-key',
     headers: {},
   },
+  mistral: {
+    publisher: 'mistral',
+    feedFile: 'mistral.json',
+    modelsUrl: 'https://api.mistral.ai/v1/models',
+    deprecationsUrl: 'https://docs.mistral.ai/models',
+    keyEnv: 'MISTRAL_API_KEY',
+    headers: {},
+  },
 }
 
 const DATE_PATTERN = /\b((?:19|20)\d{2})[-‐‑‒–\u2014−](\d{1,2})[-‐‑‒–\u2014−](\d{1,2})\b/
@@ -819,6 +827,89 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
 
 export const parseGoogleGeminiDeprecations = parseGoogleDeprecations
 
+function mistralHeaderIndexes(rows) {
+  for (const [index, row] of rows.entries()) {
+    if (!row.cells.length || row.cells.some(cell => cell.kind !== 'th')) continue
+    const labels = row.cells.map(normaliseHeaderLabel)
+    const required = { model: 'model', version: 'version', api: 'api', dates: 'deprecation retirement', alternative: 'alternative' }
+    if (!Object.values(required).every(label => labels.includes(label))) continue
+    if (Object.values(required).some(label => labels.filter(value => value === label).length !== 1)) {
+      throw new Error('mistral deprecations table has ambiguous header columns')
+    }
+    return { row: index, width: labels.length, ...Object.fromEntries(Object.entries(required).map(([key, label]) => [key, labels.indexOf(label)])) }
+  }
+  return undefined
+}
+
+function mistralUsDate(text, id) {
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (match) {
+    const date = validDate(match[3], match[1], match[2])
+    if (date) return date
+  }
+  throw new Error(`mistral deprecations row ${id} has an invalid M/D/YYYY date: ${text}`)
+}
+
+export function parseMistralDeprecations(html, sourceUrl = PROVIDERS.mistral.deprecationsUrl) {
+  if (typeof html !== 'string' || !html.trim()) throw new Error('mistral deprecations page is empty')
+  try {
+    new URL(sourceUrl)
+  } catch {
+    throw new Error(`mistral deprecations source is not a URL: ${sourceUrl}`)
+  }
+
+  const records = new Map()
+  const skipped = []
+  let pendingHeaders
+  let recognisedTables = 0
+  for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
+    const rows = tableRows(table[1])
+    const ownHeaders = mistralHeaderIndexes(rows)
+    const headers = ownHeaders ?? pendingHeaders
+    const dataRows = ownHeaders ? rows.slice(ownHeaders.row + 1) : rows
+    if (!headers) continue
+    if (!dataRows.length) {
+      pendingHeaders = headers
+      continue
+    }
+    pendingHeaders = undefined
+    recognisedTables++
+    for (const [index, row] of dataRows.entries()) {
+      const model = (row.cells[headers.model]?.text ?? '').replace(/\s*↗\s*$/, '')
+      const version = row.cells[headers.version]?.text ?? ''
+      const id = row.cells[headers.api]?.text ?? ''
+      const label = id || `${model || '(unnamed model)'} ${version} (row ${index + 1})`.trim()
+      if (row.cells.length !== headers.width || row.cells.some(cell => cell.kind !== 'td')) {
+        throw new Error(`mistral deprecations row ${label} has unexpected cells`)
+      }
+      if (!id) {
+        skipped.push({ model, version })
+        continue
+      }
+      if (!MODEL_ID_PATTERN.test(id)) {
+        throw new Error(`mistral deprecations table refused row: invalid-model-id: ${id}`)
+      }
+      const dates = row.cells[headers.dates].text
+      const match = dates.match(/^(\d{1,2}\/\d{1,2}\/\d{4}) (\d{1,2}\/\d{1,2}\/\d{4})$/)
+      if (!match) throw new Error(`mistral deprecations row ${id} must contain exactly two M/D/YYYY dates: ${dates || '(empty)'}`)
+      const announced = mistralUsDate(match[1], id)
+      const shutdown = mistralUsDate(match[2], id)
+      if (shutdown < announced) throw new Error(`mistral deprecations row ${id} has shutdown before announcement`)
+      const alternative = row.cells[headers.alternative].text
+      const record = { id, announced, shutdown, source: sourceUrl }
+      if (alternative) record.replacement_note = `Mistral lists ${alternative} as the alternative`
+      const previous = records.get(id)
+      if (previous && (previous.announced !== announced || previous.shutdown !== shutdown || !sameReplacementPayload(previous, record))) {
+        throw new Error(`mistral deprecations page has conflicting rows for ${id}`)
+      }
+      if (!previous) records.set(id, record)
+    }
+  }
+  if (!recognisedTables) throw new Error('mistral deprecations page has no recognised model tables with data rows')
+  if (!records.size) throw new Error('mistral deprecations page has no model entries')
+  return { records: [...records.values()], skipped }
+}
+
 const MAX_MODEL_PAGES = 20
 const GOOGLE_MODEL_PAGE_SIZE = 1000
 
@@ -859,6 +950,25 @@ function parseModelsPage(body, provider) {
 /** Parse the JSON response returned by a provider's models endpoint. */
 export function parseModelsResponse(body, provider = 'provider') {
   return parseModelsPage(body, provider).ids
+}
+
+function parseMistralModelsResponse(body) {
+  const ids = parseModelsResponse(body, 'mistral')
+  const parsed = typeof body === 'string' ? JSON.parse(body) : body
+  if (parsed?.object !== 'list' || !Array.isArray(parsed.data)) {
+    throw new Error('mistral models response must be a list with a data array')
+  }
+  const models = parsed.data.map((row, index) => {
+    const id = ids[index]
+    if (!MODEL_ID_PATTERN.test(id)) throw new Error(`mistral models response contains an invalid model id: ${id}`)
+    const aliases = row.aliases ?? []
+    if (!Array.isArray(aliases) || aliases.some(alias => typeof alias !== 'string' || !MODEL_ID_PATTERN.test(alias))) {
+      throw new Error(`mistral models response entry ${id} has invalid aliases`)
+    }
+    return { id, aliases: [...new Set(aliases)].filter(alias => alias !== id) }
+  })
+  identityIndex(models)
+  return { ids, models }
 }
 
 function parseGoogleModelsPage(body) {
@@ -1195,13 +1305,20 @@ export async function loadProviderSources(config, options = {}) {
   const { fixtures, env = process.env, fetchImpl = globalThis.fetch, notice = console.error } = options
   let currentIds = null
   let endpointAvailable = false
+  let currentModels = []
 
   if (fixtures) {
     const modelFixture = findFixture(fixtures, config.publisher, 'models')
     const modelBody = fs.readFileSync(modelFixture, 'utf8')
-    currentIds = config.publisher === 'google'
-      ? parseGoogleModelsResponse(modelBody)
-      : parseModelsResponse(modelBody, config.publisher)
+    if (config.publisher === 'mistral') {
+      const parsed = parseMistralModelsResponse(modelBody)
+      currentIds = parsed.ids
+      currentModels = parsed.models
+    } else {
+      currentIds = config.publisher === 'google'
+        ? parseGoogleModelsResponse(modelBody)
+        : parseModelsResponse(modelBody, config.publisher)
+    }
     endpointAvailable = true
     notice(`notice: ${config.publisher} models endpoint fixture: ${path.relative(process.cwd(), modelFixture)}`)
   } else {
@@ -1212,10 +1329,15 @@ export async function loadProviderSources(config, options = {}) {
       notice(`notice: ${keyEnvs.join(' or ')} is unset; skipping ${config.publisher} models endpoint and preserving committed entries`)
     } else {
       const headers = { ...config.headers }
-      if (config.publisher === 'openai') headers.Authorization = `Bearer ${key}`
+      if (['openai', 'mistral'].includes(config.publisher)) headers.Authorization = `Bearer ${key}`
       if (config.publisher === 'anthropic') headers['x-api-key'] = key
       if (config.keyHeader) headers[config.keyHeader] = key
-      if (config.publisher === 'google') {
+      if (config.publisher === 'mistral') {
+        const body = await fetchBody(config.modelsUrl, headers, config.publisher, fetchImpl)
+        const parsed = parseMistralModelsResponse(body)
+        currentIds = parsed.ids
+        currentModels = parsed.models
+      } else if (config.publisher === 'google') {
         currentIds = await fetchPaginatedGoogleModels(config, headers, fetchImpl)
       } else {
         currentIds = await fetchPaginatedModels(config, headers, fetchImpl)
@@ -1234,12 +1356,25 @@ export async function loadProviderSources(config, options = {}) {
     html = await fetchBody(config.deprecationsUrl, {}, config.publisher, fetchImpl)
   }
 
+  const mistral = config.publisher === 'mistral' ? parseMistralDeprecations(html, config.deprecationsUrl) : undefined
   const deprecations = config.publisher === 'openai'
     ? parseOpenAIDeprecations(html, config.deprecationsUrl)
     : config.publisher === 'google'
       ? parseGoogleDeprecations(html, config.deprecationsUrl)
       : config.publisher === 'anthropic'
         ? parseAnthropicDeprecations(html, config.deprecationsUrl)
-        : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
-  return { currentIds, endpointAvailable, deprecations }
+        : config.publisher === 'mistral'
+          ? mistral.records
+          : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
+  for (const model of currentModels) {
+    if (!model.aliases.length) continue
+    const record = deprecations.find(record => record.id === model.id)
+    if (record) record.aliases = model.aliases
+    else deprecations.push(model)
+  }
+  const skipped = mistral?.skipped ?? []
+  for (const row of skipped) {
+    notice(`notice: ${config.publisher} skipped ${row.model} (version ${row.version || 'not listed'}): no API id`)
+  }
+  return { currentIds, endpointAvailable, deprecations, skipped }
 }

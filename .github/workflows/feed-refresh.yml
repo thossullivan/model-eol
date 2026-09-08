@@ -3,7 +3,7 @@
 # line, and opens a PR with the semantic diff for human review. Never pushes to
 # main directly. PR reuse is ownership-checked and protected by an exact lease.
 #
-# Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY enable
+# Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY enable
 # the models endpoints so current-model entries (and policy-floor horizons)
 # populate.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
@@ -40,6 +40,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: |
           set +e
           node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
@@ -71,6 +72,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: |
           node refresh/refresh.mjs
           node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry

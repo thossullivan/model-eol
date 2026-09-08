@@ -240,6 +240,23 @@ assert(cyclonedx.metadata?.properties?.some(item => item.name === 'model-eol:gen
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
 
+const mistralConsumerDir = path.join(tempRoot, 'mistral-consumer')
+fs.mkdirSync(mistralConsumerDir)
+const mistralConsumerFile = path.join(mistralConsumerDir, 'app.ts')
+fs.writeFileSync(mistralConsumerFile, 'model: "mistral-medium-2508"\n')
+const mistralConsumer = run([mistralConsumerDir, '--days', '90', '--json'])
+const mistralFindings = JSON.parse(mistralConsumer.out).findings
+assert(mistralConsumer.code === 1 && mistralFindings.length === 1 && mistralFindings[0].id === 'mistral-medium-2508' && mistralFindings[0].shutdown === '2026-08-31' && mistralFindings[0].status === 'retired', 'bundled Mistral feed reports Medium 2508 as retired with its published shutdown')
+const mistralEndpointFixture = JSON.parse(fs.readFileSync(path.join(root, 'refresh/test/fixture/mistral-models.json'), 'utf8'))
+const mistralAlias = mistralEndpointFixture.data.find(model => model.id === 'mistral-medium-2508').aliases[0]
+const mistralBundledAlias = loadFeeds(path.join(root, 'feeds')).entries.get(mistralAlias)
+if (mistralBundledAlias) {
+  fs.writeFileSync(mistralConsumerFile, `model: "${mistralAlias}"\n`)
+  const aliasConsumer = run([mistralConsumerDir, '--days', '90', '--json'])
+  const aliasFindings = JSON.parse(aliasConsumer.out).findings
+  assert(aliasFindings.length === 1 && aliasFindings[0].id === mistralBundledAlias.entry.id && aliasFindings[0].publisher === 'mistral' && aliasFindings[0].shutdown === (mistralBundledAlias.entry.shutdown ?? null), 'bundled Mistral endpoint alias resolves to its canonical model when present')
+}
+
 const waiverDir = path.join(tempRoot, 'waivers')
 const waiverConfigPath = path.join(tempRoot, 'waiver-config.json')
 fs.mkdirSync(path.join(waiverDir, 'services', 'legacy'), { recursive: true })

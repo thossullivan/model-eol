@@ -36,7 +36,7 @@ format instead of each scraping the same pages.
   replacement, `distributions` for per-channel lifecycles, and publisher `policy`
   floors. It is small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (30 entries), Google (93 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-09-08<!-- /feeds-status -->. Every
+- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (30 entries), Google (93 entries), Mistral (40 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-09-08<!-- /feeds-status -->. Every
   dated entry carries a source URL. Anthropic's "not sooner than" dates for
   active models are included as `tentative` planning floors.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
@@ -115,7 +115,8 @@ files. The checker, PR gate, schedule, SBOM export, and badge run with no
 credentials at all. The bot needs a GitHub token, and a fine-grained PAT if you
 want its PRs to trigger checks. Provider API keys are optional in exactly two
 places: your own eval command, and the models-endpoint coverage in the feed
-refresh.
+refresh. Refresh accepts `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+(or `GOOGLE_API_KEY`), and `MISTRAL_API_KEY`.
 
 Both command-line binaries ship in one zero-dependency npm package. The test
 suite packs that package, installs it into an empty directory with the network
@@ -566,7 +567,7 @@ is the most useful thing any of us can do here.
 - The checker matches known IDs only. It does not discover models that are
   absent from the feeds. This is deliberate: a CI gate needs precision more than
   discovery.
-- Fetchers: OpenAI, Anthropic, Google, aws-bedrock, and vertex-ai are live.
+- Fetchers: OpenAI, Anthropic, Google, Mistral, aws-bedrock, and vertex-ai are live.
   Azure dates are carried where OpenAI's own page publishes them. A standalone
   Azure lifecycle fetcher is not built yet.
 - On npm as [`model-eol`](https://www.npmjs.com/package/model-eol). Material

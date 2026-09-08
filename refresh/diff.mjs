@@ -202,6 +202,7 @@ export function compareFeeds(committed, generated, options = {}) {
     noPublisherFeed,
     noPublisherFeeds: noPublisherFeed,
     sourceConflicts: options.sourceConflicts ?? [],
+    skipped: options.skipped ?? [],
     // Informational sections never alter the files, so they never trip exit 3.
     changed: Boolean(
       added.length ||
@@ -311,6 +312,10 @@ function renderResult(result, publisher) {
   pushSection(section(
     'Unconfirmed entries',
     result.unconfirmed.map(model => `- ${code(model.id)} - retained because neither source confirmed it`),
+  ))
+  pushSection(section(
+    'Rows without an API id',
+    (result.skipped ?? []).map(row => `- ${code(row.model)} - version: ${code(row.version)}; skipped because the API cell is empty`),
   ))
 
   if (!result.changed) lines.push('No semantic changes.', '')

@@ -33,11 +33,13 @@ import {
   dateFromText,
   parseGoogleDeprecations,
   parseGoogleModels,
+  parseMistralDeprecations,
+  parseModelsResponse,
   parseOpenAIDeprecations,
   parseOpenAIModels,
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
-import { validateGeneratedFeeds } from '../refresh.mjs'
+import { parseRefreshArgs, usage, validateGeneratedFeeds } from '../refresh.mjs'
 import { validateFeed } from '../../lib/validate-feed.mjs'
 import { classifyFeedReleasePaths } from '../../scripts/feed-release-guard.mjs'
 import { validateReleaseVersion } from '../../scripts/validate-release-version.mjs'
@@ -184,6 +186,77 @@ const openaiFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'openai.j
 const anthropicFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'anthropic.json'), 'utf8'))
 const googleFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'google.json'), 'utf8'))
 const amazonFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'amazon.json'), 'utf8'))
+const mistralHtml = fs.readFileSync(path.join(fixtures, 'mistral-deprecations.html'), 'utf8')
+const mistralModels = fs.readFileSync(path.join(fixtures, 'mistral-models.json'), 'utf8')
+const mistralParsed = parseMistralDeprecations(mistralHtml)
+const mistralTables = [...mistralHtml.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+const mistralRows = [...mistralTables[1][1].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi)].map(match => match[0])
+const mistralMediumRow = mistralRows.find(row => row.includes('mistral-medium-2508'))
+const mistralMedium = mistralParsed.records.find(record => record.id === 'mistral-medium-2508')
+const mistralExpectedSkipped = [
+  { model: 'Mathstral 7B', version: '0.1' },
+  { model: 'Mistral Next', version: '' },
+  { model: 'Mistral 7B', version: '0.1' },
+]
+const mistralMutatedRow = (cellIndex, value) => {
+  let index = 0
+  return mistralMediumRow.replace(/(<td\b[^>]*>)[\s\S]*?(<\/td>)/gi, (cell, open, close) => index++ === cellIndex ? `${open}${value}${close}` : cell)
+}
+const mistralRefusal = (html, source) => {
+  try {
+    parseMistralDeprecations(html, source)
+    return ''
+  } catch (error) {
+    return error.message
+  }
+}
+assert(mistralTables.length === 2 && mistralRows.length === 45 && mistralParsed.records.length === 40, 'Mistral parses 45 source rows into 40 unique API records')
+assert(JSON.stringify(mistralParsed.skipped) === JSON.stringify(mistralExpectedSkipped), 'Mistral reports exactly the three rows without API ids, including model names and versions')
+assert(mistralMedium?.announced === '2026-05-22' && mistralMedium?.shutdown === '2026-08-31' && mistralMedium?.replacement_note === 'Mistral lists Mistral Medium 3.5 as the alternative', 'Mistral Medium dates and alternative come from their exact cells')
+assert(mistralParsed.records.some(record => record.id === 'labs-leanstral-2603'), 'Mistral pairs the separate header table without losing the first body row')
+assert(mistralParsed.records.every(record => record.source === PROVIDERS.mistral.deprecationsUrl && !Object.hasOwn(record, 'date_precision') && !Object.hasOwn(record, 'replacement') && !Object.hasOwn(record, 'replacement_options')), 'Mistral emits exact dates and product alternatives only as notes')
+assert(mistralRefusal(mistralTables[0][0]).includes('no recognised model tables'), 'Mistral refuses a header-only table without a following body table')
+assert(mistralRefusal(mistralTables[1][0]).includes('no recognised model tables'), 'Mistral refuses data tables without recognised headers')
+const mistralCombinedTable = mistralTables[0][0].replace('</table>', `${mistralTables[1][1]}</table>`)
+assert(JSON.stringify(parseMistralDeprecations(mistralCombinedTable)) === JSON.stringify(mistralParsed), 'Mistral also recognises headers and data within one table')
+assert(mistralRefusal('').includes('page is empty') && mistralRefusal(mistralHtml, 'not-a-url').includes('source is not a URL'), 'Mistral validates the page and source URL')
+for (const dates of [
+  '5/22/2026', '', '-', '5/22/2026 8/31/2026 extra',
+  '5/22/2026 8/31/2026 9/1/2026', '2026-05-22 2026-08-31',
+  '05/022/2026 08/31/2026', '5/22/26 8/31/26',
+  '0/22/2026 8/31/2026', '13/22/2026 8/31/2026',
+  '5/0/2026 8/31/2026', '2/29/2026 8/31/2026',
+  '5/22/2026 4/31/2026', '8/31/2026 5/22/2026',
+]) {
+  const reason = mistralRefusal(mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, dates)))
+  assert(reason.includes('mistral-medium-2508') && /date|announcement/.test(reason), `Mistral refuses invalid date content and names the row: ${dates || '(empty)'}`)
+}
+const mistralLeapHtml = mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, '02/29/2024 02/29/2024'))
+assert(parseMistralDeprecations(mistralLeapHtml).records.find(record => record.id === 'mistral-medium-2508')?.shutdown === '2024-02-29', 'Mistral accepts real leap days, padded dates, and same-day retirement')
+const mistralInvalidId = mistralRefusal(mistralHtml.replace(mistralMediumRow, mistralMutatedRow(2, 'invalid/api id')))
+assert(mistralInvalidId.includes('invalid-model-id') && mistralInvalidId.includes('invalid/api id'), 'Mistral refuses an invalid API id and names the row')
+for (const id of ['voxtral-mini-2507', 'open-mistral-7b']) {
+  assert(mistralRows.filter(row => row.includes(`>${id}<`)).length === 2 && mistralParsed.records.filter(record => record.id === id).length === 1, `Mistral collapses identical source rows for ${id}`)
+}
+for (const [cell, value] of [[3, '5/21/2026 8/31/2026'], [3, '5/22/2026 9/1/2026'], [4, 'Another alternative']]) {
+  const duplicateHtml = mistralHtml.replace(mistralMediumRow, `${mistralMediumRow}${mistralMutatedRow(cell, value)}`)
+  assert(mistralRefusal(duplicateHtml).includes('conflicting rows for mistral-medium-2508'), `Mistral refuses duplicate ids with conflicting dates or alternatives: ${value}`)
+}
+assert(parseRefreshArgs(['--provider', 'mistral']).providers.join() === 'mistral' && parseRefreshArgs([]).providers.includes('mistral') && usage().includes('google|mistral|all'), 'refresh selects Mistral explicitly and through all, and documents it in usage')
+const mistralNotices = []
+const mistralSources = await loadProviderSources(PROVIDERS.mistral, { fixtures, notice: message => mistralNotices.push(message) })
+assert(mistralNotices.filter(message => message.startsWith('notice: mistral skipped ')).length === 3 && mistralExpectedSkipped.every(row => mistralNotices.some(message => message.includes(row.model) && message.includes(row.version || 'not listed'))), 'Mistral emits one named notice for each skipped row')
+assert(parseModelsResponse(mistralModels, 'mistral').length === 3 && !parseModelsResponse(mistralModels, 'mistral').includes('mistral-medium-latest'), 'the generic models parser returns canonical ids without flattening endpoint aliases')
+const mistralSeed = { spec: 'model-eol/0.1', publisher: 'mistral', generated: '2026-09-08T00:00:00Z', source: PROVIDERS.mistral.deprecationsUrl, models: [] }
+const mistralMerged = mergeFeed(mistralSeed, { ...mistralSources, provider: PROVIDERS.mistral })
+assert(mistralSeed.models.length === 0 && mistralMerged.feed.models.length === 40 && mistralMerged.unconfirmedIds.length === 0 && validateFeed(mistralMerged.feed).length === 0, 'Mistral generates a valid feed from an empty committed seed')
+assert(mistralMerged.feed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest') && !mistralMerged.feed.models.some(model => model.id === 'mistral-medium-latest'), 'Mistral attaches endpoint aliases to the dated canonical record')
+const mistralAliasSeed = { ...mistralSeed, models: [{ id: 'mistral-medium-latest' }, { id: 'mistral-medium-2508' }] }
+const mistralAliasMerged = mergeFeed(mistralAliasSeed, { ...mistralSources, provider: PROVIDERS.mistral })
+assert(mistralAliasMerged.feed.models.filter(model => model.id === 'mistral-medium-2508' || model.id === 'mistral-medium-latest').length === 1 && mistralAliasMerged.feed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest'), 'Mistral absorbs committed alias entries without losing canonical identity')
+const mistralSkippedDiff = compareFeeds(mistralMerged.feed, mistralMerged.feed, { skipped: mistralSources.skipped })
+const mistralSkippedMarkdown = renderSemanticDiff(mistralSkippedDiff)
+assert(!mistralSkippedDiff.changed && mistralSkippedMarkdown.includes('## Rows without an API id') && mistralExpectedSkipped.every(row => mistralSkippedMarkdown.includes(`\`${row.model}\` - version: \`${row.version || 'not set'}\``)), 'skipped Mistral rows appear in the semantic diff without becoming material changes')
 const openaiById = new Map(openaiEntries.map(entry => [entry.id, entry]))
 const anthropicStatusHeader = '<tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>'
 const anthropicStatusTable = (id, state, deprecated, retirement) => `<table>${anthropicStatusHeader}<tr><td><code>${id}</code></td><td>${state}</td><td>${deprecated}</td><td>${retirement}</td></tr></table>`
@@ -1077,6 +1150,58 @@ assert(openaiCheck.code === 0 || openaiCheck.code === 3, 'OpenAI --check exits 0
 assert(openaiCheck.out.includes('Unconfirmed entries') && openaiCheck.out.includes('retained because neither source confirmed it'), '--check retains and reports committed entries the fixture slice does not confirm')
 
 const responseFor = body => ({ ok: true, status: 200, text: async () => body })
+const mistralRequests = []
+const mistralEndpointBody = JSON.parse(mistralModels)
+mistralEndpointBody.data[0].shutdown = '2099-01-01'
+mistralEndpointBody.data.push({ id: 'mistral-fixture-current', aliases: ['mistral-fixture-latest'], announced: '2000-01-01', shutdown: '2000-02-01' })
+const mistralAuthenticated = await loadProviderSources(PROVIDERS.mistral, {
+  env: { MISTRAL_API_KEY: 'fixture-key' },
+  notice: () => {},
+  fetchImpl: async (url, options) => {
+    mistralRequests.push({ url, headers: options.headers })
+    return responseFor(url === PROVIDERS.mistral.modelsUrl ? JSON.stringify(mistralEndpointBody) : mistralHtml)
+  },
+})
+assert(mistralRequests.length === 2 && mistralRequests[0].headers.Authorization === 'Bearer fixture-key' && !Object.hasOwn(mistralRequests[1].headers, 'Authorization') && mistralRequests.every(request => request.headers['accept-language'] === 'en'), 'Mistral sends Bearer auth only to its models endpoint')
+const mistralAuthenticatedFeed = mergeFeed(mistralSeed, { ...mistralAuthenticated, provider: PROVIDERS.mistral }).feed
+const mistralCurrent = mistralAuthenticatedFeed.models.find(model => model.id === 'mistral-fixture-current')
+assert(mistralAuthenticatedFeed.models.find(model => model.id === 'mistral-medium-2508')?.shutdown === '2026-08-31' && mistralCurrent?.aliases?.includes('mistral-fixture-latest') && !mistralCurrent?.announced && !mistralCurrent?.shutdown, 'Mistral uses endpoint data only for current ids and aliases, never lifecycle dates')
+const mistralKeylessRequests = []
+const mistralKeyless = await loadProviderSources(PROVIDERS.mistral, {
+  env: {},
+  notice: () => {},
+  fetchImpl: async url => {
+    mistralKeylessRequests.push(url)
+    return responseFor(mistralHtml)
+  },
+})
+const mistralKeylessFeed = mergeFeed(mistralMerged.feed, { ...mistralKeyless, provider: PROVIDERS.mistral }).feed
+assert(mistralKeyless.currentIds === null && !mistralKeyless.endpointAvailable && mistralKeylessRequests.join() === PROVIDERS.mistral.deprecationsUrl && mistralKeylessFeed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest'), 'keyless Mistral refresh reads only the public page and preserves committed aliases')
+for (const aliases of ['not-an-array', ['bad alias'], [42]]) {
+  let reason = ''
+  try {
+    await loadProviderSources(PROVIDERS.mistral, {
+      env: { MISTRAL_API_KEY: 'fixture-key' }, notice: () => {},
+      fetchImpl: async () => responseFor(JSON.stringify({ object: 'list', data: [{ id: 'mistral-invalid-alias', aliases }] })),
+    })
+  } catch (error) {
+    reason = error.message
+  }
+  assert(reason.includes('mistral-invalid-alias') && reason.includes('invalid aliases'), 'Mistral refuses malformed endpoint aliases with the canonical id')
+}
+let mistralAmbiguousAliasReason = ''
+try {
+  await loadProviderSources(PROVIDERS.mistral, {
+    env: { MISTRAL_API_KEY: 'fixture-key' }, notice: () => {},
+    fetchImpl: async () => responseFor(JSON.stringify({ object: 'list', data: [
+      { id: 'mistral-first', aliases: ['mistral-shared'] },
+      { id: 'mistral-second', aliases: ['mistral-shared'] },
+    ] })),
+  })
+} catch (error) {
+  mistralAmbiguousAliasReason = error.message
+}
+assert(mistralAmbiguousAliasReason.includes('ambiguous id or alias: mistral-shared'), 'Mistral refuses an endpoint alias claimed by multiple models')
 const googleFetchOptions = fetchImpl => ({
   env: { GEMINI_API_KEY: 'fixture-key' },
   notice: () => {},
@@ -1271,6 +1396,20 @@ assert(anthropicCheck.code === 0 || anthropicCheck.code === 3, 'Anthropic --chec
 const googleCheck = run(['--provider', 'google', '--check', '--fixtures', fixtures])
 assert(googleCheck.code === 0 || googleCheck.code === 3, 'Google --check exits 0 or 3 depending on committed feed state, never a failure')
 
+const mistralCheck = spawnSync(process.execPath, [refresh, '--provider', 'mistral', '--check', '--fixtures', fixtures], { encoding: 'utf8' })
+assert([0, 3].includes(mistralCheck.status) && mistralCheck.stdout.includes('## Rows without an API id') && mistralExpectedSkipped.every(row => mistralCheck.stdout.includes(row.model)), 'Mistral --check lists skipped rows in the semantic diff')
+assert(mistralCheck.stderr.split('\n').filter(line => line.startsWith('notice: mistral skipped ')).length === 3, 'Mistral --check prints each skipped row as a notice on stderr')
+const mistralCorruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-mistral-corrupt-'))
+try {
+  fs.writeFileSync(path.join(mistralCorruptDir, 'mistral-models.json'), mistralModels)
+  fs.writeFileSync(path.join(mistralCorruptDir, 'mistral-deprecations.html'), mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, '5/22/2026')))
+  const out = path.join(mistralCorruptDir, 'out')
+  const invalid = run(['--provider', 'mistral', '--fixtures', mistralCorruptDir, '--out', out])
+  assert(invalid.code === 1 && invalid.err.includes('mistral-medium-2508') && !fs.existsSync(out), 'Mistral refuses malformed dates before writing any feed')
+} finally {
+  fs.rmSync(mistralCorruptDir, { recursive: true, force: true })
+}
+
 const bedrockCheck = run(['--distributor', 'aws-bedrock', '--check', '--fixtures', fixtures])
 assert(bedrockCheck.code === 0 || bedrockCheck.code === 3, 'Bedrock --check exits 0 or 3 depending on committed feed state, never a failure')
 assert(bedrockCheck.out.includes('## Distribution changes'), 'Bedrock --check renders the Distribution changes section')
@@ -1298,22 +1437,24 @@ const mixedDistributorWrite = run([
   '--fixtures', fixtures,
 ], { env: { ...process.env, MODEL_EOL_GENERATED: mixedGenerated } })
 assert(mixedDistributorWrite.code === 0, 'mixed distributor refresh writes successfully')
-const mixedOutputs = Object.fromEntries(['amazon', 'anthropic', 'google', 'openai'].map(publisher => [
+const mixedOutputs = Object.fromEntries(['amazon', 'anthropic', 'google', 'mistral', 'openai'].map(publisher => [
   publisher,
   JSON.parse(fs.readFileSync(path.join(mixedDistributorOut, `${publisher}.json`), 'utf8')),
 ]))
-const mixedCommitted = Object.fromEntries(['amazon', 'anthropic', 'google', 'openai'].map(publisher => [
+const mixedCommitted = Object.fromEntries(['amazon', 'anthropic', 'google', 'mistral', 'openai'].map(publisher => [
   publisher,
   JSON.parse(fs.readFileSync(path.join(root, 'feeds', `${publisher}.json`), 'utf8')),
 ]))
 assert(mixedOutputs.anthropic.generated === mixedGenerated && mixedOutputs.anthropic.generated !== mixedCommitted.anthropic.generated, 'mixed distributor write advances generated for the publisher with material distribution changes')
-assert(['amazon', 'google', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
+assert(['amazon', 'google', 'mistral', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
 
 const refreshWorkflow = fs.readFileSync(path.join(root, '.github/workflows/feed-refresh.yml'), 'utf8')
 assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && refreshWorkflow.includes('exit code $providers'), 'workflow fails explicitly on unexpected provider refresh exit codes')
 assert(refreshWorkflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]') && refreshWorkflow.includes('exit code $distributors'), 'workflow fails explicitly on unexpected distributor refresh exit codes')
 assert(refreshWorkflow.includes('GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}'), 'workflow passes the Google models endpoint credential')
 assert(refreshWorkflow.match(/--distributor aws-bedrock,vertex-ai,azure-ai-foundry/g)?.length === 2, 'workflow checks and writes every implemented distributor')
+assert(refreshWorkflow.split('MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}').length === 3, 'workflow passes the Mistral credential to both check and regeneration')
+assert(refreshWorkflow.includes('--distributor aws-bedrock,vertex-ai'), 'workflow refreshes every implemented distributor')
 assert(refreshWorkflow.includes('issues: write') && refreshWorkflow.includes('if: failure()') && refreshWorkflow.includes('Feed refresh automation failed'), 'workflow gives failed refreshes a durable issue')
 assert(refreshWorkflow.includes('gh issue comment "$issue" --body "$body"') && refreshWorkflow.includes('gh issue create --title "$title"'), 'workflow updates one failure issue instead of silently repeating failures')
 assert(refreshWorkflow.includes('Resolve prior feed refresh failure') && refreshWorkflow.includes('gh issue close "$issue" --reason completed'), 'a successful refresh resolves the prior failure issue')
@@ -1542,7 +1683,7 @@ const beforeOpenAI = fs.readFileSync(path.join(root, 'feeds', 'openai.json'), 'u
 const beforeAnthropic = fs.readFileSync(path.join(root, 'feeds', 'anthropic.json'), 'utf8')
 const writeRun = run(['--provider', 'all', '--out', outputDir, '--fixtures', fixtures])
 assert(writeRun.code === 0, 'non-check refresh writes valid fixture output')
-assert(fs.existsSync(path.join(outputDir, 'openai.json')) && fs.existsSync(path.join(outputDir, 'anthropic.json')), 'non-check refresh writes both selected feeds')
+assert(Object.values(PROVIDERS).every(provider => fs.existsSync(path.join(outputDir, provider.feedFile))), 'non-check refresh writes every selected publisher feed')
 const generatedAnthropic = JSON.parse(fs.readFileSync(path.join(outputDir, 'anthropic.json'), 'utf8'))
 const generatedOpenAI = JSON.parse(fs.readFileSync(path.join(outputDir, 'openai.json'), 'utf8'))
 assert(generatedAnthropic.models.some(model => model.id === 'claude-sonnet-4-6' && !model.shutdown && !model.announced), 'written output includes a current model without lifecycle dates')

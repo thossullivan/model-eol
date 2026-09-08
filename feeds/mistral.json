@@ -1,0 +1,288 @@
+{
+  "spec": "model-eol/0.1",
+  "publisher": "mistral",
+  "generated": "2026-09-08T22:24:22.546Z",
+  "source": "https://docs.mistral.ai/models",
+  "models": [
+    {
+      "id": "labs-leanstral-2603",
+      "announced": "2026-05-22",
+      "shutdown": "2026-06-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Leanstral 1.5 as the alternative"
+    },
+    {
+      "id": "mistral-medium-2508",
+      "announced": "2026-05-22",
+      "shutdown": "2026-08-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "mistral-small-2506",
+      "announced": "2026-04-30",
+      "shutdown": "2026-07-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "voxtral-mini-2507",
+      "announced": "2026-02-27",
+      "shutdown": "2026-05-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Voxtral Mini Transcribe 2 as the alternative"
+    },
+    {
+      "id": "devstral-2512",
+      "announced": "2026-05-22",
+      "shutdown": "2026-07-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "magistral-medium-2507",
+      "announced": "2025-10-31",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "labs-mistral-small-creative",
+      "announced": "2026-03-31",
+      "shutdown": "2026-04-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Ministral 3 8B as the alternative"
+    },
+    {
+      "id": "labs-devstral-small-2512",
+      "announced": "2026-02-27",
+      "shutdown": "2026-03-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "magistral-medium-2509",
+      "announced": "2026-05-22",
+      "shutdown": "2026-07-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "magistral-small-2509",
+      "announced": "2026-04-30",
+      "shutdown": "2026-07-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "magistral-small-2507",
+      "announced": "2025-10-31",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "devstral-medium-2507",
+      "announced": "2026-02-27",
+      "shutdown": "2026-05-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "devstral-small-2507",
+      "announced": "2026-02-27",
+      "shutdown": "2026-05-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "magistral-medium-2506",
+      "announced": "2025-10-31",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "magistral-small-2506",
+      "announced": "2025-10-31",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "mistral-ocr-2505",
+      "announced": "2026-02-27",
+      "shutdown": "2026-05-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists OCR 4.1 as the alternative"
+    },
+    {
+      "id": "devstral-small-2505",
+      "announced": "2025-10-31",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "mistral-medium-2505",
+      "announced": "2026-05-22",
+      "shutdown": "2026-08-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "mistral-small-2503",
+      "announced": "2025-11-06",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "mistral-ocr-2503",
+      "announced": "2025-12-02",
+      "shutdown": "2025-12-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists OCR 4.1 as the alternative"
+    },
+    {
+      "id": "mistral-saba-2502",
+      "announced": "2025-06-10",
+      "shutdown": "2025-09-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "mistral-small-2501",
+      "announced": "2025-11-06",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "codestral-2501",
+      "announced": "2025-11-06",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Codestral as the alternative"
+    },
+    {
+      "id": "mistral-large-2411",
+      "announced": "2026-02-27",
+      "shutdown": "2026-05-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "pixtral-large-2411",
+      "announced": "2026-02-27",
+      "shutdown": "2026-05-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "mistral-moderation-2411",
+      "announced": "2026-03-31",
+      "shutdown": "2026-06-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Moderation 2 as the alternative"
+    },
+    {
+      "id": "ministral-3b-2410",
+      "announced": "2025-12-02",
+      "shutdown": "2025-12-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Ministral 3 3B as the alternative"
+    },
+    {
+      "id": "ministral-8b-2410",
+      "announced": "2025-12-02",
+      "shutdown": "2025-12-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Ministral 3 8B as the alternative"
+    },
+    {
+      "id": "mistral-small-2409",
+      "announced": "2025-11-06",
+      "shutdown": "2025-11-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "pixtral-12b-2409",
+      "announced": "2025-12-02",
+      "shutdown": "2025-12-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Ministral 3 14B as the alternative"
+    },
+    {
+      "id": "mistral-large-2407",
+      "announced": "2024-11-30",
+      "shutdown": "2025-03-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Large 3 as the alternative"
+    },
+    {
+      "id": "open-mistral-nemo-2407",
+      "announced": "2026-05-22",
+      "shutdown": "2026-07-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Ministral 3 8B as the alternative"
+    },
+    {
+      "id": "open-codestral-mamba",
+      "announced": "2025-06-06",
+      "shutdown": "2025-06-06",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Codestral as the alternative"
+    },
+    {
+      "id": "codestral-2405",
+      "announced": "2024-12-02",
+      "shutdown": "2025-06-16",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Codestral as the alternative"
+    },
+    {
+      "id": "open-mistral-7b",
+      "announced": "2024-11-30",
+      "shutdown": "2025-03-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Ministral 3 8B as the alternative"
+    },
+    {
+      "id": "open-mixtral-8x22b",
+      "announced": "2024-11-30",
+      "shutdown": "2025-03-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "mistral-small-2402",
+      "announced": "2024-11-30",
+      "shutdown": "2025-06-16",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "mistral-large-2402",
+      "announced": "2024-11-30",
+      "shutdown": "2025-06-16",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Large 3 as the alternative"
+    },
+    {
+      "id": "mistral-medium-2312",
+      "announced": "2024-11-30",
+      "shutdown": "2025-06-16",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+    },
+    {
+      "id": "open-mixtral-8x7b",
+      "announced": "2024-11-30",
+      "shutdown": "2025-03-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    }
+  ]
+}
