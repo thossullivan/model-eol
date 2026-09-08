@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-09-03T22:28:01.292Z",
+  "generated": "2026-09-08T22:24:35.719Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "policy": {
     "min_notice_days": 60,
@@ -107,6 +107,12 @@
           "shutdown": "2027-01-08",
           "status": "extended-access",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+        },
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2026-08-05",
+          "status": "retired",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
       "announced": "2026-06-05",
@@ -225,43 +231,99 @@
       "id": "claude-opus-5",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "shutdown": "2027-07-24",
-      "date_precision": "tentative"
+      "date_precision": "tentative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-07-08",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "claude-sonnet-5",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "shutdown": "2027-06-30",
-      "date_precision": "tentative"
+      "date_precision": "tentative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-06-30",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "claude-fable-5",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "shutdown": "2027-06-09",
-      "date_precision": "tentative"
+      "date_precision": "tentative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-12-05",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "claude-opus-4-8",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "shutdown": "2027-05-28",
-      "date_precision": "tentative"
+      "date_precision": "tentative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-09-01",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "claude-opus-4-7",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "shutdown": "2027-04-16",
-      "date_precision": "tentative"
+      "date_precision": "tentative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-04-06",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "claude-sonnet-4-6",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "shutdown": "2027-02-17",
-      "date_precision": "tentative"
+      "date_precision": "tentative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-02-10",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "claude-opus-4-6",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "shutdown": "2027-02-05",
-      "date_precision": "tentative"
+      "date_precision": "tentative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-02-02",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "claude-opus-4-5-20251101",
@@ -285,7 +347,15 @@
       "id": "claude-fable-5-1",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "shutdown": "2027-09-01",
-      "date_precision": "tentative"
+      "date_precision": "tentative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-12-05",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     }
   ]
 }

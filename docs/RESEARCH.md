@@ -23,7 +23,8 @@ the July 2026 shutoff wave.
 - Anthropic policy (60-day floor, lifecycle states):
   https://platform.claude.com/docs/en/about-claude/model-deprecations
 - Azure (12 mo from launch + 60 days notice; keeps models past OpenAI's own dates):
-  https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/model-retirements
+  https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirements
+  The old `ai-foundry` URL redirects to this lifecycle policy article.
 - Bedrock (12 mo on platform + 6 mo Legacy notice + paid Extended Access):
   https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
 - Cross-provider calendars (community scrapers - the demand signal):
@@ -71,6 +72,6 @@ the July 2026 shutoff wave.
   successor (community analysis):
   https://community.openai.com/t/o4-mini-deep-research-o3-deep-research-deprecation/1379560
 - Azure keeps o3-deep-research until 2026-12-26 (retirement table):
-  https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/model-retirements
+  https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule
 - Shutdown-day failure mode: "a production 404 on the shutdown day":
   https://ecorpit.com/openai-model-shutdowns-23-july-2026-migration-map/

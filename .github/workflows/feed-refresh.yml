@@ -44,7 +44,7 @@ jobs:
           set +e
           node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
           providers=$?
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai --check > distributor-diff.md 2> distributor-err.txt
+          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
           distributors=$?
           set -e
           cat provider-err.txt distributor-err.txt >&2 || true
@@ -73,7 +73,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           node refresh/refresh.mjs
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai
+          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
           node scripts/update-readme-freshness.mjs
           npm test
 

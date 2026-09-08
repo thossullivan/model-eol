@@ -130,6 +130,21 @@ const azure = bj.findings.find(f => f.id === 'o3-deep-research-2025-06-26')
 assert(azure?.via === 'azure-ai-foundry', 'azure distribution clock applied')
 assert(azure?.shutdown === '2026-12-26', 'azure shutdown date used')
 
+{
+  const azureProofDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-azure-proof-'))
+  try {
+    fs.writeFileSync(path.join(azureProofDir, 'app.py'), 'model = "o3-deep-research-2025-06-26"\n')
+    const azureProof = run([azureProofDir, '--via', 'azure-ai-foundry', '--days', '90', '--json'])
+    const publisherProof = run([azureProofDir, '--days', '90', '--json'])
+    const azureFindings = JSON.parse(azureProof.out).findings
+    const publisherFindings = JSON.parse(publisherProof.out).findings
+    assert([0, 1].includes(azureProof.code) && azureFindings.length === 1 && azureFindings[0].via === 'azure-ai-foundry' && azureFindings[0].shutdown === '2026-12-26', 'dated research consumer uses regenerated Azure shutdown with --via and --days 90')
+    assert(publisherProof.code === 1 && publisherFindings.length === 1 && publisherFindings[0].via === 'publisher' && publisherFindings[0].shutdown === '2026-07-23', 'the same dated research consumer uses OpenAI shutdown without --via')
+  } finally {
+    fs.rmSync(azureProofDir, { recursive: true, force: true })
+  }
+}
+
 // A model-eol feed document is lifecycle data, not usage - scanning one would
 // flag every retired id it exists to describe (the repo's own feeds/ made the
 // self-scan permanently red before this).

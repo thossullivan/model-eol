@@ -1,6 +1,8 @@
 // Semantic feed diffing for the refresh job. Feed metadata such as generated
 // timestamps is intentionally excluded from the comparison.
 
+import { sourceConflictSummary } from './distributors.mjs'
+
 const value = item => item === undefined || item === null || item === '' ? 'not set' : item
 
 const code = item => `\`${String(value(item))}\``
@@ -78,7 +80,7 @@ function normaliseNoPublisherFeed(options) {
   return values
     .filter(Boolean)
     .map(item => typeof item === 'string' ? { bedrockId: item, normalizedId: item } : item)
-    .sort((a, b) => String(a.bedrockId ?? a.vertexId ?? a.modelId ?? a.id ?? '').localeCompare(String(b.bedrockId ?? b.vertexId ?? b.modelId ?? b.id ?? '')))
+    .sort((a, b) => String(a.bedrockId ?? a.vertexId ?? a.azureId ?? a.modelId ?? a.id ?? '').localeCompare(String(b.bedrockId ?? b.vertexId ?? b.azureId ?? b.modelId ?? b.id ?? '')))
 }
 
 function distributionChanges(oldModel, model, publisher) {
@@ -199,6 +201,7 @@ export function compareFeeds(committed, generated, options = {}) {
     unconfirmedDistributions,
     noPublisherFeed,
     noPublisherFeeds: noPublisherFeed,
+    sourceConflicts: options.sourceConflicts ?? [],
     // Informational sections never alter the files, so they never trip exit 3.
     changed: Boolean(
       added.length ||
@@ -248,11 +251,11 @@ function renderDistributionChanges(result) {
   }
   for (const item of result.unconfirmedDistributions) {
     const label = item.publisher ? `${item.publisher}/${item.id}` : item.id
-    lines.push(`- ${code(label)} - ${code(item.via ?? 'aws-bedrock')} distribution unconfirmed; retained from committed feed`)
+    lines.push(`- ${code(label)} - ${code(item.via ?? 'aws-bedrock')} distribution unconfirmed; ${item.reason ?? 'retained from committed feed'}`)
   }
   for (const item of result.noPublisherFeed) {
-    const sourceId = item.bedrockId ?? item.vertexId ?? item.modelId ?? item.id
-    lines.push(`- ${code(sourceId)} - no publisher feed for normalized id ${code(item.normalizedId)}`)
+    const sourceId = item.bedrockId ?? item.vertexId ?? item.azureId ?? item.modelId ?? item.id
+    lines.push(`- ${code(sourceId)} - no publisher feed for normalized id ${code(item.normalizedId)}${item.section ? `; section: ${code(item.section)}` : ''}${item.reason ? `; ${item.reason}` : ''}`)
   }
   return lines
 }
@@ -304,6 +307,7 @@ function renderResult(result, publisher) {
     result.newlyAnnounced.map(model => `- ${code(model.id)} - ${dateLine(model)}; ${replacementSummary(model)}`),
   ))
   pushSection(section('Distribution changes', renderDistributionChanges(result)))
+  pushSection(section('Source conflicts', (result.sourceConflicts ?? []).map(conflict => `- ${sourceConflictSummary(conflict)}`)))
   pushSection(section(
     'Unconfirmed entries',
     result.unconfirmed.map(model => `- ${code(model.id)} - retained because neither source confirmed it`),

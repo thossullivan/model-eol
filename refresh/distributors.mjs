@@ -1,11 +1,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { assertIsoDate, dateFromText } from './providers.mjs'
+import { assertIsoDate, dateFromText, MODEL_ID_PATTERN } from './providers.mjs'
 
 export const BEDROCK_LIFECYCLE_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html'
 export const VERTEX_MODEL_VERSIONS_URL = 'https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions'
 export const VERTEX_LIFECYCLE_URL = VERTEX_MODEL_VERSIONS_URL
+export const AZURE_MODEL_RETIREMENT_SCHEDULE_URL = 'https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule'
+export const AZURE_PUBLISHER_BY_SECTION = new Map([
+  ['Azure OpenAI', 'openai'],
+  ['Anthropic', 'anthropic'],
+])
 
 export const DISTRIBUTORS = {
   'aws-bedrock': {
@@ -17,6 +22,11 @@ export const DISTRIBUTORS = {
     name: 'vertex-ai',
     sourceUrl: VERTEX_MODEL_VERSIONS_URL,
     fixture: 'vertex-model-versions.html',
+  },
+  'azure-ai-foundry': {
+    name: 'azure-ai-foundry',
+    sourceUrl: AZURE_MODEL_RETIREMENT_SCHEDULE_URL,
+    fixture: 'azure-model-retirement-schedule.html',
   },
 }
 
@@ -342,6 +352,113 @@ export const parseVertexLifecycleHtml = parseVertexModelVersionsHtml
 export const parseVertexModelLifecycle = parseVertexModelVersionsHtml
 export const parseVertexModelVersions = parseVertexModelVersionsHtml
 
+const AZURE_LIFECYCLE_STATUSES = new Map([
+  ['GA', 'active'],
+  ['Preview', 'active'],
+  ['Legacy', 'active'],
+  ['Deprecated', 'legacy'],
+  ['Retired', 'retired'],
+])
+
+function azureHeaderIndexes(rows) {
+  for (const [row, candidate] of rows.entries()) {
+    const labels = candidate.cells.map(cell => cell.text.toLowerCase())
+    const fineTuning = ['model', 'version', 'training retirement date', 'deployment retirement date']
+    if (labels.length === fineTuning.length && fineTuning.every(label => labels.includes(label))) return undefined
+    if (!labels.includes('model') && !labels.includes('lifecycle')) continue
+    const columns = ['model', 'version', 'lifecycle', 'retirement date', 'replacement']
+    if (labels.length !== columns.length || columns.some(label => !labels.includes(label))) {
+      throw new Error(`azure-ai-foundry lifecycle table has invalid header row: ${labels.join(' | ')}`)
+    }
+    return { row, indexes: columns.map(label => labels.indexOf(label)) }
+  }
+  return undefined
+}
+
+function azureIsoDate(value, label) {
+  try {
+    return assertIsoDate(value, label)
+  } catch {
+    throw new Error(`azure-ai-foundry lifecycle entry ${label} has an invalid date: ${value || '(empty)'}`)
+  }
+}
+
+export function parseAzureModelRetirementScheduleHtml(html) {
+  if (typeof html !== 'string' || !html.trim()) throw new Error('azure-ai-foundry lifecycle page is empty')
+  let group = ''
+  let section = ''
+  let recognisedTables = 0
+  const unique = new Map()
+  const conflicts = []
+  const blocks = html.matchAll(/<(h[123]|table)\b[^>]*>([\s\S]*?)<\/\1>/gi)
+  for (const block of blocks) {
+    const tag = block[1].toLowerCase()
+    if (tag !== 'table') {
+      if (tag === 'h3') section = plainText(block[2])
+      else {
+        group = plainText(block[2])
+        section = ''
+      }
+      continue
+    }
+    const rows = tableRows(block[2])
+    const headers = azureHeaderIndexes(rows)
+    if (!headers) continue
+    recognisedTables++
+    let tableRecords = 0
+    for (const row of rows.slice(headers.row + 1)) {
+      if (!row.cells.some(cell => cell.text)) continue
+      const [modelCell, versionCell, lifecycleCell, retirementCell] = headers.indexes.map(index => row.cells[index])
+      const label = `${section || '(missing section)'}/${modelCell?.text || '(empty)'} version ${versionCell?.text || '(empty)'}`
+      if (!section) throw new Error(`azure-ai-foundry lifecycle entry ${label} is missing a publisher section`)
+      if (row.cells.length !== headers.indexes.length) {
+        throw new Error(`azure-ai-foundry lifecycle entry ${label} is missing lifecycle columns or has extra cells`)
+      }
+      const modelId = modelCell.text.replace(/\s*\([^()]*\)\s*$/, '').trim()
+      const publisher = AZURE_PUBLISHER_BY_SECTION.get(section)
+      const validId = MODEL_ID_PATTERN.test(modelId)
+      if (!validId && publisher) throw new Error(`azure-ai-foundry lifecycle entry ${label} has an invalid model id`)
+      const version = versionCell.text
+      const datedVersion = /^\d{4}-\d{2}-\d{2}$/.test(version)
+      if (datedVersion) azureIsoDate(version, `${label} version`)
+      else if (!/^(?:\d+|-)$/.test(version)) {
+        throw new Error(`azure-ai-foundry lifecycle entry ${label} has an unsupported version: ${version || '(empty)'}`)
+      }
+      const lifecycle = lifecycleCell.text
+      const status = AZURE_LIFECYCLE_STATUSES.get(lifecycle)
+      if (!status) throw new Error(`azure-ai-foundry lifecycle entry ${label} has an unsupported lifecycle status: ${lifecycle || '(empty)'}`)
+      const retirement = retirementCell.text
+      const shutdown = retirement === '-' ? undefined : azureIsoDate(retirement, `${label} retirement`)
+      const azureId = publisher === 'openai' && datedVersion ? `${modelId}-${version}` : modelId
+      const record = { azureId, modelId, version, group, section, lifecycle, status }
+      if (publisher) record.publisher = publisher
+      if (!validId) record.reason = 'invalid model id'
+      if (shutdown !== undefined) record.shutdown = shutdown
+      const key = JSON.stringify(publisher ? [section, azureId] : [group, section, azureId, version])
+      const previous = unique.get(key)
+      if (!previous) unique.set(key, record)
+      else if (previous.shutdown !== shutdown || previous.lifecycle !== lifecycle) {
+        if (!previous.shutdown || !shutdown || previous.shutdown === shutdown) {
+          throw new Error(`azure-ai-foundry lifecycle entry ${label} has conflicting rows without distinct retirement dates`)
+        }
+        const kept = previous.shutdown < shutdown ? previous : record
+        const discarded = kept === previous ? record : previous
+        conflicts.push({ via: 'azure-ai-foundry', section, id: azureId, kept, discarded })
+        unique.set(key, kept)
+      }
+      tableRecords++
+    }
+    if (!tableRecords) throw new Error(`azure-ai-foundry lifecycle table for ${section} has no model entries`)
+  }
+  if (!recognisedTables) throw new Error('azure-ai-foundry lifecycle page has no recognised lifecycle table')
+  return { records: [...unique.values()], conflicts }
+}
+
+export function sourceConflictSummary(conflict) {
+  const row = item => `${item.shutdown} (${item.lifecycle}, version ${item.version})`
+  return `${conflict.via} ${conflict.section}/${conflict.id}: kept ${row(conflict.kept)}; discarded ${row(conflict.discarded)}; earliest retirement wins`
+}
+
 const PUBLISHER_BY_NAMESPACE = new Map([
   ['anthropic', 'anthropic'],
   ['amazon', 'amazon'],
@@ -426,9 +543,11 @@ function statusField(value, modelId, via) {
 
 function recordForMerge(record, via) {
   const isBedrock = via === 'aws-bedrock'
-  const idField = isBedrock ? 'bedrockId' : 'vertexId'
-  const rawId = isBedrock ? record?.bedrockId : record?.vertexId ?? record?.modelId ?? record?.id
-  if (typeof rawId !== 'string' || !rawId.trim()) {
+  const isAzure = via === 'azure-ai-foundry'
+  const idField = isBedrock ? 'bedrockId' : isAzure ? 'azureId' : 'vertexId'
+  const rawId = isBedrock ? record?.bedrockId : isAzure ? record?.azureId : record?.vertexId ?? record?.modelId ?? record?.id
+  const publisher = isAzure ? AZURE_PUBLISHER_BY_SECTION.get(record?.section) : undefined
+  if (typeof rawId !== 'string' || (!rawId.trim() && (!isAzure || publisher))) {
     throw new Error(`${via} record is missing ${idField}`)
   }
   const sourceId = rawId.trim()
@@ -439,13 +558,13 @@ function recordForMerge(record, via) {
   if (announced && shutdown && shutdown < announced) {
     throw new Error(`${via} record ${sourceId} has shutdown before announced`)
   }
-  const namespace = sourceNamespace(sourceId, via)
+  const namespace = isAzure ? record.section : sourceNamespace(sourceId, via)
   return {
     idField,
     sourceId,
     namespace,
-    expectedPublisher: expectedPublisher(namespace),
-    normalizedId: isBedrock ? normalizeBedrockId(sourceId) : normalizeVertexId(sourceId),
+    expectedPublisher: isAzure ? publisher : expectedPublisher(namespace),
+    normalizedId: isBedrock ? normalizeBedrockId(sourceId) : isAzure ? sourceId : normalizeVertexId(sourceId),
     announced,
     shutdown,
     date_precision: precisionField(record.date_precision, sourceId, via),
@@ -524,19 +643,31 @@ export function mergeDistributions(feeds, {
   }
 
   const unmatched = []
+  const unconfirmedDistributions = []
   const confirmed = new Set()
   const matchedRecords = new Map()
   for (const raw of records) {
     const record = recordForMerge(raw, via)
     const unmatchedItem = { normalizedId: record.normalizedId, [record.idField]: record.sourceId }
+    if (record.idField === 'azureId') {
+      unmatchedItem.section = raw.section
+      if (raw.reason) unmatchedItem.reason = raw.reason
+    }
     if (record.idField === 'vertexId') unmatchedItem.modelId = record.sourceId
-    if (record.namespace && !record.expectedPublisher) {
+    if ((via === 'azure-ai-foundry' || record.namespace) && !record.expectedPublisher) {
       unmatched.push(unmatchedItem)
       continue
     }
     const target = identity.get(record.normalizedId)
     if (!target) {
-      unmatched.push(unmatchedItem)
+      if (via === 'azure-ai-foundry') {
+        unconfirmedDistributions.push({
+          publisher: record.expectedPublisher,
+          id: record.normalizedId,
+          via,
+          reason: 'source model is absent from publisher feed',
+        })
+      } else unmatched.push(unmatchedItem)
       continue
     }
     if (record.expectedPublisher && target.publisher !== record.expectedPublisher) {
@@ -571,7 +702,6 @@ export function mergeDistributions(feeds, {
     confirmed.add(targetKey)
   }
 
-  const unconfirmedDistributions = []
   for (const [feedIndex, part] of working.entries()) {
     for (const model of part.feed.models) {
       const existing = distributionFor(model, via)
@@ -588,7 +718,7 @@ export function mergeDistributions(feeds, {
     assertDistributorPreserved(part.before, part.feed, via)
   }
 
-  unmatched.sort((a, b) => `${a.bedrockId ?? a.vertexId}`.localeCompare(`${b.bedrockId ?? b.vertexId}`))
+  unmatched.sort((a, b) => `${a.bedrockId ?? a.vertexId ?? a.azureId}`.localeCompare(`${b.bedrockId ?? b.vertexId ?? b.azureId}`))
   unconfirmedDistributions.sort((a, b) => `${a.publisher}:${a.id}`.localeCompare(`${b.publisher}:${b.id}`))
   return {
     feeds: working.map(part => part.feed),
@@ -657,11 +787,15 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
   } else {
     html = await fetchBody(config.sourceUrl, distributor, options.fetchImpl)
   }
+  const parsed = distributor === 'azure-ai-foundry'
+    ? parseAzureModelRetirementScheduleHtml(html)
+    : { records: distributor === 'aws-bedrock' ? parseBedrockLifecycleHtml(html) : parseVertexModelVersionsHtml(html) }
+  for (const conflict of parsed.conflicts ?? []) {
+    ;(options.notice ?? console.error)(`notice: ${sourceConflictSummary(conflict)}`)
+  }
   return {
     ...config,
     fixturePath,
-    records: distributor === 'aws-bedrock'
-      ? parseBedrockLifecycleHtml(html)
-      : parseVertexModelVersionsHtml(html),
+    ...parsed,
   }
 }

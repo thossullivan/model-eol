@@ -36,7 +36,7 @@ format instead of each scraping the same pages.
   replacement, `distributions` for per-channel lifecycles, and publisher `policy`
   floors. It is small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (30 entries), Google (93 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated 2026-09-07<!-- /feeds-status -->. Every
+- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (30 entries), Google (93 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-09-08<!-- /feeds-status -->. Every
   dated entry carries a source URL. Anthropic's "not sooner than" dates for
   active models are included as `tentative` planning floors.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
@@ -306,8 +306,8 @@ until January 8, 2027.
 
 `distributions` in the spec carries these per-channel dates. `--via <distributor>`
 judges your repo by the channel you call. The distributor refresh keeps the
-Bedrock and Vertex dates current from their lifecycle pages. A distributor's
-later date gives you more time for the same migration. It is not a reason to
+Bedrock, Vertex, and Azure Foundry dates current from their lifecycle pages.
+A distributor's later date gives you more time for the same migration. It is not a reason to
 skip it.
 
 ## Policy floors
@@ -505,7 +505,7 @@ read-only evaluation job, and write tokens live only in the reconciliation job.
 
 ```sh
 node refresh/refresh.mjs --check                      # semantic diff vs live pages; exit 3 = PR-worthy
-node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai # distributor lifecycle clocks
+node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry # distributor lifecycle clocks
 node scripts/feed-changelog.mjs                       # local rendering of the hosted Atom feed
 ```
 

@@ -55,7 +55,7 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
     .filter(Boolean)
   for (const distributor of distributors) {
     if (!DISTRIBUTORS[distributor]) {
-      throw new Error(`--distributor must be aws-bedrock or vertex-ai`)
+      throw new Error(`--distributor must be aws-bedrock, vertex-ai, or azure-ai-foundry`)
     }
   }
   options.distributors = [...new Set(distributors)]
@@ -72,7 +72,7 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
 
 export function usage() {
   return [
-    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|google|all] [--distributor aws-bedrock[,vertex-ai]] [--check] [--out feeds/] [--fixtures DIR]',
+    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|google|all] [--distributor aws-bedrock[,vertex-ai,azure-ai-foundry]] [--check] [--out feeds/] [--fixtures DIR]',
     '',
     '--distributor accepts comma-separated values and may run standalone against committed publisher feeds, or compose with --provider.',
     '--check exits 0 when the semantic diff is empty, 3 when it has changes, and 1 on failure.',
@@ -182,7 +182,7 @@ export async function run(options) {
         provider: AMAZON_PROVIDER,
       }))
     }
-    distributorState = { unconfirmedDistributions: [], noPublisherFeed: [] }
+    distributorState = { unconfirmedDistributions: [], noPublisherFeed: [], sourceConflicts: [] }
     for (const distributor of distributorNames) {
       const source = await loadDistributorSource(distributor, { fixtures: options.fixtures })
       const state = mergeDistributions(generated, {
@@ -193,6 +193,7 @@ export async function run(options) {
       for (const [index, item] of generated.entries()) item.feed = state.feeds[index]
       distributorState.unconfirmedDistributions.push(...state.unconfirmedDistributions)
       distributorState.noPublisherFeed.push(...state.noPublisherFeed)
+      distributorState.sourceConflicts.push(...source.conflicts ?? [])
     }
   }
 
@@ -206,6 +207,7 @@ export async function run(options) {
       unconfirmed: item.unconfirmedIds,
       unconfirmedDistributions,
       noPublisherFeed,
+      sourceConflicts: index === 0 ? distributorState?.sourceConflicts ?? [] : [],
       publisher: item.provider.publisher,
     }
     return {

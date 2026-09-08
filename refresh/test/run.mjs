@@ -2,20 +2,24 @@
 // Offline refresh-tool tests. The fixture directory is deliberately used for
 // every CLI invocation so this suite never needs provider credentials or a
 // network connection.
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   BEDROCK_LIFECYCLE_URL,
+  AZURE_MODEL_RETIREMENT_SCHEDULE_URL,
+  AZURE_PUBLISHER_BY_SECTION,
   VERTEX_MODEL_VERSIONS_URL,
+  loadDistributorSource,
   mergeBedrockDistributions,
   mergeDistributions,
   mergeVertexDistributions,
   normalizeBedrockId,
   normalizeVertexId,
   parseBedrockLifecycleHtml,
+  parseAzureModelRetirementScheduleHtml,
   parseVertexModelVersionsHtml,
 } from '../distributors.mjs'
 import {
@@ -851,6 +855,119 @@ const amazonBedrock = mergeBedrockDistributions([amazonFeed], {
 assert(amazonBedrock.feeds[0].models.some(model => model.id === 'nova-canvas'), 'Amazon seed contains Nova publisher entries')
 assert(!amazonBedrock.noPublisherFeed.some(item => item.normalizedId.startsWith('nova-')), 'Bedrock resolves Nova models to the Amazon feed')
 
+const azureHtml = fs.readFileSync(path.join(fixtures, 'azure-model-retirement-schedule.html'), 'utf8')
+const azureSource = parseAzureModelRetirementScheduleHtml(azureHtml)
+const azureRecords = azureSource.records
+const azureById = id => azureRecords.find(record => record.azureId === id && record.publisher)
+assert(azureRecords.length === 174, 'Azure fixture parses 174 records after duplicate collapse')
+assert(azureRecords.filter(record => record.publisher === 'openai').length === 74, 'Azure OpenAI collapses 77 lifecycle rows into 74 records')
+assert(azureRecords.filter(record => record.publisher === 'anthropic').length === 14, 'Azure Anthropic collapses 18 hosting rows into 14 records')
+assert(azureRecords.filter(record => !record.publisher).length === 86, 'Azure retains all 86 unbound section rows for reporting')
+assert(AZURE_PUBLISHER_BY_SECTION.size === 2 && AZURE_PUBLISHER_BY_SECTION.get('Azure OpenAI') === 'openai' && AZURE_PUBLISHER_BY_SECTION.get('Anthropic') === 'anthropic', 'Azure exports one publisher map keyed by section heading')
+assert(azureById('gpt-4o-2024-05-13')?.shutdown === '2026-10-01' && azureById('sora-2-2025-12-08')?.shutdown === '2026-10-15', 'Azure keeps OpenAI dated versions as distinct feed candidates')
+assert(azureById('text-embedding-ada-002')?.shutdown === '2028-02-09' && azureById('tts')?.version === '001', 'Azure integer versions bind to bare IDs')
+assert(azureById('claude-mythos-preview')?.shutdown === '2027-04-02', 'Azure removes a trailing model qualifier before ID validation')
+assert(!Object.hasOwn(azureById('claude-mythos-5-1'), 'shutdown'), 'Azure retirement dash omits shutdown')
+assert(azureRecords.every(record => !Object.hasOwn(record, 'announced') && !Object.hasOwn(record, 'date_precision') && !Object.hasOwn(record, 'replacement')), 'Azure records invent no announcement, precision, or replacement')
+assert(azureSource.conflicts.length === 2 && azureById('gpt-realtime-mini-2025-10-06')?.shutdown === '2026-09-21' && azureById('gpt-realtime-mini-2025-12-15')?.shutdown === '2026-12-15', 'Azure reports both fixture conflicts and keeps their earliest retirement dates')
+assert(azureSource.conflicts[0]?.discarded.shutdown === '2027-04-06' && azureSource.conflicts[1]?.discarded.shutdown === '2027-06-15', 'Azure conflicts retain discarded source rows for review')
+
+const azureRow = (model, version = '1', lifecycle = 'GA', retirement = '2027-01-01') => [model, version, lifecycle, retirement, 'ignored replacement']
+const azureTable = (section, rows, headers = ['Model', 'Version', 'Lifecycle', 'Retirement date', 'Replacement']) => `<h3>${section}</h3><table><tr>${headers.map(label => `<th>${label}</th>`).join('')}</tr>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</table>`
+const azureError = html => {
+  try { parseAzureModelRetirementScheduleHtml(html) } catch (error) { return error.message }
+  return ''
+}
+for (const [lifecycle, status] of [['GA', 'active'], ['Preview', 'active'], ['Legacy', 'active'], ['Deprecated', 'legacy'], ['Retired', 'retired']]) {
+  const record = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [azureRow('status-model', '-', lifecycle, '—')])).records[0]
+  assert(record.status === status && !Object.hasOwn(record, 'shutdown'), `Azure ${lifecycle} maps to SPEC ${status} without inventing a date`)
+}
+const fineTuningHeaders = ['Model', 'Version', 'Training retirement date', 'Deployment retirement date']
+const fineTuningTables = azureTable('Azure OpenAI', [['fine-tuned-openai', '1', 'invalid date', '2099-01-01']], fineTuningHeaders)
+  + azureTable('Anthropic', [['fine-tuned-anthropic', '2', 'invalid date', '2099-01-01']], fineTuningHeaders)
+const azureFineTuning = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [azureRow('lifecycle-model')]) + fineTuningTables)
+assert(azureFineTuning.records.length === 1 && azureFineTuning.records[0].azureId === 'lifecycle-model', 'Azure skips both fine-tuning tables by header detection')
+assert(azureError(fineTuningTables).includes('no recognised lifecycle table'), 'fine-tuning tables alone cannot pass as an Azure lifecycle page')
+assert(azureError(azureTable('Azure OpenAI', [azureRow('changed-header')], ['Model', 'Version', 'Status', 'Retirement date', 'Replacement'])).includes('invalid header row'), 'Azure rejects lifecycle header drift instead of silently skipping it')
+assert(azureError(azureTable('Anthropic', [azureRow('invalid model (preview)')])).includes('invalid model id'), 'Azure validates Anthropic IDs after removing a trailing qualifier')
+assert(azureById('gpt-4.1-2025-04-14')?.shutdown === '2027-04-14', 'the live fine-tuning table cannot overwrite the base model retirement')
+
+const duplicateRows = [azureRow('duplicate-model', '1', 'GA', '2027-04-06'), azureRow('duplicate-model', '2', 'Deprecated', '2026-09-21')]
+for (const rows of [duplicateRows, [...duplicateRows].reverse()]) {
+  const parsed = parseAzureModelRetirementScheduleHtml(azureTable('Anthropic', rows))
+  assert(parsed.records.length === 1 && parsed.records[0].shutdown === '2026-09-21' && parsed.records[0].status === 'legacy' && parsed.conflicts.length === 1, 'Azure conflict resolution keeps the earlier row lifecycle regardless of source order')
+}
+for (const [row, diagnostic] of [
+  [azureRow('invalid model'), 'invalid model id'],
+  [azureRow('bad-version', 'latest'), 'unsupported version'],
+  [azureRow('bad-version-date', '2026-02-30'), 'invalid date'],
+  [azureRow('bad-status', '1', 'Current'), 'unsupported lifecycle status'],
+  [azureRow('bad-date', '1', 'GA', '2026-02-30'), 'invalid date'],
+  [azureRow('vague-date', '1', 'GA', 'No earlier than 2027-01-01'), 'invalid date'],
+  [azureRow('empty-date', '1', 'GA', ''), 'invalid date'],
+  [azureRow('missing-column').slice(0, 3), 'missing lifecycle columns'],
+]) {
+  const error = azureError(azureTable('Azure OpenAI', [row]))
+  assert(error.includes(row[0]) && error.includes(diagnostic), `Azure fails closed with the row name for ${row[0]}`)
+}
+for (const [label, html, diagnostic] of [
+  ['empty page', '', 'page is empty'],
+  ['empty table', azureTable('Azure OpenAI', []), 'no model entries'],
+  ['missing section', azureTable('', [azureRow('unowned-model')]), 'unowned-model'],
+  ['same date conflict', azureTable('Anthropic', [azureRow('same-date'), azureRow('same-date', '2', 'Retired')]), 'same-date'],
+  ['missing date conflict', azureTable('Anthropic', [azureRow('missing-date'), azureRow('missing-date', '2', 'GA', '—')]), 'missing-date'],
+]) assert(azureError(html).includes(diagnostic), `Azure rejects ${label}`)
+
+const azureMergeInput = [
+  { publisher: 'openai', models: [
+    { id: 'dated-model-2025-01-01', aliases: ['dated-model'], shutdown: '2026-01-01', notes: 'preserve', distributions: [{ via: 'vertex-ai', shutdown: '2026-02-01' }] },
+    { id: 'alias-target', aliases: ['dated-alias-2025-01-01'] },
+    { id: 'missing-dated', distributions: [{ via: 'azure-ai-foundry', shutdown: '2026-03-01' }] },
+    { id: 'integer-model' },
+    { id: 'dash-model' },
+    { id: 'unbound-collision' },
+  ] },
+  { publisher: 'anthropic', models: [{ id: 'claude-sonnet-4-5-20250929', aliases: ['claude-sonnet-4-5'] }] },
+]
+const azureMergeBefore = JSON.stringify(azureMergeInput)
+const azureBindingSource = parseAzureModelRetirementScheduleHtml(
+  azureTable('Azure OpenAI', [azureRow('dated-model', '2025-01-01'), azureRow('dated-alias', '2025-01-01'), azureRow('missing-dated', '2025-01-01'), azureRow('integer-model', '001'), azureRow('dash-model', '-')])
+  + azureTable('Anthropic', [azureRow('claude-sonnet-4-5', '1'), azureRow('claude-sonnet-4-5', '2')])
+  + azureTable('OpenAI-OSS', [azureRow('unbound-collision'), azureRow('invalid model'), azureRow('')])
+)
+const azureBinding = mergeDistributions(azureMergeInput, { via: 'azure-ai-foundry', records: azureBindingSource.records })
+const boundAzureModel = id => azureBinding.feeds.flatMap(feed => feed.models).find(model => model.id === id)
+const azureDistribution = id => boundAzureModel(id)?.distributions?.find(distribution => distribution.via === 'azure-ai-foundry')
+assert(azureDistribution('dated-model-2025-01-01')?.shutdown === '2027-01-01' && azureDistribution('alias-target')?.shutdown === '2027-01-01', 'Azure dated candidates resolve only by exact ID or exact alias')
+assert(azureDistribution('missing-dated')?.shutdown === '2026-03-01' && azureBinding.unconfirmedDistributions.some(item => item.id === 'missing-dated-2025-01-01' && item.reason), 'missing Azure dated IDs remain unconfirmed without falling back to the bare model')
+assert(azureBinding.unconfirmedDistributions.some(item => item.id === 'missing-dated' && item.distribution), 'Azure retains and reports existing distributions absent from the source')
+assert(azureDistribution('integer-model')?.shutdown === '2027-01-01' && azureDistribution('dash-model')?.shutdown === '2027-01-01', 'Azure integer and dash versions merge through bare IDs')
+assert(azureDistribution('claude-sonnet-4-5-20250929')?.shutdown === '2027-01-01' && boundAzureModel('claude-sonnet-4-5-20250929').distributions.length === 1, 'Azure Anthropic hosting variants resolve through the bare alias exactly once')
+assert(azureBinding.noPublisherFeed.length === 3 && azureBinding.noPublisherFeed.filter(item => item.reason === 'invalid model id').length === 2 && !azureDistribution('unbound-collision'), 'unbound Azure sections never bind to matching IDs and report invalid IDs without throwing')
+assert(JSON.stringify(azureMergeInput) === azureMergeBefore && boundAzureModel('dated-model-2025-01-01').shutdown === '2026-01-01' && boundAzureModel('dated-model-2025-01-01').notes === 'preserve' && boundAzureModel('dated-model-2025-01-01').distributions[0].via === 'vertex-ai', 'Azure merge preserves input feeds, publisher fields, and foreign distributions')
+assert(azureDistribution('integer-model').source === AZURE_MODEL_RETIREMENT_SCHEDULE_URL && JSON.stringify(Object.keys(azureDistribution('integer-model'))) === JSON.stringify(['via', 'shutdown', 'status', 'source']), 'Azure writes only the supported distribution fields and schedule source')
+const azureDateRemoval = mergeDistributions(azureBinding.feeds, {
+  via: 'azure-ai-foundry', records: parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [azureRow('integer-model', '1', 'Retired', '—')])).records,
+})
+const azureWithoutDate = azureDateRemoval.feeds[0].models.find(model => model.id === 'integer-model').distributions[0]
+assert(azureWithoutDate.status === 'retired' && !Object.hasOwn(azureWithoutDate, 'shutdown') && !Object.hasOwn(azureWithoutDate, 'announced'), 'Azure dash removes a prior shutdown while preserving explicit retired status')
+let azureBindingReason = ''
+try {
+  mergeDistributions([{ publisher: 'openai', models: [{ id: 'claude-collision' }] }], {
+    via: 'azure-ai-foundry', records: parseAzureModelRetirementScheduleHtml(azureTable('Anthropic', [azureRow('claude-collision')])).records,
+  })
+} catch (error) { azureBindingReason = error.message }
+assert(azureBindingReason.includes('binds to anthropic') && azureBindingReason.includes('openai feed'), 'Azure section binding refuses a cross-publisher match')
+const azureNotices = []
+const loadedAzure = await loadDistributorSource('azure-ai-foundry', { fixtures, notice: notice => azureNotices.push(notice) })
+assert(loadedAzure.records.length === 174 && loadedAzure.conflicts.length === 2 && azureNotices.filter(notice => notice.startsWith('notice:') && notice.includes('earliest retirement wins')).length === 2, 'Azure fixture loading emits one notice per source conflict')
+const azureUnchangedFeed = { publisher: 'openai', models: [] }
+const azureInformationalOptions = { sourceConflicts: azureSource.conflicts, unconfirmedDistributions: azureBinding.unconfirmedDistributions, noPublisherFeed: azureBinding.noPublisherFeed }
+const azureInformationalDiff = compareFeeds(azureUnchangedFeed, azureUnchangedFeed, azureInformationalOptions)
+const azureInformationalMarkdown = renderSemanticDiff(azureUnchangedFeed, azureUnchangedFeed, azureInformationalOptions)
+assert(!azureInformationalDiff.changed && azureInformationalMarkdown.includes('## Source conflicts') && azureInformationalMarkdown.includes('2026-09-21') && azureInformationalMarkdown.includes('2027-04-06'), 'Azure source conflicts appear in semantic diffs without creating material changes')
+assert(azureInformationalMarkdown.includes('distribution unconfirmed; source model is absent from publisher feed') && azureInformationalMarkdown.includes('invalid model id'), 'Azure semantic diffs distinguish unmatched source IDs from retained distributions and report invalid unbound IDs')
+
 const oldFeed = {
   spec: 'model-eol/0.1', publisher: 'openai', generated: '2026-07-25T00:00:00Z', models: [
     { id: 'stable', shutdown: '2026-10-01', replacement: 'old-target' },
@@ -1164,6 +1281,12 @@ const vertexCheck = run(['--distributor', 'vertex-ai', '--check', '--fixtures', 
 assert([0, 3].includes(vertexCheck.code), 'Vertex --check exits 0 or 3 depending on committed feed state, never a failure')
 assert(vertexCheck.out.includes('no publisher feed'), 'Vertex --check reports unmatched models')
 
+const azureCheck = spawnSync(process.execPath, [refresh, '--distributor', 'azure-ai-foundry', '--check', '--fixtures', fixtures], { encoding: 'utf8' })
+assert([0, 3].includes(azureCheck.status) && azureCheck.stdout.includes('## Source conflicts'), 'Azure CLI check renders source conflicts through distributor wiring')
+assert(azureCheck.stderr.split('\n').filter(line => line.startsWith('notice:') && line.includes('earliest retirement wins')).length === 2, 'Azure CLI prints both source conflicts on stderr')
+const allDistributorsCheck = run(['--distributor', 'aws-bedrock,vertex-ai,azure-ai-foundry', '--check', '--fixtures', fixtures])
+assert([0, 3].includes(allDistributorsCheck.code) && allDistributorsCheck.out.includes('## Source conflicts'), 'refresh composes Azure with Bedrock and Vertex offline')
+
 const bothDistributorsCheck = run(['--distributor', 'aws-bedrock,vertex-ai', '--check', '--fixtures', fixtures])
 assert(bothDistributorsCheck.code === 3 && bothDistributorsCheck.out.includes('vertex-ai'), 'refresh accepts comma-separated distributors')
 
@@ -1190,7 +1313,7 @@ const refreshWorkflow = fs.readFileSync(path.join(root, '.github/workflows/feed-
 assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && refreshWorkflow.includes('exit code $providers'), 'workflow fails explicitly on unexpected provider refresh exit codes')
 assert(refreshWorkflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]') && refreshWorkflow.includes('exit code $distributors'), 'workflow fails explicitly on unexpected distributor refresh exit codes')
 assert(refreshWorkflow.includes('GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}'), 'workflow passes the Google models endpoint credential')
-assert(refreshWorkflow.includes('--distributor aws-bedrock,vertex-ai'), 'workflow refreshes every implemented distributor')
+assert(refreshWorkflow.match(/--distributor aws-bedrock,vertex-ai,azure-ai-foundry/g)?.length === 2, 'workflow checks and writes every implemented distributor')
 assert(refreshWorkflow.includes('issues: write') && refreshWorkflow.includes('if: failure()') && refreshWorkflow.includes('Feed refresh automation failed'), 'workflow gives failed refreshes a durable issue')
 assert(refreshWorkflow.includes('gh issue comment "$issue" --body "$body"') && refreshWorkflow.includes('gh issue create --title "$title"'), 'workflow updates one failure issue instead of silently repeating failures')
 assert(refreshWorkflow.includes('Resolve prior feed refresh failure') && refreshWorkflow.includes('gh issue close "$issue" --reason completed'), 'a successful refresh resolves the prior failure issue')
@@ -1409,7 +1532,7 @@ assert(publishedUatWorkflow.includes("if: github.event.workflow_run.conclusion =
 assert(publishedUatWorkflow.includes('--expected-source-sha "$EXPECTED_SOURCE_SHA"'), 'workflow-run UAT binds the downloaded receipt to the triggering release source')
 assert(publishedUatWorkflow.includes('ref: ${{ needs.resolve.outputs.release_commit }}'), 'package UAT runs the exact release commit\'s own consumer harness')
 const freshnessScript = fs.readFileSync(path.join(root, 'scripts/update-readme-freshness.mjs'), 'utf8')
-assert(freshnessScript.includes('AWS Bedrock and Google Vertex AI lifecycle pages'), 'README freshness metadata names every automated distributor source')
+assert(freshnessScript.includes('AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages'), 'README freshness metadata names every automated distributor source')
 
 const composedBedrockCheck = run(['--provider', 'anthropic', '--distributor', 'aws-bedrock', '--check', '--fixtures', fixtures])
 assert(composedBedrockCheck.code === 3 && composedBedrockCheck.out.includes('Distribution changes'), 'Bedrock distributor composes with a selected publisher refresh')
