@@ -45,8 +45,8 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
     help: values.help ?? false,
   }
 
-  if (!['openai', 'anthropic', 'google', 'mistral', 'all'].includes(options.provider)) {
-    throw new Error(`--provider must be openai, anthropic, google, mistral, or all`)
+  if (!['openai', 'anthropic', 'google', 'mistral', 'cohere', 'all'].includes(options.provider)) {
+    throw new Error(`--provider must be openai, anthropic, google, mistral, cohere, or all`)
   }
   const distributorArgs = values.distributor ?? []
   const distributors = (Array.isArray(distributorArgs) ? distributorArgs : [distributorArgs])
@@ -64,7 +64,7 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
     : options.distributors.length
       ? options.distributors.join(',')
       : undefined
-  options.providers = options.provider === 'all' ? ['openai', 'anthropic', 'google', 'mistral'] : [options.provider]
+  options.providers = options.provider === 'all' ? ['openai', 'anthropic', 'google', 'mistral', 'cohere'] : [options.provider]
   options.out = path.resolve(options.out)
   if (options.fixtures) options.fixtures = path.resolve(options.fixtures)
   return options
@@ -72,7 +72,7 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
 
 export function usage() {
   return [
-    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|google|mistral|all] [--distributor aws-bedrock[,vertex-ai,azure-ai-foundry]] [--check] [--out feeds/] [--fixtures DIR]',
+    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|google|mistral|cohere|all] [--distributor aws-bedrock[,vertex-ai,azure-ai-foundry]] [--check] [--out feeds/] [--fixtures DIR]',
     '',
     '--distributor accepts comma-separated values and may run standalone against committed publisher feeds, or compose with --provider.',
     '--check exits 0 when the semantic diff is empty, 3 when it has changes, and 1 on failure.',
@@ -119,6 +119,7 @@ export async function generateProviderFeed(providerName, options = {}) {
     feed: merged.feed,
     unconfirmedIds: merged.unconfirmedIds,
     skipped: sources.skipped,
+    undatedDeprecatedIds: sources.undatedDeprecatedIds,
   }
 }
 
@@ -211,6 +212,7 @@ export async function run(options) {
       sourceConflicts: index === 0 ? distributorState?.sourceConflicts ?? [] : [],
       publisher: item.provider.publisher,
       skipped: item.skipped,
+      undatedDeprecatedIds: item.undatedDeprecatedIds,
     }
     return {
       provider: item.provider,

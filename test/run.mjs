@@ -240,6 +240,20 @@ assert(cyclonedx.metadata?.properties?.some(item => item.name === 'model-eol:gen
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
 
+const cohereConsumerDir = path.join(tempRoot, 'cohere-consumer')
+fs.mkdirSync(cohereConsumerDir)
+fs.writeFileSync(path.join(cohereConsumerDir, 'rerank.ts'), 'model: "rerank-english-v2.0"\n')
+const cohereConsumer = run([cohereConsumerDir, '--days', '90', '--json'])
+const cohereFindings = JSON.parse(cohereConsumer.out).findings
+assert(cohereConsumer.code === 1 && cohereFindings.length === 1 && cohereFindings[0].id === 'rerank-english-v2.0' && cohereFindings[0].shutdown === '2025-04-30' && cohereFindings[0].publisher === 'cohere', 'bundled Cohere feed reports the published Rerank v2.0 shutdown')
+const cohereAliasDir = path.join(tempRoot, 'cohere-alias-consumer')
+fs.mkdirSync(cohereAliasDir)
+fs.writeFileSync(path.join(cohereAliasDir, 'command.ts'), '"command-r"\n')
+const cohereAliasConsumer = run([cohereAliasDir, '--days', '90', '--json'])
+const cohereAliasFindings = JSON.parse(cohereAliasConsumer.out).findings
+const cohereResolvedAlias = loadFeeds(path.join(root, 'feeds')).entries.get(cohereAliasFindings[0]?.matched)?.entry
+assert(cohereAliasConsumer.code === 0 && cohereAliasFindings.length === 1 && cohereAliasFindings[0].id === 'command-r-03-2024' && cohereAliasFindings[0].shutdown === null && cohereAliasFindings[0].status === 'watch' && cohereAliasFindings[0].publisher === 'cohere' && cohereResolvedAlias?.id === 'command-r-03-2024' && cohereResolvedAlias?.announced === '2025-09-15' && !Object.hasOwn(cohereResolvedAlias, 'shutdown'), 'bundled Cohere alias resolves to its canonical announcement without a shutdown date')
+
 const mistralConsumerDir = path.join(tempRoot, 'mistral-consumer')
 fs.mkdirSync(mistralConsumerDir)
 const mistralConsumerFile = path.join(mistralConsumerDir, 'app.ts')

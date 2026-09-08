@@ -203,6 +203,7 @@ export function compareFeeds(committed, generated, options = {}) {
     noPublisherFeeds: noPublisherFeed,
     sourceConflicts: options.sourceConflicts ?? [],
     skipped: options.skipped ?? [],
+    undatedDeprecatedIds: options.undatedDeprecatedIds ?? [],
     // Informational sections never alter the files, so they never trip exit 3.
     changed: Boolean(
       added.length ||
@@ -316,6 +317,11 @@ function renderResult(result, publisher) {
   pushSection(section(
     'Rows without an API id',
     (result.skipped ?? []).map(row => `- ${code(row.model)} - version: ${code(row.version)}; skipped because the API cell is empty`),
+  ))
+
+  pushSection(section(
+    'Models endpoint notices',
+    (result.undatedDeprecatedIds ?? []).map(id => `- models endpoint flags ${code(id)} as deprecated without a dated announcement`),
   ))
 
   if (!result.changed) lines.push('No semantic changes.', '')

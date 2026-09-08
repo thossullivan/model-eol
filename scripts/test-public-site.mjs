@@ -75,7 +75,7 @@ try {
     expectedRefreshSha: sourceSha,
   })
   assert.equal(receiptCheck.matches, true)
-  assert.deepEqual(receipt.feeds.map(feed => feed.path), ['feeds/amazon.json', 'feeds/anthropic.json', 'feeds/google.json', 'feeds/mistral.json', 'feeds/openai.json'])
+  assert.deepEqual(receipt.feeds.map(feed => feed.path), ['feeds/amazon.json', 'feeds/anthropic.json', 'feeds/cohere.json', 'feeds/google.json', 'feeds/mistral.json', 'feeds/openai.json'])
 
   const pending = createFeedRefreshReceipt({
     repoDir: repo,
@@ -108,7 +108,7 @@ try {
   assert.equal(health.refresh_run, refreshRun)
   assert.equal(health.refresh_commit, sourceSha)
   assert.equal(health.published_commit, sourceSha)
-  assert.deepEqual(health.feeds.map(feed => feed.publisher).sort(), ['amazon', 'anthropic', 'google', 'mistral', 'openai'])
+  assert.deepEqual(health.feeds.map(feed => feed.publisher).sort(), ['amazon', 'anthropic', 'cohere', 'google', 'mistral', 'openai'])
   for (const feed of health.feeds) {
     const name = `${feed.publisher}.json`
     const bytes = fs.readFileSync(path.join(output, 'feeds', name))

@@ -34,6 +34,8 @@ import {
   parseGoogleDeprecations,
   parseGoogleModels,
   parseMistralDeprecations,
+  parseCohereDeprecations,
+  parseCohereModelsResponse,
   parseModelsResponse,
   parseOpenAIDeprecations,
   parseOpenAIModels,
@@ -186,6 +188,90 @@ const openaiFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'openai.j
 const anthropicFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'anthropic.json'), 'utf8'))
 const googleFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'google.json'), 'utf8'))
 const amazonFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds', 'amazon.json'), 'utf8'))
+const cohereHtml = fs.readFileSync(path.join(fixtures, 'cohere-deprecations.html'), 'utf8')
+const cohereModels = fs.readFileSync(path.join(fixtures, 'cohere-models.json'), 'utf8')
+const cohereParsed = parseCohereDeprecations(cohereHtml)
+const cohereByDate = date => cohereParsed.filter(record => record.announced === date)
+const cohereById = id => cohereParsed.find(record => record.id === id)
+const cohereSections = [...cohereHtml.matchAll(/<h3\b[^>]*>([\s\S]*?)<\/h3>([\s\S]*?)(?=<h[123]\b|$)/gi)]
+const coherePage = section => `<h2>Deprecation History</h2>${section}<h2>Other content</h2>`
+const cohereRefusal = (html, source) => {
+  try {
+    parseCohereDeprecations(html, source)
+    return ''
+  } catch (error) {
+    return error.message
+  }
+}
+const cohereReplacementOptions = ['command-r-08-2024', 'command-r-plus-08-2024', 'command-a-03-2025']
+const cohereTaskNote = 'Embedding tasks alternatives: embed-english-v3.0, embed-multilingual-v3.0, embed-v4.0; Chat tasks alternatives: command-r7b-12-2024, command-a-03-2025, command-a-reasoning-08-2025'
+assert(cohereSections.length === 5 && cohereParsed.length === 12 && ['2026-04-04', '2025-09-15', '2024-12-02'].map(date => cohereByDate(date).length).join() === '5,5,2', 'Cohere parses exactly 12 records across its three model announcement sections')
+assert(cohereByDate('2026-04-04').map(record => record.id).join() === 'embed-english-v2.0,embed-english-light-v2.0,embed-multilingual-v2.0,c4ai-aya-expanse-8b,c4ai-aya-vision-8b', 'Cohere retirement ids come only from the immediately following model list')
+assert(cohereByDate('2026-04-04').every(record => record.shutdown === '2026-04-04' && record.replacement_note === cohereTaskNote && !record.replacement && !record.replacement_options), 'Cohere preserves task-grouped alternatives as notes with the explicit effective shutdown date')
+assert(cohereParsed.every(record => record.source === PROVIDERS.cohere.deprecationsUrl && !record.date_precision), 'Cohere records retain their exact source and never infer date precision')
+assert(cohereById('command-r-03-2024')?.aliases?.join() === 'command-r' && cohereById('command-r-plus-04-2024')?.aliases?.join() === 'command-r-plus', 'Cohere attaches both documented command aliases to canonical models')
+assert(cohereByDate('2025-09-15').every(record => !Object.hasOwn(record, 'shutdown')), 'Cohere deprecated models have an announcement without an invented shutdown')
+assert(cohereByDate('2025-09-15').filter(record => record.id.startsWith('command')).every(record => JSON.stringify(record.replacement_options) === JSON.stringify(cohereReplacementOptions) && !record.replacement), 'Cohere command replacement options preserve the page order')
+assert(cohereById('summarize') && !['replacement', 'replacement_options', 'replacement_note'].some(field => Object.hasOwn(cohereById('summarize'), field)), 'Cohere summarize is a model without command replacement guidance')
+assert(['/v1/generate', '/v1/summarize', '/v1/classify', '/v1/chat', '/v1/connectors', 'classify', 'rerank', 'connectors', 'search_queries_only', 'Slack App'].every(id => !cohereById(id)), 'Cohere excludes endpoints, fine-tuning capabilities, parameters, and features')
+assert(cohereByDate('2024-12-02').map(record => record.id).join() === 'rerank-english-v2.0,rerank-multilingual-v2.0' && cohereByDate('2024-12-02').every(record => record.shutdown === '2025-04-30' && record.replacement === 'rerank-v3.5'), 'Cohere table rows use the heading announcement, shutdown cell, and exact replacement id')
+for (const section of cohereSections.filter(section => /2025-03-08|2025-01-31/.test(section[1]))) {
+  assert(parseCohereDeprecations(coherePage(section[0])).length === 0, `Cohere skips the non-model section without error: ${section[1]}`)
+}
+assert(parseCohereDeprecations(`${cohereHtml}<h3>2099-01-01: Outside history</h3><code>ignored-model</code>`).length === 12, 'Cohere scopes parsing to Deprecation History')
+assert(cohereRefusal('').includes('page is empty') && cohereRefusal(cohereHtml, 'not-a-url').includes('source is not a URL') && cohereRefusal('<h3>2026-01-01: Unknown</h3>').includes('no Deprecation History'), 'Cohere refuses missing source structure and invalid source URLs')
+for (const date of ['2026-4-04', '2026-02-30', '2026–04–04', 'April 4, 2026']) {
+  const reason = cohereRefusal(cohereHtml.replace(cohereSections[0][0], cohereSections[0][0].replace('2026-04-04: Embed', `${date}: Embed`)))
+  assert(reason.includes(`${date}: Embed`) && /date|YYYY-MM-DD/.test(reason), `Cohere requires a strict real ISO heading date: ${date}`)
+}
+for (const date of ['February 30, 2026', 'April 2026', 'April 4, 2026 or April 5, 2026', 'April 3, 2026']) {
+  const reason = cohereRefusal(cohereHtml.replace('Effective April 4th, 2026,', `Effective ${date},`))
+  assert(reason.includes('2026-04-04: Embed') && /date|before announcement/.test(reason), `Cohere refuses invalid or ambiguous retirement dates: ${date}`)
+}
+const cohereUnknown = cohereHtml.replace('the following models will be retired:', 'these models have changed status:')
+assert(cohereRefusal(cohereUnknown).includes('2026-04-04: Embed v2.0, Aya Expanse 8B') && cohereRefusal(cohereUnknown).includes('unrecognised section shape'), 'Cohere refuses a mutated unknown shape and names its heading')
+assert(cohereRefusal(cohereHtml.replace('Deprecated Models:', 'Affected Models:')).includes('2025-09-15: Various older command'), 'Cohere refuses an unknown model-list label instead of dropping records')
+assert(cohereRefusal(cohereHtml.replace('the following models will be retired:</p>', 'the following models will be retired:</p><p>Unexpected paragraph</p>')).includes('immediately following'), 'Cohere refuses a displaced retirement list')
+assert(cohereRefusal(cohereHtml.replace('Deprecated Models:</p>', 'Deprecated Models:</p><p>Unexpected paragraph</p>')).includes('immediately following'), 'Cohere refuses a displaced deprecated-model list')
+for (const id of ['/v1/generate', 'invalid/model', 'invalid id', '_invalid']) {
+  const reason = cohereRefusal(cohereHtml.replace('<code>embed-english-v2.0</code>', `<code>${id}</code>`))
+  assert(reason.includes('2026-04-04: Embed') && reason.includes(id) && /endpoint-or-product-row|invalid-model-id/.test(reason), `Cohere refuses invalid model ids within model lists: ${id}`)
+}
+assert(cohereRefusal(cohereHtml.replace('<code>command-r</code>', '<code>/v1/summarize</code>')).includes('endpoint-or-product-row'), 'Cohere refuses endpoint-like aliases')
+assert(cohereRefusal(cohereHtml.replace('<code>rerank-english-v2.0</code>', '<code>/v1/generate</code>')).includes('row /v1/generate'), 'Cohere refuses endpoint-like table ids and names the row')
+assert(cohereRefusal(cohereHtml.replace('<td>2025-04-30</td>', '<td>2025-02-30</td>')).includes('row rerank-english-v2.0'), 'Cohere refuses malformed table dates and names the row')
+assert(cohereRefusal(cohereHtml.replace('Shutdown Date</th>', 'Service Shutdown Date</th>')).includes('endpoint-or-product-deprecation-table'), 'Cohere applies the generic endpoint-table refusal policy')
+assert(cohereRefusal(cohereHtml.replace('<code>command-r7b-12-2024</code>', '<code>bad/id</code>')).includes('endpoint-or-product-row'), 'Cohere validates task alternative ids')
+assert(cohereRefusal(cohereHtml.replace('Chat tasks alternatives:', 'Chat alternatives:')).includes('2026-04-04: Embed'), 'Cohere refuses renamed task groups instead of silently dropping their alternatives')
+assert(cohereRefusal(cohereHtml.replace('<code>command-r-plus-08-2024</code>', '<code>bad/id</code>')).includes('endpoint-or-product-row'), 'Cohere validates paragraph replacement ids')
+assert(cohereRefusal(cohereHtml.replace('<code>embed-english-v2.0</code>', '<code>embed-english-v2.0</code><code>extra-model</code>')).includes('one exact model id'), 'Cohere refuses ambiguous retirement list items')
+const coherePlainModels = cohereHtml.replace('<code>command-light</code>', 'command-light').replace('<code>command</code>', 'command').replace('<code>summarize</code>', 'summarize')
+assert(JSON.stringify(parseCohereDeprecations(coherePlainModels)) === JSON.stringify(cohereParsed), 'Cohere accepts plain exact ids under Deprecated Models')
+const cohereDuplicateRow = '<tr><td>2025-04-30</td><td><code>rerank-english-v2.0</code></td><td>$1.00 / 1K searches</td><td><code>rerank-v3.5</code></td></tr>'
+assert(parseCohereDeprecations(cohereHtml.replace(cohereDuplicateRow, cohereDuplicateRow.repeat(2))).length === 12, 'Cohere collapses identical duplicate rows')
+assert(cohereRefusal(cohereHtml.replace(cohereDuplicateRow, cohereDuplicateRow + cohereDuplicateRow.replace('2025-04-30', '2025-05-01'))).includes('conflicting rows for rerank-english-v2.0'), 'Cohere refuses conflicting duplicate lifecycle rows')
+assert(parseRefreshArgs(['--provider', 'cohere']).providers.join() === 'cohere' && parseRefreshArgs([]).providers.includes('cohere') && usage().includes('mistral|cohere|all'), 'refresh selects Cohere explicitly and through all, and documents its usage')
+const cohereNotices = []
+const cohereSources = await loadProviderSources(PROVIDERS.cohere, { fixtures, notice: message => cohereNotices.push(message) })
+const cohereSeed = { spec: 'model-eol/0.1', publisher: 'cohere', generated: '2026-09-08T00:00:00Z', source: PROVIDERS.cohere.deprecationsUrl, models: [] }
+const cohereMerged = mergeFeed(cohereSeed, { ...cohereSources, provider: PROVIDERS.cohere })
+assert(cohereSeed.models.length === 0 && cohereMerged.feed.models.length === 15 && cohereMerged.unconfirmedIds.length === 0 && validateFeed(cohereMerged.feed).length === 0, 'Cohere generates a valid feed with 12 dated records and three endpoint-only ids')
+assert(cohereMerged.feed.models.find(model => model.id === 'rerank-english-v2.0')?.replacement === 'rerank-v3.5', 'Cohere promotes the exact table replacement when it resolves in the feed')
+const cohereWithoutCurrent = mergeFeed(cohereSeed, { deprecations: cohereParsed, provider: PROVIDERS.cohere }).feed
+assert(cohereWithoutCurrent.models.filter(model => model.id.startsWith('rerank-')).every(model => !model.replacement && model.replacement_options?.join() === 'rerank-v3.5'), 'Cohere routes unresolved table replacements to options')
+const cohereUndated = cohereMerged.feed.models.find(model => model.id === 'cohere-fixture-undated')
+assert(cohereUndated && !cohereUndated.announced && !cohereUndated.shutdown && !cohereUndated.is_deprecated && !cohereUndated.endpoints, 'Cohere endpoint-only deprecation flags never invent lifecycle fields or import endpoint metadata')
+const cohereNoticeDiff = compareFeeds(cohereMerged.feed, cohereMerged.feed, { undatedDeprecatedIds: cohereSources.undatedDeprecatedIds })
+const cohereNoticeLine = 'models endpoint flags `cohere-fixture-undated` as deprecated without a dated announcement'
+assert(!cohereNoticeDiff.changed && renderSemanticDiff(cohereNoticeDiff).includes(cohereNoticeLine) && cohereSources.undatedDeprecatedIds.join() === 'cohere-fixture-undated' && cohereNotices.some(message => message.includes('models endpoint flags cohere-fixture-undated as deprecated without a dated announcement')), 'Cohere reports undated endpoint deprecations in notices and diff markdown without causing semantic changes')
+const cohereEndpointParsed = parseCohereModelsResponse(cohereModels)
+assert(cohereEndpointParsed.ids.length === 4 && cohereEndpointParsed.deprecatedIds.join() === 'command-r-03-2024,cohere-fixture-undated', 'Cohere parses models[].name and is_deprecated with its own endpoint parser')
+for (const body of ['{', {}, { data: [] }, { models: [null] }, { models: [{ name: '/v1/generate' }] }, { models: [{ name: 'model-one', is_deprecated: 'true' }] }, { models: [], next_page_token: 42 }, { models: [], next_page_token: '' }, { models: [{ name: 'same' }, { name: 'same' }] }]) {
+  let reason = ''
+  try { parseCohereModelsResponse(body) } catch (error) { reason = error.message }
+  assert(reason.includes('cohere models response'), `Cohere refuses malformed endpoint data: ${JSON.stringify(body)}`)
+}
+
 const mistralHtml = fs.readFileSync(path.join(fixtures, 'mistral-deprecations.html'), 'utf8')
 const mistralModels = fs.readFileSync(path.join(fixtures, 'mistral-models.json'), 'utf8')
 const mistralParsed = parseMistralDeprecations(mistralHtml)
@@ -242,7 +328,7 @@ for (const [cell, value] of [[3, '5/21/2026 8/31/2026'], [3, '5/22/2026 9/1/2026
   const duplicateHtml = mistralHtml.replace(mistralMediumRow, `${mistralMediumRow}${mistralMutatedRow(cell, value)}`)
   assert(mistralRefusal(duplicateHtml).includes('conflicting rows for mistral-medium-2508'), `Mistral refuses duplicate ids with conflicting dates or alternatives: ${value}`)
 }
-assert(parseRefreshArgs(['--provider', 'mistral']).providers.join() === 'mistral' && parseRefreshArgs([]).providers.includes('mistral') && usage().includes('google|mistral|all'), 'refresh selects Mistral explicitly and through all, and documents it in usage')
+assert(parseRefreshArgs(['--provider', 'mistral']).providers.join() === 'mistral' && parseRefreshArgs([]).providers.includes('mistral') && usage().includes('google|mistral|cohere|all'), 'refresh selects Mistral explicitly and through all, and documents it in usage')
 const mistralNotices = []
 const mistralSources = await loadProviderSources(PROVIDERS.mistral, { fixtures, notice: message => mistralNotices.push(message) })
 assert(mistralNotices.filter(message => message.startsWith('notice: mistral skipped ')).length === 3 && mistralExpectedSkipped.every(row => mistralNotices.some(message => message.includes(row.model) && message.includes(row.version || 'not listed'))), 'Mistral emits one named notice for each skipped row')
@@ -1150,6 +1236,59 @@ assert(openaiCheck.code === 0 || openaiCheck.code === 3, 'OpenAI --check exits 0
 assert(openaiCheck.out.includes('Unconfirmed entries') && openaiCheck.out.includes('retained because neither source confirmed it'), '--check retains and reports committed entries the fixture slice does not confirm')
 
 const responseFor = body => ({ ok: true, status: 200, text: async () => body })
+const cohereRequests = []
+const cohereLiveNotices = []
+const cohereAuthenticated = await loadProviderSources(PROVIDERS.cohere, {
+  env: { COHERE_API_KEY: 'fixture-key' },
+  notice: message => cohereLiveNotices.push(message),
+  fetchImpl: async (url, options) => {
+    cohereRequests.push({ url: new URL(url), headers: options.headers })
+    if (url === PROVIDERS.cohere.deprecationsUrl) return responseFor(cohereHtml)
+    if (new URL(url).searchParams.get('page_token')) {
+      return responseFor(JSON.stringify({ models: [
+        { name: 'command-a-03-2025', is_deprecated: false },
+        { name: 'cohere-live-undated', is_deprecated: true, announced: '2000-01-01', shutdown: '2000-02-01' },
+        { name: 'command-r', is_deprecated: true },
+      ] }))
+    }
+    return responseFor(JSON.stringify({ models: [
+      { name: 'command-a-03-2025', is_deprecated: false },
+      { name: 'command-r-03-2024', is_deprecated: true, shutdown: '2099-01-01' },
+    ], next_page_token: 'page two+/=' }))
+  },
+})
+assert(cohereRequests.length === 3 && cohereRequests.slice(0, 2).every(request => request.headers.Authorization === 'Bearer fixture-key' && request.url.searchParams.get('page_size') === '1000') && !Object.hasOwn(cohereRequests[2].headers, 'Authorization') && cohereRequests.every(request => request.headers['accept-language'] === 'en'), 'Cohere sends Bearer credentials only to paginated models requests and requests English documents')
+assert(cohereRequests[0].url.searchParams.get('page_token') === null && cohereRequests[1].url.searchParams.get('page_token') === 'page two+/=' && cohereAuthenticated.currentIds.length === 4, 'Cohere follows encoded page_token values and deduplicates ids across pages')
+const cohereAuthenticatedFeed = mergeFeed(cohereSeed, { ...cohereAuthenticated, provider: PROVIDERS.cohere }).feed
+assert(cohereAuthenticatedFeed.models.find(model => model.id === 'command-r-03-2024')?.shutdown === undefined && !cohereAuthenticatedFeed.models.find(model => model.id === 'cohere-live-undated')?.announced && !cohereAuthenticatedFeed.models.find(model => model.id === 'cohere-live-undated')?.shutdown && !cohereAuthenticatedFeed.models.some(model => model.id === 'command-r'), 'Cohere ignores endpoint dates and resolves endpoint aliases through page records')
+assert(cohereAuthenticated.undatedDeprecatedIds.join() === 'cohere-live-undated' && cohereLiveNotices.filter(message => message.includes('without a dated announcement')).length === 1, 'Cohere endpoint notices exclude dated canonical ids and their page aliases')
+const cohereKeylessRequests = []
+const cohereKeyless = await loadProviderSources(PROVIDERS.cohere, {
+  env: {}, notice: () => {},
+  fetchImpl: async url => { cohereKeylessRequests.push(url); return responseFor(cohereHtml) },
+})
+const cohereKeylessFeed = mergeFeed(cohereMerged.feed, { ...cohereKeyless, provider: PROVIDERS.cohere }).feed
+assert(cohereKeyless.currentIds === null && !cohereKeyless.endpointAvailable && cohereKeylessRequests.join() === PROVIDERS.cohere.deprecationsUrl && cohereKeylessFeed.models.length === cohereMerged.feed.models.length && cohereKeylessFeed.models.find(model => model.id === 'command-r-03-2024')?.aliases?.join() === 'command-r', 'keyless Cohere refresh uses only the page and preserves committed models and aliases')
+for (const mode of ['http', 'malformed', 'cycle', 'cap']) {
+  let calls = 0
+  let reason = ''
+  try {
+    await loadProviderSources(PROVIDERS.cohere, {
+      env: { COHERE_API_KEY: 'fixture-key' }, notice: () => {},
+      fetchImpl: async () => {
+        calls++
+        if (calls === 2 && mode === 'http') return { ok: false, status: 503, text: async () => 'unavailable' }
+        if (calls === 2 && mode === 'malformed') return responseFor(JSON.stringify({ models: {} }))
+        return responseFor(JSON.stringify({ models: [{ name: `cohere-page-${calls}` }], next_page_token: mode === 'cycle' ? ['a', 'b', 'a'][calls - 1] : `page-${calls}` }))
+      },
+    })
+  } catch (error) {
+    reason = error.message
+  }
+  const expected = { http: [2, 'HTTP 503'], malformed: [2, 'no models array'], cycle: [3, 'token repeated'], cap: [20, 'pagination cap of 20 pages'] }[mode]
+  assert(calls === expected[0] && reason.includes(expected[1]), `Cohere pagination fails closed without partial results: ${mode}`)
+}
+
 const mistralRequests = []
 const mistralEndpointBody = JSON.parse(mistralModels)
 mistralEndpointBody.data[0].shutdown = '2099-01-01'
@@ -1396,6 +1535,20 @@ assert(anthropicCheck.code === 0 || anthropicCheck.code === 3, 'Anthropic --chec
 const googleCheck = run(['--provider', 'google', '--check', '--fixtures', fixtures])
 assert(googleCheck.code === 0 || googleCheck.code === 3, 'Google --check exits 0 or 3 depending on committed feed state, never a failure')
 
+const cohereCheck = spawnSync(process.execPath, [refresh, '--provider', 'cohere', '--check', '--fixtures', fixtures], { encoding: 'utf8' })
+assert([0, 3].includes(cohereCheck.status) && cohereCheck.stdout.includes(cohereNoticeLine), 'Cohere --check exits 0 or 3 depending on committed feed state and renders undated endpoint notices')
+assert(cohereCheck.stderr.includes('models endpoint flags cohere-fixture-undated as deprecated without a dated announcement'), 'Cohere CLI reports undated endpoint deprecations on stderr')
+const cohereCorruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-cohere-corrupt-'))
+try {
+  fs.writeFileSync(path.join(cohereCorruptDir, 'cohere-models.json'), cohereModels)
+  fs.writeFileSync(path.join(cohereCorruptDir, 'cohere-deprecations.html'), cohereUnknown)
+  const out = path.join(cohereCorruptDir, 'out')
+  const invalid = run(['--provider', 'cohere', '--fixtures', cohereCorruptDir, '--out', out])
+  assert(invalid.code === 1 && invalid.err.includes('2026-04-04: Embed') && !fs.existsSync(out), 'Cohere refuses unknown page shapes before writing any feed')
+} finally {
+  fs.rmSync(cohereCorruptDir, { recursive: true, force: true })
+}
+
 const mistralCheck = spawnSync(process.execPath, [refresh, '--provider', 'mistral', '--check', '--fixtures', fixtures], { encoding: 'utf8' })
 assert([0, 3].includes(mistralCheck.status) && mistralCheck.stdout.includes('## Rows without an API id') && mistralExpectedSkipped.every(row => mistralCheck.stdout.includes(row.model)), 'Mistral --check lists skipped rows in the semantic diff')
 assert(mistralCheck.stderr.split('\n').filter(line => line.startsWith('notice: mistral skipped ')).length === 3, 'Mistral --check prints each skipped row as a notice on stderr')
@@ -1437,16 +1590,16 @@ const mixedDistributorWrite = run([
   '--fixtures', fixtures,
 ], { env: { ...process.env, MODEL_EOL_GENERATED: mixedGenerated } })
 assert(mixedDistributorWrite.code === 0, 'mixed distributor refresh writes successfully')
-const mixedOutputs = Object.fromEntries(['amazon', 'anthropic', 'google', 'mistral', 'openai'].map(publisher => [
+const mixedOutputs = Object.fromEntries(['amazon', 'anthropic', 'cohere', 'google', 'mistral', 'openai'].map(publisher => [
   publisher,
   JSON.parse(fs.readFileSync(path.join(mixedDistributorOut, `${publisher}.json`), 'utf8')),
 ]))
-const mixedCommitted = Object.fromEntries(['amazon', 'anthropic', 'google', 'mistral', 'openai'].map(publisher => [
+const mixedCommitted = Object.fromEntries(['amazon', 'anthropic', 'cohere', 'google', 'mistral', 'openai'].map(publisher => [
   publisher,
   JSON.parse(fs.readFileSync(path.join(root, 'feeds', `${publisher}.json`), 'utf8')),
 ]))
 assert(mixedOutputs.anthropic.generated === mixedGenerated && mixedOutputs.anthropic.generated !== mixedCommitted.anthropic.generated, 'mixed distributor write advances generated for the publisher with material distribution changes')
-assert(['amazon', 'google', 'mistral', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
+assert(['amazon', 'cohere', 'google', 'mistral', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
 
 const refreshWorkflow = fs.readFileSync(path.join(root, '.github/workflows/feed-refresh.yml'), 'utf8')
 assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && refreshWorkflow.includes('exit code $providers'), 'workflow fails explicitly on unexpected provider refresh exit codes')
@@ -1454,6 +1607,7 @@ assert(refreshWorkflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" 
 assert(refreshWorkflow.includes('GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}'), 'workflow passes the Google models endpoint credential')
 assert(refreshWorkflow.match(/--distributor aws-bedrock,vertex-ai,azure-ai-foundry/g)?.length === 2, 'workflow checks and writes every implemented distributor')
 assert(refreshWorkflow.split('MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}').length === 3, 'workflow passes the Mistral credential to both check and regeneration')
+assert(refreshWorkflow.split('COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}').length === 3 && refreshWorkflow.includes(' / COHERE_API_KEY enable'), 'workflow documents the Cohere credential and passes it to both check and regeneration')
 assert(refreshWorkflow.includes('--distributor aws-bedrock,vertex-ai'), 'workflow refreshes every implemented distributor')
 assert(refreshWorkflow.includes('issues: write') && refreshWorkflow.includes('if: failure()') && refreshWorkflow.includes('Feed refresh automation failed'), 'workflow gives failed refreshes a durable issue')
 assert(refreshWorkflow.includes('gh issue comment "$issue" --body "$body"') && refreshWorkflow.includes('gh issue create --title "$title"'), 'workflow updates one failure issue instead of silently repeating failures')

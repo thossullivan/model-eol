@@ -138,8 +138,8 @@ The direct-first product is shipped on npm and as a moving `v0` Action: bounded
 scanner, strict repository policy, mixed-repository overrides/routes, lifecycle
 reports, CycloneDX, safe plan/apply, and a stateless GitHub bot with trusted
 ownership, isolated per-migration evals, and stale-work reconciliation. Provider
-refresh covers OpenAI, Anthropic, Google, and Mistral; distributor refresh covers Bedrock
-and Vertex. Weekly refresh, failure receipts, semantic PRs, trusted npm publishing,
+refresh covers OpenAI, Anthropic, Google, Mistral, and Cohere; distributor refresh covers Bedrock,
+Vertex, and Azure Foundry. Weekly refresh, failure receipts, semantic PRs, trusted npm publishing,
 and exact-package consumer tests are live.
 
 The staged public-contract milestone gives every public schema a canonical ID, exposes

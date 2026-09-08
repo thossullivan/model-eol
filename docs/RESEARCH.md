@@ -25,6 +25,15 @@ the July 2026 shutoff wave.
 - Azure (12 mo from launch + 60 days notice; keeps models past OpenAI's own dates):
   https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirements
   The old `ai-foundry` URL redirects to this lifecycle policy article.
+- Mistral (deprecation and retirement days per model, product-name alternatives):
+  https://docs.mistral.ai/models
+- Cohere (dated announcements; deprecated means no new customers, shutdown assigned later):
+  https://docs.cohere.com/docs/deprecations
+- xAI: no lifecycle index. Retirements appear only on per-event migration pages
+  (https://docs.x.ai/developers/migration/may-15-retirement,
+  https://docs.x.ai/developers/migration/imagine-image-quality-nov-2) and the
+  models API has no deprecation fields. Not ingested; Azure carries grok clocks
+  for Foundry only.
 - Bedrock (12 mo on platform + 6 mo Legacy notice + paid Extended Access):
   https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
 - Cross-provider calendars (community scrapers - the demand signal):

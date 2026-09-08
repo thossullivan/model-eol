@@ -38,6 +38,14 @@ export const PROVIDERS = {
     keyEnv: 'MISTRAL_API_KEY',
     headers: {},
   },
+  cohere: {
+    publisher: 'cohere',
+    feedFile: 'cohere.json',
+    modelsUrl: 'https://api.cohere.com/v1/models?page_size=1000',
+    deprecationsUrl: 'https://docs.cohere.com/docs/deprecations',
+    keyEnv: 'COHERE_API_KEY',
+    headers: {},
+  },
 }
 
 const DATE_PATTERN = /\b((?:19|20)\d{2})[-‐‑‒–\u2014−](\d{1,2})[-‐‑‒–\u2014−](\d{1,2})\b/
@@ -910,6 +918,161 @@ export function parseMistralDeprecations(html, sourceUrl = PROVIDERS.mistral.dep
   return { records: [...records.values()], skipped }
 }
 
+function cohereModelId(id) {
+  if (typeof id !== 'string' || !MODEL_ID_PATTERN.test(id)) {
+    const reason = /[\s/]/.test(id ?? '') ? 'endpoint-or-product-row' : 'invalid-model-id'
+    throw new Error(`refused row: ${reason}: ${id ?? '(empty)'}`)
+  }
+  return id
+}
+
+function cohereDate(text) {
+  const value = plainText(text)
+  const date = dateFromText(value)
+  const residual = value.replace(DATE_PATTERN, '').replace(HUMAN_DATE_PATTERN, '').trim()
+  if (!date || residual || dateCandidates(value).length !== 1) {
+    throw new Error(`invalid date: ${value || '(empty)'}`)
+  }
+  return date
+}
+
+function cohereListItems(html) {
+  const match = html.replace(/<!--[^]*?-->/g, '').match(/^\s*<ul\b[^>]*>([\s\S]*?)<\/ul>/i)
+  if (!match || /<ul\b/i.test(match[1])) throw new Error('expected an immediately following flat model list')
+  const items = [...match[1].matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)]
+  if (!items.length || match[1].replace(/<li\b[^>]*>[\s\S]*?<\/li>/gi, '').trim()) {
+    throw new Error('model list has missing or malformed items')
+  }
+  return items.map(item => item[1])
+}
+
+function cohereSingleCode(item) {
+  const codes = codeText(item)
+  if (codes.length !== 1 || plainText(item) !== codes[0]) {
+    throw new Error(`expected one exact model id: ${plainText(item) || '(empty)'}`)
+  }
+  return cohereModelId(codes[0])
+}
+
+function cohereSectionRecords(body, announced, sourceUrl) {
+  const paragraphs = [...body.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+  const retirement = paragraphs.filter(p => /^Effective .+, the following models will be retired:$/i.test(plainText(p[1])))
+  const deprecated = paragraphs.filter(p => /^Deprecated Models:$/i.test(plainText(p[1])))
+  if (!retirement.length && !deprecated.length && !/<code\b/i.test(body)) return []
+  const tables = [...body.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+  const shapes = Number(retirement.length > 0) + Number(deprecated.length > 0) + Number(tables.length > 0)
+  if (shapes > 1 || retirement.length > 1 || deprecated.length > 1) throw new Error('ambiguous section shape')
+  if (retirement.length) {
+    const paragraph = retirement[0]
+    const effective = plainText(paragraph[1]).match(/^Effective (.+), the following models will be retired:$/i)[1]
+    const shutdown = cohereDate(effective)
+    const ids = cohereListItems(body.slice(paragraph.index + paragraph[0].length)).map(cohereSingleCode)
+    const groups = [...body.matchAll(/<li\b[^>]*>((?:(?!<li\b)[\s\S])*?tasks alternatives:)\s*(?:<!--[^]*?-->\s*)?(<ul\b[^>]*>[\s\S]*?<\/ul>)\s*<\/li>/gi)]
+    const labels = plainText(body).match(/\b\w+ tasks alternatives:/g) ?? []
+    if (!groups.length || groups.length !== labels.length) throw new Error('missing or malformed task-grouped alternatives')
+    const accountedCodes = ids.length + groups.reduce((count, group) => count + codeText(group[2]).length, 0)
+    if (codeText(body).length !== accountedCodes) throw new Error('unrecognised code ids outside retirement and task alternatives lists')
+    const notes = groups.map(group => {
+      const label = plainText(group[1])
+      if (!/^[A-Za-z]+ tasks alternatives:$/.test(label)) throw new Error(`unrecognised alternatives group: ${label}`)
+      const alternatives = cohereListItems(group[2]).map(cohereSingleCode)
+      return `${label} ${alternatives.join(', ')}`
+    })
+    return ids.map(id => ({ id, announced, shutdown, source: sourceUrl, replacement_note: notes.join('; ') }))
+  }
+  if (deprecated.length) {
+    const paragraph = deprecated[0]
+    const records = cohereListItems(body.slice(paragraph.index + paragraph[0].length)).map(item => {
+      const text = plainText(item)
+      const match = text.match(/^(\S+)(?:\s+\(and the alias\s+([^()]+)\))?(?:\s+\(Refer to .+ for alternatives\)\.)?$/i)
+      if (!match) throw new Error(`unrecognised deprecated model item: ${text}`)
+      const id = cohereModelId(match[1])
+      const aliases = match[2] ? [cohereModelId(match[2].trim())] : []
+      if (codeText(item).some(code => code !== id && !aliases.includes(code))) {
+        throw new Error(`unexpected model ids in row: ${text}`)
+      }
+      const record = { id, announced, source: sourceUrl }
+      if (aliases.length) record.aliases = aliases
+      return record
+    })
+    for (const p of paragraphs) {
+      const match = plainText(p[1]).match(/^For (\w+) model replacements, we recommend\b/i)
+      if (!match) continue
+      const options = codeText(p[1]).map(cohereModelId)
+      if (!options.length) throw new Error(`missing exact replacement ids: ${plainText(p[1])}`)
+      for (const record of records.filter(record => record.id.startsWith(match[1]))) {
+        if (record.replacement_options) throw new Error(`ambiguous replacement paragraphs for ${record.id}`)
+        record.replacement_options = [...options]
+      }
+    }
+    return records
+  }
+  if (tables.length) {
+    const records = []
+    for (const table of tables) {
+      const rows = tableRows(table[1])
+      const headers = headerIndexes(rows, 'cohere')
+      if (!headers || headers.rejectedReason) throw new Error(`unrecognised model table: ${headers?.rejectedReason ?? 'missing headers'}`)
+      if (rows.length <= headers.row + 1) throw new Error('model table has no data rows')
+      for (const row of rows.slice(headers.row + 1)) {
+        const label = row.cells[headers.model]?.text || '(empty)'
+        try {
+          if (row.cells.length !== rows[headers.row].cells.length || row.cells.some(cell => cell.kind !== 'td')) {
+            throw new Error('unexpected cells')
+          }
+          const id = cohereModelId(modelId(row.cells[headers.model].html))
+          if (codeText(row.cells[headers.model].html).some(code => code !== id)) throw new Error('ambiguous model ids')
+          const shutdown = cohereDate(row.cells[headers.date].text)
+          const replacementCell = row.cells[headers.recommended].html
+          codeText(replacementCell).forEach(cohereModelId)
+          records.push({ id, announced, shutdown, source: sourceUrl, ...extractReplacementFields(replacementCell) })
+        } catch (error) {
+          throw new Error(`row ${label}: ${error.message}`)
+        }
+      }
+    }
+    return records
+  }
+  if (/<code\b/i.test(body)) throw new Error('unrecognised section shape containing code ids')
+  return []
+}
+
+export function parseCohereDeprecations(html, sourceUrl = PROVIDERS.cohere.deprecationsUrl) {
+  if (typeof html !== 'string' || !html.trim()) throw new Error('cohere deprecations page is empty')
+  try {
+    new URL(sourceUrl)
+  } catch {
+    throw new Error(`cohere deprecations source is not a URL: ${sourceUrl}`)
+  }
+  const headings = [...html.matchAll(/<h([12])\b[^>]*>([\s\S]*?)<\/h\1>/gi)]
+  const historyIndex = headings.findIndex(heading => plainText(heading[2]) === 'Deprecation History')
+  if (historyIndex < 0) throw new Error('cohere deprecations page has no Deprecation History')
+  const history = headings[historyIndex]
+  const body = html.slice(history.index + history[0].length, headings[historyIndex + 1]?.index ?? html.length)
+  const sections = [...body.matchAll(/<h3\b[^>]*>([\s\S]*?)<\/h3>/gi)]
+  if (!sections.length) throw new Error('cohere Deprecation History has no announcement headings')
+  const records = new Map()
+  for (const [index, section] of sections.entries()) {
+    const heading = decodeEntities(section[1].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim()
+    try {
+      const date = heading.match(/^(\d{4}-\d{2}-\d{2}):\s+\S/)
+      if (!date) throw new Error('heading must start with YYYY-MM-DD: title')
+      const announced = assertIsoDate(date[1], 'announcement date')
+      const content = body.slice(section.index + section[0].length, sections[index + 1]?.index ?? body.length)
+      for (const record of cohereSectionRecords(content, announced, sourceUrl)) {
+        if (record.shutdown && record.shutdown < announced) throw new Error(`row ${record.id} has shutdown before announcement`)
+        const previous = records.get(record.id)
+        if (previous && JSON.stringify(previous) !== JSON.stringify(record)) throw new Error(`conflicting rows for ${record.id}`)
+        records.set(record.id, record)
+      }
+      identityIndex([...records.values()])
+    } catch (error) {
+      throw new Error(`cohere deprecations section "${heading}": ${error.message}`)
+    }
+  }
+  return [...records.values()]
+}
+
 const MAX_MODEL_PAGES = 20
 const GOOGLE_MODEL_PAGE_SIZE = 1000
 
@@ -1008,6 +1171,33 @@ export function parseGoogleModelsResponse(body) {
   return parseGoogleModelsPage(body).ids
 }
 
+export function parseCohereModelsResponse(body) {
+  let parsed
+  try {
+    parsed = typeof body === 'string' ? JSON.parse(body) : body
+  } catch (error) {
+    throw new Error(`cohere models response is not valid JSON: ${error.message}`)
+  }
+  if (!Array.isArray(parsed?.models)) throw new Error('cohere models response has no models array')
+  const ids = []
+  const deprecatedIds = []
+  for (const row of parsed.models) {
+    const id = row?.name
+    if (typeof id !== 'string' || !MODEL_ID_PATTERN.test(id)) throw new Error(`cohere models response contains an invalid model id: ${id}`)
+    if (ids.includes(id)) throw new Error(`cohere models response contains duplicate model id ${id}`)
+    if (row.is_deprecated !== undefined && typeof row.is_deprecated !== 'boolean') {
+      throw new Error(`cohere models response entry ${id} has a non-boolean is_deprecated value`)
+    }
+    ids.push(id)
+    if (row.is_deprecated === true) deprecatedIds.push(id)
+  }
+  const nextPageToken = parsed.next_page_token
+  if (nextPageToken !== undefined && (typeof nextPageToken !== 'string' || !nextPageToken.trim())) {
+    throw new Error('cohere models response has an invalid next_page_token value')
+  }
+  return { ids, deprecatedIds, nextPageToken }
+}
+
 export const parseOpenAIModels = body => parseModelsResponse(body, 'openai')
 export const parseAnthropicModels = body => parseModelsResponse(body, 'anthropic')
 export const parseGoogleModels = parseGoogleModelsResponse
@@ -1073,6 +1263,28 @@ async function fetchPaginatedModels(config, headers, fetchImpl) {
     url = nextPageUrl(config.modelsUrl, cursorParameter, cursor)
   }
   throw new Error(`${config.publisher} models endpoint pagination failed`)
+}
+
+async function fetchPaginatedCohereModels(config, headers, fetchImpl) {
+  const ids = new Set()
+  const deprecatedIds = new Set()
+  const seenTokens = new Set()
+  const firstPage = new URL(config.modelsUrl)
+  firstPage.searchParams.delete('page_token')
+  if (!firstPage.searchParams.has('page_size')) firstPage.searchParams.set('page_size', '1000')
+  let url = firstPage.toString()
+  for (let page = 1; page <= MAX_MODEL_PAGES; page++) {
+    const body = await fetchBody(url, headers, config.publisher, fetchImpl)
+    const parsed = parseCohereModelsResponse(body)
+    for (const id of parsed.ids) ids.add(id)
+    for (const id of parsed.deprecatedIds) deprecatedIds.add(id)
+    if (parsed.nextPageToken === undefined) return { ids: [...ids], deprecatedIds: [...deprecatedIds] }
+    if (page === MAX_MODEL_PAGES) throw new Error(`cohere models endpoint exceeded pagination cap of ${MAX_MODEL_PAGES} pages`)
+    if (seenTokens.has(parsed.nextPageToken)) throw new Error('cohere models pagination token repeated')
+    seenTokens.add(parsed.nextPageToken)
+    url = nextPageUrl(firstPage, 'page_token', parsed.nextPageToken)
+  }
+  throw new Error('cohere models endpoint pagination failed')
 }
 
 function clone(value) {
@@ -1306,6 +1518,7 @@ export async function loadProviderSources(config, options = {}) {
   let currentIds = null
   let endpointAvailable = false
   let currentModels = []
+  let deprecatedIds = []
 
   if (fixtures) {
     const modelFixture = findFixture(fixtures, config.publisher, 'models')
@@ -1314,6 +1527,10 @@ export async function loadProviderSources(config, options = {}) {
       const parsed = parseMistralModelsResponse(modelBody)
       currentIds = parsed.ids
       currentModels = parsed.models
+    } else if (config.publisher === 'cohere') {
+      const parsed = parseCohereModelsResponse(modelBody)
+      currentIds = parsed.ids
+      deprecatedIds = parsed.deprecatedIds
     } else {
       currentIds = config.publisher === 'google'
         ? parseGoogleModelsResponse(modelBody)
@@ -1329,7 +1546,7 @@ export async function loadProviderSources(config, options = {}) {
       notice(`notice: ${keyEnvs.join(' or ')} is unset; skipping ${config.publisher} models endpoint and preserving committed entries`)
     } else {
       const headers = { ...config.headers }
-      if (['openai', 'mistral'].includes(config.publisher)) headers.Authorization = `Bearer ${key}`
+      if (['openai', 'mistral', 'cohere'].includes(config.publisher)) headers.Authorization = `Bearer ${key}`
       if (config.publisher === 'anthropic') headers['x-api-key'] = key
       if (config.keyHeader) headers[config.keyHeader] = key
       if (config.publisher === 'mistral') {
@@ -1339,6 +1556,10 @@ export async function loadProviderSources(config, options = {}) {
         currentModels = parsed.models
       } else if (config.publisher === 'google') {
         currentIds = await fetchPaginatedGoogleModels(config, headers, fetchImpl)
+      } else if (config.publisher === 'cohere') {
+        const parsed = await fetchPaginatedCohereModels(config, headers, fetchImpl)
+        currentIds = parsed.ids
+        deprecatedIds = parsed.deprecatedIds
       } else {
         currentIds = await fetchPaginatedModels(config, headers, fetchImpl)
       }
@@ -1365,7 +1586,9 @@ export async function loadProviderSources(config, options = {}) {
         ? parseAnthropicDeprecations(html, config.deprecationsUrl)
         : config.publisher === 'mistral'
           ? mistral.records
-          : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
+          : config.publisher === 'cohere'
+            ? parseCohereDeprecations(html, config.deprecationsUrl)
+            : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
   for (const model of currentModels) {
     if (!model.aliases.length) continue
     const record = deprecations.find(record => record.id === model.id)
@@ -1376,5 +1599,10 @@ export async function loadProviderSources(config, options = {}) {
   for (const row of skipped) {
     notice(`notice: ${config.publisher} skipped ${row.model} (version ${row.version || 'not listed'}): no API id`)
   }
-  return { currentIds, endpointAvailable, deprecations, skipped }
+  const datedIds = new Set(deprecations.filter(record => record.announced).flatMap(record => [record.id, ...(record.aliases ?? [])]))
+  const undatedDeprecatedIds = deprecatedIds.filter(id => !datedIds.has(id))
+  for (const id of undatedDeprecatedIds) {
+    notice(`notice: ${config.publisher} models endpoint flags ${id} as deprecated without a dated announcement`)
+  }
+  return { currentIds, endpointAvailable, deprecations, skipped, undatedDeprecatedIds }
 }
