@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-08-31T05:30:19.216Z",
+  "generated": "2026-09-07T05:31:02.966Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -1170,6 +1170,9 @@
     },
     {
       "id": "gpt-live-transcribe"
+    },
+    {
+      "id": "gpt-6-astra"
     }
   ]
 }
