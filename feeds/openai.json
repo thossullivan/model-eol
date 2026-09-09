@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-09-09T00:22:25.921Z",
+  "generated": "2026-09-09T03:18:35.969Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -1530,7 +1530,16 @@
       "id": "gpt-live-transcribe"
     },
     {
-      "id": "gpt-6-astra"
+      "id": "gpt-6-astra",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-09-08",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
+        }
+      ]
     }
   ]
 }
