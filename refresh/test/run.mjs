@@ -50,6 +50,7 @@ import {
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
 import { parseRefreshArgs, usage, validateGeneratedFeeds } from '../refresh.mjs'
 import { validateFeed } from '../../lib/validate-feed.mjs'
+import { lifecycleFor } from '../../lib/feeds.mjs'
 import { classifyFeedReleasePaths } from '../../scripts/feed-release-guard.mjs'
 import { validateReleaseVersion } from '../../scripts/validate-release-version.mjs'
 import { resolveReleaseState, targetReleaseVersion } from '../../scripts/release-state.mjs'
@@ -1377,8 +1378,9 @@ const azureById = id => azureRecords.find(record => record.azureId === id && rec
 assert(azureRecords.length === 174, 'Azure fixture parses 174 records after duplicate collapse')
 assert(azureRecords.filter(record => record.publisher === 'openai').length === 74, 'Azure OpenAI collapses 77 lifecycle rows into 74 records')
 assert(azureRecords.filter(record => record.publisher === 'anthropic').length === 14, 'Azure Anthropic collapses 18 hosting rows into 14 records')
-assert(azureRecords.filter(record => !record.publisher).length === 86, 'Azure retains all 86 unbound section rows for reporting')
-assert(AZURE_PUBLISHER_BY_SECTION.size === 2 && AZURE_PUBLISHER_BY_SECTION.get('Azure OpenAI') === 'openai' && AZURE_PUBLISHER_BY_SECTION.get('Anthropic') === 'anthropic', 'Azure exports one publisher map keyed by section heading')
+assert(azureRecords.filter(record => record.publisher === 'mistral').length === 8 && azureRecords.filter(record => record.publisher === 'cohere').length === 11, 'Azure binds both Mistral AI and Cohere hosting sections')
+assert(azureRecords.filter(record => !record.publisher).length === 67, 'Azure retains all 67 unbound section rows for reporting')
+assert(AZURE_PUBLISHER_BY_SECTION.size === 4 && AZURE_PUBLISHER_BY_SECTION.get('Azure OpenAI') === 'openai' && AZURE_PUBLISHER_BY_SECTION.get('Anthropic') === 'anthropic' && AZURE_PUBLISHER_BY_SECTION.get('Mistral AI') === 'mistral' && AZURE_PUBLISHER_BY_SECTION.get('Cohere') === 'cohere', 'Azure exports one publisher map keyed by section heading')
 assert(azureById('gpt-4o-2024-05-13')?.shutdown === '2026-10-01' && azureById('sora-2-2025-12-08')?.shutdown === '2026-10-15', 'Azure keeps OpenAI dated versions as distinct feed candidates')
 assert(azureById('text-embedding-ada-002')?.shutdown === '2028-02-09' && azureById('tts')?.version === '001', 'Azure integer versions bind to bare IDs')
 assert(azureById('claude-mythos-preview')?.shutdown === '2027-04-02', 'Azure removes a trailing model qualifier before ID validation')
@@ -1404,6 +1406,22 @@ const azureFineTuning = parseAzureModelRetirementScheduleHtml(azureTable('Azure 
 assert(azureFineTuning.records.length === 1 && azureFineTuning.records[0].azureId === 'lifecycle-model', 'Azure skips both fine-tuning tables by header detection')
 assert(azureError(fineTuningTables).includes('no recognised lifecycle table'), 'fine-tuning tables alone cannot pass as an Azure lifecycle page')
 assert(azureError(azureTable('Azure OpenAI', [azureRow('changed-header')], ['Model', 'Version', 'Status', 'Retirement date', 'Replacement'])).includes('invalid header row'), 'Azure rejects lifecycle header drift instead of silently skipping it')
+const azureValidTable = azureTable('Azure OpenAI', [azureRow('valid-header')])
+for (const headers of [
+  ['Model ID', 'Version', 'Status', 'Retirement date', 'Replacement'],
+  ['Scheduled retirement', 'Details'],
+  ['Lifecycle phase', 'Details'],
+  ['Replacement model', 'Details'],
+  ['Model ID', 'Version'],
+  ['Model', 'Status'],
+  ['Version', 'Status'],
+  ['Model', 'Model ID'],
+]) {
+  const error = azureError(azureValidTable + azureTable('Azure OpenAI', [], headers))
+  assert(error.includes('invalid header row') && error.includes(headers.join(' | ').toLowerCase()), `Azure names drifted headers: ${headers.join(' | ')}`)
+}
+const azureFaqTable = azureTable('FAQ', [['When is retirement?', 'See the lifecycle policy.', 'Replacement details']], ['Question', 'Answer', 'Learn more'])
+assert(parseAzureModelRetirementScheduleHtml(azureFaqTable + azureValidTable + azureFaqTable).records.length === 1, 'Azure skips unrelated FAQ headers and lifecycle words in FAQ answers')
 assert(azureError(azureTable('Anthropic', [azureRow('invalid model (preview)')])).includes('invalid model id'), 'Azure validates Anthropic IDs after removing a trailing qualifier')
 assert(azureById('gpt-4.1-2025-04-14')?.shutdown === '2027-04-14', 'the live fine-tuning table cannot overwrite the base model retirement')
 
@@ -1432,6 +1450,68 @@ for (const [label, html, diagnostic] of [
   ['same date conflict', azureTable('Anthropic', [azureRow('same-date'), azureRow('same-date', '2', 'Retired')]), 'same-date'],
   ['missing date conflict', azureTable('Anthropic', [azureRow('missing-date'), azureRow('missing-date', '2', 'GA', '—')]), 'missing-date'],
 ]) assert(azureError(html).includes(diagnostic), `Azure rejects ${label}`)
+
+const azureSnapshotSource = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [['gpt-4', '0314', 'Retired', '2026-01-01', '-']]))
+const azureSnapshotFeeds = [{ publisher: 'openai', models: [{ id: 'gpt-4-0613', aliases: ['gpt-4'] }, { id: 'gpt-4-0314' }] }]
+const azureSnapshotMerge = mergeDistributions(azureSnapshotFeeds, { via: 'azure-ai-foundry', records: azureSnapshotSource.records })
+assert(!azureSnapshotMerge.feeds[0].models[0].distributions && azureSnapshotMerge.feeds[0].models[1].distributions?.[0]?.shutdown === '2026-01-01' && azureSnapshotMerge.feeds[0].models[1].distributions?.[0]?.status === 'retired', 'Azure review row gpt-4 0314 retires only gpt-4-0314 despite the gpt-4 alias on gpt-4-0613')
+for (const version of ['0314', '0613', '1106', '2025-01-01']) {
+  const source = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [azureRow('snapshot-model', version)]))
+  const missing = mergeDistributions([{ publisher: 'openai', models: [{ id: 'bare-target', aliases: ['snapshot-model'] }] }], { via: 'azure-ai-foundry', records: source.records })
+  assert(!missing.feeds[0].models[0].distributions && missing.unconfirmedDistributions.some(item => item.id === `snapshot-model-${version}` && item.reason === 'source model is absent from publisher feed'), `Azure missing snapshot ${version} stays unconfirmed without bare alias fallback`)
+  const alias = mergeDistributions([{ publisher: 'openai', models: [{ id: 'exact-alias-target', aliases: [`snapshot-model-${version}`] }] }], { via: 'azure-ai-foundry', records: source.records })
+  assert(alias.feeds[0].models[0].distributions?.length === 1, `Azure snapshot ${version} binds through an exact alias`)
+}
+for (const version of ['1', '2', '001', '-']) {
+  assert(parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [azureRow('bare-model', version)])).records[0].azureId === 'bare-model', `Azure OpenAI version ${version} uses the bare ID`)
+}
+for (const version of ['3', '01', '123', '12345', 'latest']) {
+  assert(azureError(azureTable('Azure OpenAI', [azureRow('unsupported-version', version)])).includes('unsupported version'), `Azure OpenAI rejects unsupported version ${version}`)
+}
+
+const azureMistralFeed = JSON.parse(fs.readFileSync(path.join(root, 'feeds/mistral.json'), 'utf8'))
+const azureMistralMerge = mergeDistributions([azureMistralFeed], { via: 'azure-ai-foundry', records: azureRecords.filter(record => record.section === 'Mistral AI') })
+for (const id of ['mistral-medium-2505', 'mistral-small-2503']) {
+  const model = azureMistralMerge.feeds[0].models.find(model => model.id === id)
+  const distribution = model.distributions?.find(item => item.via === 'azure-ai-foundry')
+  assert(distribution?.status === 'active' && !Object.hasOwn(distribution, 'shutdown'), `Azure fixture binds ${id} as active without shutdown`)
+  const lifecycle = lifecycleFor(model, { via: 'azure-ai-foundry', today: new Date('2026-09-08T00:00:00Z'), days: 90 })
+  assert(lifecycle.via === 'azure-ai-foundry' && lifecycle.status === 'ok', `Azure ${id} avoids the retired publisher fallback`)
+}
+for (const [section, publisher, prefix] of [['Mistral AI', 'mistral', ''], ['Cohere', 'cohere', 'Cohere-']]) {
+  const modelId = publisher === 'cohere' ? 'command-r-08-2024' : 'mistral-medium-2505'
+  const rows = ['1', '2', '001', '0314', '-'].map(version => azureRow(`${prefix}${modelId}`, version, 'GA', '-'))
+  const source = parseAzureModelRetirementScheduleHtml(`<h2>Models sold by Azure</h2>${azureTable(section, rows)}<h2>Models from partners</h2>${azureTable(section, rows)}`)
+  const merged = mergeDistributions([{ publisher, models: [{ id: modelId }] }], { via: 'azure-ai-foundry', records: source.records })
+  assert(source.records.length === 1 && merged.feeds[0].models[0].distributions?.length === 1, `Azure ${section} collapses matching integer and dash hosting rows into one distribution`)
+  const alias = mergeDistributions([{ publisher, models: [{ id: 'alias-target', aliases: [modelId] }] }], { via: 'azure-ai-foundry', records: source.records })
+  assert(alias.feeds[0].models[0].distributions?.length === 1, `Azure ${section} binds exact aliases`)
+  const unresolved = mergeDistributions([{ publisher, models: [{ id: modelId.toUpperCase() }] }], { via: 'azure-ai-foundry', records: source.records })
+  assert(!unresolved.feeds[0].models[0].distributions && unresolved.noPublisherFeed.length === 0 && unresolved.unconfirmedDistributions.some(item => item.publisher === publisher && item.id === modelId && item.reason), `Azure ${section} reports unresolved IDs without changing case`)
+  for (const conflicting of [azureRow(`${prefix}${modelId}`, '2', 'Retired', '-'), azureRow(`${prefix}${modelId}`, '2', 'GA', '2028-01-01')]) {
+    const error = azureError(azureTable(section, [azureRow(`${prefix}${modelId}`), conflicting]))
+    assert(error.includes('conflicting rows') && error.includes(modelId), `Azure ${section} rejects conflicting hosting rows`)
+  }
+  for (const version of ['2025-01-01', 'latest']) {
+    assert(azureError(azureTable(section, [azureRow(`${prefix}${modelId}`, version)])).includes('unsupported version'), `Azure ${section} rejects version ${version}`)
+  }
+  let wrongPublisher = ''
+  try {
+    mergeDistributions([{ publisher: 'openai', models: [{ id: modelId }] }], { via: 'azure-ai-foundry', records: source.records })
+  } catch (error) { wrongPublisher = error.message }
+  assert(wrongPublisher.includes(`binds to ${publisher}`) && wrongPublisher.includes('openai feed'), `Azure ${section} derives the publisher from its heading`)
+}
+for (const [sourceId, normalizedId, binds] of [
+  ['Cohere-command-r-08-2024', 'command-r-08-2024', true],
+  ['cohere-command-r-08-2024', 'command-r-08-2024', true],
+  ['command-r-08-2024', 'command-r-08-2024', true],
+  ['COHERE-command-r-08-2024', 'COHERE-command-r-08-2024', false],
+  ['Cohere-cohere-command-r-08-2024', 'cohere-command-r-08-2024', false],
+]) {
+  const source = parseAzureModelRetirementScheduleHtml(azureTable('Cohere', [azureRow(sourceId)]))
+  const merged = mergeDistributions([{ publisher: 'cohere', models: [{ id: 'command-r-08-2024' }] }], { via: 'azure-ai-foundry', records: source.records })
+  assert(binds ? merged.feeds[0].models[0].distributions?.length === 1 : !merged.feeds[0].models[0].distributions && merged.unconfirmedDistributions.some(item => item.id === normalizedId), `Azure Cohere strips at most one supported prefix from ${sourceId}`)
+}
 
 const azureMergeInput = [
   { publisher: 'openai', models: [
@@ -1962,6 +2042,9 @@ assert(mixedCohereChanged ? mixedOutputs.cohere.generated === mixedGenerated : m
 assert(['amazon', 'google', 'mistral', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
 
 const refreshWorkflow = fs.readFileSync(path.join(root, '.github/workflows/feed-refresh.yml'), 'utf8')
+for (const [output, file] of [['providers', 'provider-diff.md'], ['distributors', 'distributor-diff.md']]) {
+  assert(refreshWorkflow.includes(`if [ "\${{ steps.check.outputs.${output} }}" = "3" ] || grep -q '^## Source conflicts$' ${file}; then cat ${file};`), `workflow includes ${file} for source conflicts even when its check exits zero`)
+}
 assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && refreshWorkflow.includes('exit code $providers'), 'workflow fails explicitly on unexpected provider refresh exit codes')
 assert(refreshWorkflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]') && refreshWorkflow.includes('exit code $distributors'), 'workflow fails explicitly on unexpected distributor refresh exit codes')
 assert(refreshWorkflow.includes('GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}'), 'workflow passes the Google models endpoint credential')

@@ -148,6 +148,19 @@ with [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-ca
 The legacy table wins overlaps; card floors become tentative distribution dates without announcements.
 Refresh reports exact-date conflicts, unmatched publisher IDs, and cards without usable lifecycle dates.
 
+Azure binds publisher feeds through the Azure OpenAI, Anthropic, Mistral AI, and Cohere section headings.
+OpenAI dates and four-digit versions require exact snapshot IDs or aliases.
+OpenAI versions `1`, `2`, `001`, and dashes use bare IDs.
+Mistral and Cohere integer versions and dashes use bare IDs.
+Cohere binding strips one leading `Cohere-` or `cohere-` prefix.
+Binding preserves the remaining case.
+Missing candidates remain unconfirmed.
+Matching hosting rows collapse.
+Conflicting Mistral or Cohere rows stop refresh.
+Lifecycle header drift stops refresh.
+Fine-tuning and unrelated tables remain excluded.
+Refresh PR bodies include source conflicts even when the corresponding check reports no material changes.
+
 The staged public-contract milestone gives every public schema a canonical ID, exposes
 `model-eol validate`, and adds a Pages publisher for hosted feeds, Atom, and
 `last_checked` health. The host becomes authoritative only after Pages is enabled

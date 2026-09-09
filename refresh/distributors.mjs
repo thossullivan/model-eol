@@ -13,6 +13,8 @@ export const AZURE_MODEL_RETIREMENT_SCHEDULE_URL = 'https://learn.microsoft.com/
 export const AZURE_PUBLISHER_BY_SECTION = new Map([
   ['Azure OpenAI', 'openai'],
   ['Anthropic', 'anthropic'],
+  ['Mistral AI', 'mistral'],
+  ['Cohere', 'cohere'],
 ])
 
 export const DISTRIBUTORS = {
@@ -503,10 +505,13 @@ const AZURE_LIFECYCLE_STATUSES = new Map([
 
 function azureHeaderIndexes(rows) {
   for (const [row, candidate] of rows.entries()) {
+    if (row > 0 && !candidate.cells.some(cell => cell.kind === 'th')) continue
     const labels = candidate.cells.map(cell => cell.text.toLowerCase())
     const fineTuning = ['model', 'version', 'training retirement date', 'deployment retirement date']
     if (labels.length === fineTuning.length && fineTuning.every(label => labels.includes(label))) return undefined
-    if (!labels.includes('model') && !labels.includes('lifecycle')) continue
+    const lifecycleHeader = labels.some(label => /retirement|lifecycle|replacement/.test(label))
+      || ['model', 'model id', 'version', 'status'].filter(label => labels.includes(label)).length >= 2
+    if (!lifecycleHeader) continue
     const columns = ['model', 'version', 'lifecycle', 'retirement date', 'replacement']
     if (labels.length !== columns.length || columns.some(label => !labels.includes(label))) {
       throw new Error(`azure-ai-foundry lifecycle table has invalid header row: ${labels.join(' | ')}`)
@@ -561,8 +566,10 @@ export function parseAzureModelRetirementScheduleHtml(html) {
       if (!validId && publisher) throw new Error(`azure-ai-foundry lifecycle entry ${label} has an invalid model id`)
       const version = versionCell.text
       const datedVersion = /^\d{4}-\d{2}-\d{2}$/.test(version)
-      if (datedVersion) azureIsoDate(version, `${label} version`)
-      else if (!/^(?:\d+|-)$/.test(version)) {
+      const hostingVersion = publisher === 'mistral' || publisher === 'cohere'
+      const supportedVersion = publisher === 'openai' ? /^(?:\d{4}|1|2|001|-)$/ : /^(?:\d+|-)$/
+      if (datedVersion && !hostingVersion) azureIsoDate(version, `${label} version`)
+      else if (!supportedVersion.test(version)) {
         throw new Error(`azure-ai-foundry lifecycle entry ${label} has an unsupported version: ${version || '(empty)'}`)
       }
       const lifecycle = lifecycleCell.text
@@ -570,7 +577,8 @@ export function parseAzureModelRetirementScheduleHtml(html) {
       if (!status) throw new Error(`azure-ai-foundry lifecycle entry ${label} has an unsupported lifecycle status: ${lifecycle || '(empty)'}`)
       const retirement = retirementCell.text
       const shutdown = retirement === '-' ? undefined : azureIsoDate(retirement, `${label} retirement`)
-      const azureId = publisher === 'openai' && datedVersion ? `${modelId}-${version}` : modelId
+      const snapshotVersion = publisher === 'openai' && (datedVersion || /^\d{4}$/.test(version))
+      const azureId = snapshotVersion ? `${modelId}-${version}` : modelId
       const record = { azureId, modelId, version, group, section, lifecycle, status }
       if (publisher) record.publisher = publisher
       if (!validId) record.reason = 'invalid model id'
@@ -579,6 +587,7 @@ export function parseAzureModelRetirementScheduleHtml(html) {
       const previous = unique.get(key)
       if (!previous) unique.set(key, record)
       else if (previous.shutdown !== shutdown || previous.lifecycle !== lifecycle) {
+        if (hostingVersion) throw new Error(`azure-ai-foundry lifecycle entry ${label} has conflicting rows`)
         if (!previous.shutdown || !shutdown || previous.shutdown === shutdown) {
           throw new Error(`azure-ai-foundry lifecycle entry ${label} has conflicting rows without distinct retirement dates`)
         }
@@ -710,7 +719,9 @@ function recordForMerge(record, via) {
     sourceId,
     namespace,
     expectedPublisher: isAzure ? publisher : expectedPublisher(namespace),
-    normalizedId: isBedrock ? normalizeBedrockId(sourceId) : isAzure ? sourceId : normalizeVertexId(sourceId),
+    normalizedId: isBedrock ? normalizeBedrockId(sourceId) : isAzure
+      ? publisher === 'cohere' ? sourceId.replace(/^(?:Cohere|cohere)-/, '') : sourceId
+      : normalizeVertexId(sourceId),
     announced,
     shutdown,
     date_precision: precisionField(record.date_precision, sourceId, via),

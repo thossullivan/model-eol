@@ -147,9 +147,8 @@ jobs:
             fi
             echo "Automated weekly refresh. Review the semantic diff - a broken parse reads as a nonsense diff, not silently wrong data."
             echo
-            # Include only the sources that materially changed.
-            if [ "${{ steps.check.outputs.providers }}" = "3" ]; then cat provider-diff.md; echo; fi
-            if [ "${{ steps.check.outputs.distributors }}" = "3" ]; then cat distributor-diff.md; fi
+            if [ "${{ steps.check.outputs.providers }}" = "3" ] || grep -q '^## Source conflicts$' provider-diff.md; then cat provider-diff.md; echo; fi
+            if [ "${{ steps.check.outputs.distributors }}" = "3" ] || grep -q '^## Source conflicts$' distributor-diff.md; then cat distributor-diff.md; fi
           } > pr-body.md
           if [ "$reusing" = true ]; then
             gh pr edit "$pr_number" --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md
