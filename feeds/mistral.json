@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "mistral",
-  "generated": "2026-09-09T00:22:25.923Z",
+  "generated": "2026-09-09T00:49:46.824Z",
   "source": "https://docs.mistral.ai/models",
   "models": [
     {
@@ -128,14 +128,28 @@
       "announced": "2026-05-22",
       "shutdown": "2026-08-31",
       "source": "https://docs.mistral.ai/models",
-      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative"
+      "replacement_note": "Mistral lists Mistral Medium 3.5 as the alternative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "mistral-small-2503",
       "announced": "2025-11-06",
       "shutdown": "2025-11-30",
       "source": "https://docs.mistral.ai/models",
-      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
     },
     {
       "id": "mistral-ocr-2503",
