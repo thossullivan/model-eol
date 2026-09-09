@@ -835,8 +835,10 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
 
 export const parseGoogleGeminiDeprecations = parseGoogleDeprecations
 
-function mistralHeaderIndexes(rows) {
+function mistralHeaderIndexes(rows, pendingHeaders) {
+  const hasHeaderCells = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
   for (const [index, row] of rows.entries()) {
+    if (!row.cells.some(cell => cell.kind === 'th') && (hasHeaderCells || index > 0 || pendingHeaders)) continue
     const labels = row.cells.map(cell => cell.text.trim().toLowerCase())
     const required = { model: 'model', version: 'version', api: 'api', dates: 'deprecation retirement', alternative: 'alternative' }
     const lifecycle = labels.some(label => /deprecation|retirement/.test(label)) ||
@@ -873,7 +875,7 @@ export function parseMistralDeprecations(html, sourceUrl = PROVIDERS.mistral.dep
   let recognisedTables = 0
   for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
     const rows = tableRows(table[1])
-    const ownHeaders = mistralHeaderIndexes(rows)
+    const ownHeaders = mistralHeaderIndexes(rows, pendingHeaders)
     if (pendingHeaders && (/<h[1-6]\b/i.test(html.slice(pendingHeaders.end, table.index)) ||
       ownHeaders || !rows.length || rows.some(row => !row.cells.length || row.cells.some(cell => cell.kind !== 'td')))) {
       throw new Error('mistral deprecations table has a dangling header without an immediately following body table')
@@ -1110,18 +1112,43 @@ export function parseCohereDeprecations(html, sourceUrl = PROVIDERS.cohere.depre
   const body = html.slice(history.index + history[0].length, headings[historyIndex + 1]?.index ?? html.length)
   const sections = [...body.matchAll(/<h3\b[^>]*>([\s\S]*?)<\/h3>/gi)]
   if (!sections.length) throw new Error('cohere Deprecation History has no announcement headings')
-  const records = new Map()
-  const replacementSources = new Map()
-  for (const [index, section] of sections.entries()) {
+  const parsedSections = sections.map((section, index) => {
     const heading = decodeEntities(section[1].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim()
     try {
       const date = heading.match(/^(\d{4}-\d{2}-\d{2}):\s+\S/)
       if (!date) throw new Error('heading must start with YYYY-MM-DD: title')
       const announced = assertIsoDate(date[1], 'announcement date')
       const content = body.slice(section.index + section[0].length, sections[index + 1]?.index ?? body.length)
-      const identity = identityIndex([...records.values()])
-      for (const record of cohereSectionRecords(content, announced, sourceUrl)) {
+      const records = cohereSectionRecords(content, announced, sourceUrl)
+      for (const record of records) {
         if (record.shutdown && record.shutdown < announced) throw new Error(`row ${record.id} has shutdown before announcement`)
+      }
+      return { heading, announced, records }
+    } catch (error) {
+      throw new Error(`cohere deprecations section "${heading}": ${error.message}`)
+    }
+  })
+  const identities = new Map()
+  for (const { records } of parsedSections) {
+    for (const { id, aliases = [] } of records) {
+      const model = identities.get(id) ?? { id, aliases: [] }
+      model.aliases = [...new Set([...model.aliases, ...aliases])]
+      identities.set(id, model)
+    }
+  }
+  const aliases = new Set([...identities.values()].flatMap(model => model.aliases))
+  let identity
+  try {
+    // Bare alias references belong to their documented canonical model.
+    identity = identityIndex([...identities.values()].filter(model => model.aliases.length || !aliases.has(model.id)))
+  } catch (error) {
+    throw new Error(`cohere deprecations page: ${error.message}`)
+  }
+  const records = new Map()
+  const replacementSources = new Map()
+  for (const { heading, announced, records: sectionRecords } of parsedSections.sort((left, right) => left.announced.localeCompare(right.announced))) {
+    try {
+      for (const record of sectionRecords) {
         record.id = identity.get(record.id)?.id ?? record.id
         const previous = records.get(record.id)
         if (!previous) {

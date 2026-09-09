@@ -150,14 +150,18 @@ Refresh reports exact-date conflicts, unmatched publisher IDs, and cards without
 Legacy precedence also applies when different Bedrock IDs resolve to one publisher model through aliases.
 Conflicting card records still stop refresh after alias resolution.
 Each card must contain exactly one Model ID table.
+Any first-row cell containing the exact text `Model ID` identifies that table, including `td` cells.
 Card parsing removes comments before extraction and rejects lifecycle labels outside their expected paragraphs.
+The label guard counts whole labels regardless of case or colon presence.
 A standalone non-N/A Model EOL date supplies lifecycle data.
 Index links resolve within the index directory after query and fragment removal.
 Invalid card links stop refresh.
 Distributor table expansion caps each span at 64 and each table at 10,000 cells.
 
 Mistral rejects lifecycle headers containing data cells or unexpected labels.
-Cohere resolves later section IDs through previously documented aliases before merging lifecycle data.
+Mistral checks rows containing `th` cells for header drift.
+Without `th` cells or a pending header, it checks only the first row.
+Cohere collects identities and aliases from every section before merging records in ascending heading-date order.
 
 Azure binds publisher feeds through the Azure OpenAI, Anthropic, Mistral AI, and Cohere section headings.
 OpenAI dates and four-digit versions require exact snapshot IDs or aliases.

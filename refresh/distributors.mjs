@@ -344,7 +344,7 @@ function bedrockCardFields(html) {
   }
   const text = plainText(html)
   for (const label of BEDROCK_CARD_LABELS) {
-    const count = [...text.matchAll(new RegExp(`\\b${label}\\s*:`, 'g'))].length
+    const count = [...text.matchAll(new RegExp(`\\b${label}\\b`, 'gi'))].length
     if (count !== Number(fields.has(label))) throw new Error(`unaccounted ${label} field outside its paragraph`)
   }
   return fields
@@ -361,25 +361,19 @@ export function parseBedrockModelCardHtml(html, source) {
     if (typeof html !== 'string' || !html.trim()) throw new Error('empty page')
     html = html.replace(/<!--[\s\S]*?-->/g, '')
     const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].map(table => expandRows(tableRows(table[1])))
+    const idTables = tables.filter(rows => rows[0]?.cells.some(cell => cell.text === 'Model ID'))
+    if (!idTables.length) throw new Error('no Model ID table')
+    if (idTables.length > 1) throw new Error('more than one Model ID table')
+    const rows = idTables[0]
+    const columns = rows[0].cells.flatMap((cell, index) => cell.text === 'Model ID' ? [index] : [])
+    if (columns.length !== 1) throw new Error('ambiguous Model ID columns')
+    if (rows.length < 2) throw new Error('Model ID table has no entries')
     const ids = new Set()
-    let recognisedTables = 0
-    for (const rows of tables) {
-      const header = rows.findIndex(row => row.cells.some(cell => cell.kind === 'th' && cell.text === 'Model ID'))
-      if (header < 0) continue
-      recognisedTables++
-      if (recognisedTables > 1) throw new Error('more than one Model ID table')
-      const columns = rows[header].cells.flatMap((cell, index) => cell.text === 'Model ID' ? [index] : [])
-      if (columns.length !== 1) throw new Error('ambiguous Model ID columns')
-      let tableIds = 0
-      for (const [offset, row] of rows.slice(header + 1).entries()) {
-        const id = row.cells[columns[0]]?.text ?? ''
-        if (!isBedrockModelId(id)) throw new Error(`invalid Model ID in row ${header + offset + 2}: ${id || '(empty)'}`)
-        ids.add(id)
-        tableIds++
-      }
-      if (!tableIds) throw new Error('Model ID table has no entries')
+    for (const [offset, row] of rows.slice(1).entries()) {
+      const id = row.cells[columns[0]]?.text ?? ''
+      if (!isBedrockModelId(id)) throw new Error(`invalid Model ID in row ${offset + 2}: ${id || '(empty)'}`)
+      ids.add(id)
     }
-    if (!recognisedTables) throw new Error('no Model ID table')
     const fields = bedrockCardFields(html)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     const eol = fields.get('Model EOL date')

@@ -432,6 +432,26 @@ reviewTest('Second pass F9: Cohere merges a later command-r shutdown into its do
   })
   strictAssert.ok(!records.some(record => record.id === 'command-r'))
 })
+reviewTest('Third pass F3: Cohere resolves command-r with newest sections first and produces identical records in reverse order', () => {
+  const newestFirst = parseCohereDeprecations(coherePage(cohereAliasShutdown + cohereEarlierDeprecation))
+  const oldestFirst = parseCohereDeprecations(coherePage(cohereEarlierDeprecation + cohereAliasShutdown))
+  strictAssert.deepEqual(newestFirst, oldestFirst)
+  strictAssert.deepEqual(newestFirst.find(record => record.id === 'command-r-03-2024'), {
+    id: 'command-r-03-2024', announced: '2025-09-15', shutdown: '2026-10-01',
+    source: PROVIDERS.cohere.deprecationsUrl, aliases: ['command-r'], replacement: 'command-a-03-2025',
+  })
+  strictAssert.ok(!newestFirst.some(record => record.id === 'command-r'))
+})
+reviewTest('Third pass F3: Cohere builds identities before merging even when the alias definition has a later heading date', () => {
+  const definition = cohereEarlierDeprecation.replace('2025-09-15:', '2026-09-02:')
+  const records = parseCohereDeprecations(coherePage(cohereAliasShutdown + definition))
+  strictAssert.deepEqual(records, parseCohereDeprecations(coherePage(definition + cohereAliasShutdown)))
+  strictAssert.deepEqual(records.find(record => record.id === 'command-r-03-2024'), {
+    id: 'command-r-03-2024', announced: '2026-09-01', shutdown: '2026-10-01',
+    source: PROVIDERS.cohere.deprecationsUrl, replacement: 'command-a-03-2025', aliases: ['command-r'],
+  })
+  strictAssert.ok(!records.some(record => record.id === 'command-r'))
+})
 reviewTest('Second pass F9: Cohere refuses conflicting shutdown dates through a documented alias', () => {
   const conflict = cohereAliasShutdown.replace('2026-09-01:', '2026-09-02:').replace('2026-10-01', '2026-11-01')
   strictAssert.match(cohereRefusal(coherePage(cohereEarlierDeprecation + cohereLaterShutdown + conflict)), /conflicting rows for command-r-03-2024/)
@@ -485,6 +505,21 @@ reviewTest('Review F8: Mistral requires the immediately next table to contain bo
     strictAssert.match(mistralRefusal(mistralTables[0][0] + table + mistralTables[1][0]), /dangling header/i)
   }
 })
+const mistralRetirementGuide = '<table><tr><td>Mistral X</td><td>1</td><td>mistral-x</td><td>1/1/2026 12/1/2026</td><td>See retirement guide</td></tr></table>'
+reviewTest('Third pass F4: Mistral preserves retirement guidance in a body table under a pending header', () => {
+  const parsed = parseMistralDeprecations(mistralTables[0][0] + mistralRetirementGuide)
+  strictAssert.deepEqual(parsed, {
+    records: [{ id: 'mistral-x', announced: '2026-01-01', shutdown: '2026-12-01', source: PROVIDERS.mistral.deprecationsUrl, replacement_note: 'Mistral lists See retirement guide as the alternative' }],
+    skipped: [],
+  })
+  strictAssert.deepEqual(parseMistralDeprecations(mistralTables[0][0].replace('</table>', mistralRetirementGuide.slice(7))), parsed)
+})
+for (const firstRow of ['<tr><th>Feature</th><th>Supported</th></tr>', '<tr><td>Feature</td><td>Supported</td></tr>']) {
+  reviewTest(`Third pass F4: Mistral ignores lifecycle words in unrelated body rows after ${firstRow}`, () => {
+    const unrelated = mistralRetirementGuide.replace('<table>', `<table>${firstRow}`)
+    strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + unrelated), mistralParsed)
+  })
+}
 const mistralDriftedTable = `<table><tr><th>Model</th><th>Version</th><th>API</th><th>Deprecation date / Retirement date</th><th>Alternative</th></tr>${mistralSampleTable.slice(7, -8)}</table>`
 for (const kind of ['mixed', 'td']) {
   for (const dateLabel of ['Deprecation Retirement', 'Deprecation date / Retirement date']) {
@@ -864,6 +899,19 @@ const reviewCardSource = new URL('model-card-example.html', BEDROCK_MODEL_CARDS_
 const reviewIdTable = '<table><tr><th>Model ID</th></tr><tr><td>anthropic.example-v1:0</td></tr></table>'
 const reviewFloor = '<p>EOL no sooner than: September 1, 2027</p>'
 const reviewCard = reviewIdTable + reviewFloor
+reviewTest('Third pass F1: Bedrock counts a td Model ID header before a related th table', () => {
+  const html = '<table><tr><td>Model ID</td></tr><tr><td>anthropic.example-v1:0</td></tr></table><p>Model EOL date: December 1, 2026</p><h2>Related models</h2><table><tr><th>Model ID</th></tr><tr><td>anthropic.other-v1:0</td></tr></table>'
+  strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), error =>
+    error.message.includes(reviewCardSource) && error.message.includes('more than one Model ID table'))
+})
+reviewTest('Third pass F1: Bedrock recognises Model ID in any first-row cell regardless of cell kind', () => {
+  const html = '<table><tr><td>Model</td><td>Model ID</td></tr><tr><td>Example</td><td>anthropic.example-v1:0</td></tr></table>' + reviewFloor
+  strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+})
+reviewTest('Third pass F1: Bedrock refuses a Model ID header outside the first row', () => {
+  const html = reviewCard.replace('<table>', '<table><tr><td>Unrecognised heading</td></tr>')
+  strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /no Model ID table/)
+})
 for (const [shape, html] of [
   ['zero', reviewFloor],
   ['related models', reviewCard + '<h2>Related models</h2><table><tr><th>Model ID</th></tr><tr><td>anthropic.other-v1:0</td></tr></table>'],
@@ -914,6 +962,33 @@ for (const [label, value] of [
         error.message.includes(reviewCardSource) && error.message.includes(label))
     })
   }
+  for (const fragment of [
+    `<dl><dt>${label}</dt><dd>${value}</dd></dl>`,
+    `<div>${label.toUpperCase()}: ${value}</div>`,
+    `<p>Details: ${label.toLowerCase()} ${value}</p>`,
+  ]) {
+    reviewTest(`Third pass F2: Bedrock counts whole-word lifecycle labels regardless of case or colon: ${fragment}`, () => {
+      strictAssert.throws(() => parseBedrockModelCardHtml(reviewCard + fragment, reviewCardSource), error =>
+        error.message.includes(reviewCardSource) && error.message.includes(`unaccounted ${label} field`))
+    })
+  }
+}
+reviewTest('Third pass F2: Bedrock refuses the reported definition-list and title-case EOL fields', () => {
+  for (const fragment of ['<dl><dt>Model EOL date</dt><dd>December 1, 2026</dd></dl>', '<div>Model EOL Date: December 1, 2026</div>']) {
+    strictAssert.throws(() => parseBedrockModelCardHtml(reviewCard + fragment, reviewCardSource), /unaccounted Model EOL date field/)
+  }
+})
+reviewTest('Third pass F2: Bedrock matches whole labels without matching longer words', () => {
+  const html = reviewCard + '<p>Premodel EOL date; Model EOL dates; Model launch dates; Legacy periods; Model lifecycle policymaker; EOL no sooner thanks</p>'
+  strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+})
+for (const [url, html] of cardHtml) {
+  reviewTest(`Third pass F2: Fixture lifecycle labels appear only in their field paragraphs: ${path.basename(new URL(url).pathname)}`, () => {
+    const outsideFields = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, paragraph =>
+      /^\s*(?:Model launch date|EOL no sooner than|Legacy period|Model lifecycle policy|Model EOL date):/.test(paragraph.replace(/<[^>]*>/g, ' ').trim()) ? '' : paragraph)
+      .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+    strictAssert.doesNotMatch(outsideFields, /\b(?:Model launch date|EOL no sooner than|Legacy period|Model lifecycle policy|Model EOL date)\b/i)
+  })
 }
 const reviewLegacy = { bedrockId: 'anthropic.example-20260101-v1:0', legacy: '2026-08-01', eol: '2026-12-01', status: 'legacy', source: BEDROCK_LIFECYCLE_URL }
 const reviewAliasFeed = { publisher: 'anthropic', models: [{ id: 'example-20260101', aliases: ['example'], distributions: [{ via: 'vertex-ai', shutdown: '2028-01-01' }] }] }
