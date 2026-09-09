@@ -43,11 +43,24 @@ const parseJson = (text, label) => {
 }
 
 const REGISTRY_WAIT_SECONDS_DEFAULT = 600
+const REGISTRY_WAIT_SECONDS_MAX = 3600
 const REGISTRY_WAIT_STEP_CAP_MS = 30_000
+const REGISTRY_REQUEST_TIMEOUT_MS = 30_000
+
+export function registryWaitSeconds(raw = process.env.MODEL_EOL_REGISTRY_WAIT_SECONDS) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return REGISTRY_WAIT_SECONDS_DEFAULT
+  const seconds = Number(String(raw).trim())
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > REGISTRY_WAIT_SECONDS_MAX) {
+    throw new Error(`MODEL_EOL_REGISTRY_WAIT_SECONDS must be a number of seconds between 0 and ${REGISTRY_WAIT_SECONDS_MAX}`)
+  }
+  return seconds
+}
 
 // Registry propagation after publish can lag for minutes; back off and keep polling up to the window.
-export function registryWaitSchedule(totalSeconds = Number(process.env.MODEL_EOL_REGISTRY_WAIT_SECONDS ?? REGISTRY_WAIT_SECONDS_DEFAULT)) {
-  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) throw new Error('registry wait window must be a non-negative number of seconds')
+export function registryWaitSchedule(totalSeconds = registryWaitSeconds()) {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0 || totalSeconds > REGISTRY_WAIT_SECONDS_MAX) {
+    throw new Error(`registry wait window must be a non-negative number of seconds up to ${REGISTRY_WAIT_SECONDS_MAX}`)
+  }
   const delays = []
   let elapsed = 0
   let step = 5000
@@ -60,28 +73,47 @@ export function registryWaitSchedule(totalSeconds = Number(process.env.MODEL_EOL
   return delays
 }
 
-const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+const sleep = ms => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }
 
-// A listed version whose tarball still 404s fails npm install later; require the tarball to answer first.
-export function probeTarball(url) {
-  if (typeof url !== 'string' || !/^https:\/\/registry\.npmjs\.org\/model-eol\/-\/model-eol-[0-9A-Za-z.+-]+\.tgz$/.test(url)) {
-    return { ok: false, detail: `unexpected tarball URL: ${url ?? '(missing)'}` }
-  }
-  const script = 'const r = await fetch(process.argv[1], { method: "GET", headers: { range: "bytes=0-0" } }); await r.body?.cancel(); process.stdout.write(String(r.status)); process.exit(r.ok ? 0 : 2)'
-  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, url], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 })
-  if (result.error || result.status !== 0) {
-    return { ok: false, detail: result.error?.message || `tarball HTTP ${result.stdout?.trim() || 'error'}` }
-  }
-  return { ok: true, detail: `tarball HTTP ${result.stdout.trim()}` }
+export function expectedTarballUrl(version, registry = 'https://registry.npmjs.org') {
+  return `${registry}/model-eol/-/model-eol-${version}.tgz`
 }
 
-const waitForPublishedVersion = ({ version, expectedIntegrity, cache, delays = registryWaitSchedule() }) => {
+// A listed version whose tarball still 404s fails npm install later; require the exact tarball to answer first.
+export function probeTarball(url, { version, timeoutMs = REGISTRY_REQUEST_TIMEOUT_MS, registry } = {}) {
+  if (!versionPattern.test(version ?? '')) return { ok: false, detail: 'tarball probe needs the expected version' }
+  const expected = expectedTarballUrl(version, registry)
+  if (url !== expected) return { ok: false, detail: `unexpected tarball URL: ${url ?? '(missing)'} (expected ${expected})` }
+  const script = [
+    'const r = await fetch(process.argv[1], { method: "GET", redirect: "error", headers: { range: "bytes=0-0" } })',
+    'await r.body?.cancel()',
+    'const type = (r.headers.get("content-type") ?? "").split(";")[0].trim()',
+    'process.stdout.write(`${r.status} ${type}`)',
+    'process.exit(([200, 206].includes(r.status) && type === "application/octet-stream") ? 0 : 2)',
+  ].join('; ')
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, url], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: Math.max(1, Math.min(timeoutMs, REGISTRY_REQUEST_TIMEOUT_MS)),
+  })
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message || result.stderr?.trim().split('\n').pop() || result.stdout?.trim() || `exit ${result.status}`
+    return { ok: false, detail: `tarball response ${detail}` }
+  }
+  return { ok: true, detail: `tarball ${result.stdout.trim()}` }
+}
+
+const waitForPublishedVersion = ({ version, expectedIntegrity, cache, delays = registryWaitSchedule(), now = Date.now }) => {
   let detail = ''
+  const started = now()
+  const deadline = started + delays.reduce((sum, delay) => sum + delay, 0)
   const attempts = delays.length + 1
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    const remaining = () => Math.max(0, deadline - now())
     const result = spawnSync(npm, ['view', `model-eol@${version}`, 'version', 'dist.integrity', 'dist.tarball', '--json', '--cache', cache, '--prefer-online'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: Math.max(1000, Math.min(REGISTRY_REQUEST_TIMEOUT_MS, remaining() || REGISTRY_REQUEST_TIMEOUT_MS)),
     })
     if (!result.error && result.status === 0) {
       let metadata = null
@@ -94,7 +126,7 @@ const waitForPublishedVersion = ({ version, expectedIntegrity, cache, delays = r
         if (registryIntegrity !== expectedIntegrity) {
           throw new Error(`model-eol@${version} registry integrity ${registryIntegrity} does not match release integrity ${expectedIntegrity}`)
         }
-        const tarball = probeTarball(metadata['dist.tarball'])
+        const tarball = probeTarball(metadata['dist.tarball'], { version, timeoutMs: remaining() || REGISTRY_REQUEST_TIMEOUT_MS })
         if (tarball.ok) return registryIntegrity
         detail = tarball.detail
       } else {
@@ -103,13 +135,13 @@ const waitForPublishedVersion = ({ version, expectedIntegrity, cache, delays = r
     } else {
       detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `exit ${result.status}`
     }
-    if (attempt <= delays.length) {
-      console.error(`waiting for model-eol@${version} on the registry (attempt ${attempt}/${attempts}): ${detail}`)
-      sleep(delays[attempt - 1])
-    }
+    const left = remaining()
+    if (attempt > delays.length || left === 0) break
+    console.error(`waiting for model-eol@${version} on the registry (attempt ${attempt}/${attempts}, ${Math.round(left / 1000)}s left): ${detail}`)
+    sleep(Math.min(delays[attempt - 1], left))
   }
-  const total = Math.round(delays.reduce((sum, delay) => sum + delay, 0) / 1000)
-  throw new Error(`npm did not expose model-eol@${version} with a reachable tarball after ${total} seconds: ${detail}`)
+  const elapsed = Math.round((now() - started) / 1000)
+  throw new Error(`npm did not expose model-eol@${version} with a reachable tarball after ${elapsed} seconds: ${detail}`)
 }
 
 export function runPublishedConsumerUat({ packageSpec, expectedVersion, expectedIntegrity, expectedEngine = null }) {
