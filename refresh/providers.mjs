@@ -83,6 +83,14 @@ function validDate(year, month, day) {
   }
 }
 
+// Loop so a nested marker such as <!<!---->-- cannot survive a single pass.
+export function stripComments(html) {
+  let text = String(html)
+  const pattern = /<!--[\s\S]*?-->/g
+  while (pattern.test(text)) text = text.replace(pattern, '')
+  return text
+}
+
 function decodeEntities(text) {
   const named = new Map([
     ['amp', '&'], ['lt', '<'], ['gt', '>'], ['quot', '"'], ['apos', "'"],
@@ -95,8 +103,7 @@ function decodeEntities(text) {
 }
 
 function plainText(fragment) {
-  return decodeEntities(String(fragment)
-    .replace(/<!--(?:[\s\S]*?)-->/g, ' ')
+  return decodeEntities(stripComments(fragment)
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<[^>]*>/g, ' '))
     .replace(/[\u00a0\u2007\u202f]/g, ' ')
@@ -945,7 +952,7 @@ function cohereDate(text) {
 }
 
 function cohereListItems(html) {
-  const match = html.replace(/<!--[^]*?-->/g, '').match(/^\s*<ul\b[^>]*>([\s\S]*?)<\/ul>/i)
+  const match = stripComments(html).match(/^\s*<ul\b[^>]*>([\s\S]*?)<\/ul>/i)
   if (!match || /<ul\b/i.test(match[1])) throw new Error('expected an immediately following flat model list')
   const items = [...match[1].matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)]
   if (!items.length || match[1].replace(/<li\b[^>]*>[\s\S]*?<\/li>/gi, '').trim()) {

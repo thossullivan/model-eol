@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { assertIsoDate, dateFromText, MODEL_ID_PATTERN } from './providers.mjs'
+import { assertIsoDate, dateFromText, MODEL_ID_PATTERN, stripComments } from './providers.mjs'
 
 export const BEDROCK_LIFECYCLE_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html'
 export const BEDROCK_MODEL_CARDS_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html'
@@ -50,8 +50,7 @@ function decodeEntities(text) {
 }
 
 function plainText(fragment) {
-  return decodeEntities(String(fragment)
-    .replace(/<!--(?:[\s\S]*?)-->/g, ' ')
+  return decodeEntities(stripComments(fragment)
     .replace(/<br\s*\/?\s*>/gi, '\n')
     .replace(/<[^>]*>/g, ' '))
     .replace(/[\u00a0\u2007\u202f]/g, ' ')
@@ -297,7 +296,7 @@ export const parseAWSBedrockLifecycle = parseBedrockLifecycleHtml
 export function parseBedrockModelCardsIndexHtml(html) {
   const urls = new Set()
   const directory = new URL('.', BEDROCK_MODEL_CARDS_URL).href
-  for (const anchor of String(html).replace(/<!--[\s\S]*?-->/g, '').matchAll(/<a\b[^>]*>/gi)) {
+  for (const anchor of stripComments(html).matchAll(/<a\b[^>]*>/gi)) {
     const attribute = anchor[0].match(/\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i)
     const href = attribute?.[1] ?? attribute?.[2] ?? attribute?.[3]
     if (!href) continue
@@ -359,7 +358,8 @@ function bedrockCardDate(value, label, allowMonth = false) {
 export function parseBedrockModelCardHtml(html, source) {
   try {
     if (typeof html !== 'string' || !html.trim()) throw new Error('empty page')
-    html = html.replace(/<!--[\s\S]*?-->/g, '')
+    html = stripComments(html)
+    if (/<!--|-->/.test(html)) throw new Error('unbalanced comment marker')
     const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].map(table => expandRows(tableRows(table[1])))
     const idTables = tables.filter(rows => rows[0]?.cells.some(cell => cell.text === 'Model ID'))
     if (!idTables.length) throw new Error('no Model ID table')

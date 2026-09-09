@@ -46,6 +46,7 @@ import {
   parseModelsResponse,
   parseOpenAIDeprecations,
   parseOpenAIModels,
+  stripComments,
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
 import { parseRefreshArgs, usage, validateGeneratedFeeds } from '../refresh.mjs'
@@ -984,7 +985,7 @@ reviewTest('Third pass F2: Bedrock matches whole labels without matching longer 
 })
 for (const [url, html] of cardHtml) {
   reviewTest(`Third pass F2: Fixture lifecycle labels appear only in their field paragraphs: ${path.basename(new URL(url).pathname)}`, () => {
-    const outsideFields = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, paragraph =>
+    const outsideFields = stripComments(html).replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, paragraph =>
       /^\s*(?:Model launch date|EOL no sooner than|Legacy period|Model lifecycle policy|Model EOL date):/.test(paragraph.replace(/<[^>]*>/g, ' ').trim()) ? '' : paragraph)
       .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
     strictAssert.doesNotMatch(outsideFields, /\b(?:Model launch date|EOL no sooner than|Legacy period|Model lifecycle policy|Model EOL date)\b/i)
@@ -1071,7 +1072,7 @@ try {
   fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), '<a href="./model-card-missing.html">missing</a>')
   let reason = ''
   try { await loadDistributorSource('aws-bedrock', { fixtures: missingCardDir, notice: () => {} }) } catch (error) { reason = error.message }
-  assert(reason.includes('bedrock-model-cards/model-card-missing.html') && reason.includes('https://docs.aws.amazon.com/'), 'missing card fixture throws with its path and URL')
+  assert(reason.includes('bedrock-model-cards/model-card-missing.html') && reason.includes('https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-missing.html'), 'missing card fixture throws with its path and URL')
   const missingCardRun = run(['--distributor', 'aws-bedrock', '--fixtures', missingCardDir, '--out', path.join(missingCardDir, 'out')])
   assert(missingCardRun.code === 1 && !fs.existsSync(path.join(missingCardDir, 'out')), 'missing card fixture stops refresh before writing feeds')
   fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), '<html>No cards</html>')
@@ -1633,10 +1634,16 @@ for (const [name, parse, html] of [
     strictAssert.throws(() => parse(html + reviewSpanGrid(17)), /10000.*expanded cells/)
   })
 }
+reviewTest('Comment stripping loops until no marker survives', () => {
+  strictAssert.ok(!/<!--/.test(stripComments('<!<!---->--<p>Model EOL date: December 1, 2026</p>-->')))
+  const nested = parseBedrockModelCardHtml(`${reviewCard}<!<!---->--<p>Model EOL date: December 1, 2026</p>-->`, reviewCardSource)
+  strictAssert.equal(nested.records[0]?.date_precision, 'tentative')
+  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<!-- unterminated`, reviewCardSource), /unbalanced comment marker/)
+})
 reviewTest('Second pass F4: Bedrock refuses colspan="9007199254740992" within bounded memory and time', () => {
   const html = `${reviewCard}<table><tr><td colspan="9007199254740992">x</td></tr></table>`
-  const script = `import assert from 'node:assert/strict'; import { parseBedrockModelCardHtml } from ${JSON.stringify(new URL('../distributors.mjs', import.meta.url).href)}; assert.throws(() => parseBedrockModelCardHtml(${JSON.stringify(html)}, ${JSON.stringify(reviewCardSource)}), /colspan.*64/);`
-  const result = spawnSync(process.execPath, ['--max-old-space-size=32', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000, maxBuffer: 64 * 1024 })
+  const script = `import assert from 'node:assert/strict'; import fs from 'node:fs'; import { parseBedrockModelCardHtml } from ${JSON.stringify(new URL('../distributors.mjs', import.meta.url).href)}; const [html, source] = fs.readFileSync(0, 'utf8').split('\\u0000'); assert.throws(() => parseBedrockModelCardHtml(html, source), /colspan.*64/);`
+  const result = spawnSync(process.execPath, ['--max-old-space-size=32', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000, maxBuffer: 64 * 1024, input: `${html}\u0000${reviewCardSource}` })
   strictAssert.equal(result.status, 0, `bounded child failed: ${result.error?.code ?? result.signal ?? result.status}`)
 })
 for (const headers of [
