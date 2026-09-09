@@ -110,6 +110,7 @@ export async function generateProviderFeed(providerName, options = {}) {
   const merged = mergeFeed(committed, {
     deprecations: sources.deprecations,
     currentIds: sources.currentIds,
+    currentModels: sources.currentModels,
     generated: options.generated,
     provider: sourceProvider,
   })

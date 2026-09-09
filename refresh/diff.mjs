@@ -29,9 +29,10 @@ function indexModels(feed) {
   return index
 }
 
-function findModel(index, model) {
+function findModel(index, model, canonicalIds) {
   for (const key of keysFor(model)) {
     const found = index.get(key)
+    if (found && found.id !== model.id && canonicalIds.has(found.id)) continue
     if (found) return found
   }
   return undefined
@@ -120,6 +121,7 @@ function distributionChanges(oldModel, model, publisher) {
  */
 export function compareFeeds(committed, generated, options = {}) {
   const oldIndex = indexModels(committed)
+  const canonicalIds = new Set((generated.models ?? []).map(model => model.id))
   const added = []
   const shutdownChanges = []
   const replacementChanges = []
@@ -130,7 +132,7 @@ export function compareFeeds(committed, generated, options = {}) {
   const publisher = options.publisher ?? generated.publisher
 
   for (const model of generated.models ?? []) {
-    const old = findModel(oldIndex, model)
+    const old = findModel(oldIndex, model, canonicalIds)
     if (!old) {
       added.push(model)
     } else {

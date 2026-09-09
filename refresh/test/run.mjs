@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import strictAssert from 'node:assert/strict'
 import {
   BEDROCK_LIFECYCLE_URL,
   AZURE_MODEL_RETIREMENT_SCHEDULE_URL,
@@ -240,7 +241,7 @@ for (const id of ['/v1/generate', 'invalid/model', 'invalid id', '_invalid']) {
 assert(cohereRefusal(cohereHtml.replace('<code>command-r</code>', '<code>/v1/summarize</code>')).includes('endpoint-or-product-row'), 'Cohere refuses endpoint-like aliases')
 assert(cohereRefusal(cohereHtml.replace('<code>rerank-english-v2.0</code>', '<code>/v1/generate</code>')).includes('row /v1/generate'), 'Cohere refuses endpoint-like table ids and names the row')
 assert(cohereRefusal(cohereHtml.replace('<td>2025-04-30</td>', '<td>2025-02-30</td>')).includes('row rerank-english-v2.0'), 'Cohere refuses malformed table dates and names the row')
-assert(cohereRefusal(cohereHtml.replace('Shutdown Date</th>', 'Service Shutdown Date</th>')).includes('endpoint-or-product-deprecation-table'), 'Cohere applies the generic endpoint-table refusal policy')
+assert(cohereRefusal(cohereHtml.replace('Shutdown Date</th>', 'Service Shutdown Date</th>')).includes('header: Service Shutdown Date'), 'Cohere refuses an unknown shutdown header by its exact label')
 assert(cohereRefusal(cohereHtml.replace('<code>command-r7b-12-2024</code>', '<code>bad/id</code>')).includes('endpoint-or-product-row'), 'Cohere validates task alternative ids')
 assert(cohereRefusal(cohereHtml.replace('Chat tasks alternatives:', 'Chat alternatives:')).includes('2026-04-04: Embed'), 'Cohere refuses renamed task groups instead of silently dropping their alternatives')
 assert(cohereRefusal(cohereHtml.replace('<code>command-r-plus-08-2024</code>', '<code>bad/id</code>')).includes('endpoint-or-product-row'), 'Cohere validates paragraph replacement ids')
@@ -301,7 +302,7 @@ assert(JSON.stringify(mistralParsed.skipped) === JSON.stringify(mistralExpectedS
 assert(mistralMedium?.announced === '2026-05-22' && mistralMedium?.shutdown === '2026-08-31' && mistralMedium?.replacement_note === 'Mistral lists Mistral Medium 3.5 as the alternative', 'Mistral Medium dates and alternative come from their exact cells')
 assert(mistralParsed.records.some(record => record.id === 'labs-leanstral-2603'), 'Mistral pairs the separate header table without losing the first body row')
 assert(mistralParsed.records.every(record => record.source === PROVIDERS.mistral.deprecationsUrl && !Object.hasOwn(record, 'date_precision') && !Object.hasOwn(record, 'replacement') && !Object.hasOwn(record, 'replacement_options')), 'Mistral emits exact dates and product alternatives only as notes')
-assert(mistralRefusal(mistralTables[0][0]).includes('no recognised model tables'), 'Mistral refuses a header-only table without a following body table')
+assert(mistralRefusal(mistralTables[0][0]).includes('dangling header'), 'Mistral refuses a header-only table without a following body table')
 assert(mistralRefusal(mistralTables[1][0]).includes('no recognised model tables'), 'Mistral refuses data tables without recognised headers')
 const mistralCombinedTable = mistralTables[0][0].replace('</table>', `${mistralTables[1][1]}</table>`)
 assert(JSON.stringify(parseMistralDeprecations(mistralCombinedTable)) === JSON.stringify(mistralParsed), 'Mistral also recognises headers and data within one table')
@@ -338,11 +339,190 @@ const mistralMerged = mergeFeed(mistralSeed, { ...mistralSources, provider: PROV
 assert(mistralSeed.models.length === 0 && mistralMerged.feed.models.length === 40 && mistralMerged.unconfirmedIds.length === 0 && validateFeed(mistralMerged.feed).length === 0, 'Mistral generates a valid feed from an empty committed seed')
 assert(mistralMerged.feed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest') && !mistralMerged.feed.models.some(model => model.id === 'mistral-medium-latest'), 'Mistral attaches endpoint aliases to the dated canonical record')
 const mistralAliasSeed = { ...mistralSeed, models: [{ id: 'mistral-medium-latest' }, { id: 'mistral-medium-2508' }] }
-const mistralAliasMerged = mergeFeed(mistralAliasSeed, { ...mistralSources, provider: PROVIDERS.mistral })
-assert(mistralAliasMerged.feed.models.filter(model => model.id === 'mistral-medium-2508' || model.id === 'mistral-medium-latest').length === 1 && mistralAliasMerged.feed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest'), 'Mistral absorbs committed alias entries without losing canonical identity')
+let mistralCanonicalAliasReason = ''
+try { mergeFeed(mistralAliasSeed, { ...mistralSources, provider: PROVIDERS.mistral }) } catch (error) { mistralCanonicalAliasReason = error.message }
+assert(mistralCanonicalAliasReason.includes('endpoint alias mistral-medium-latest') && mistralCanonicalAliasReason.includes('canonical model id') && mistralAliasSeed.models.length === 2, 'Mistral refuses endpoint aliases that would absorb a committed canonical entry')
 const mistralSkippedDiff = compareFeeds(mistralMerged.feed, mistralMerged.feed, { skipped: mistralSources.skipped })
 const mistralSkippedMarkdown = renderSemanticDiff(mistralSkippedDiff)
 assert(!mistralSkippedDiff.changed && mistralSkippedMarkdown.includes('## Rows without an API id') && mistralExpectedSkipped.every(row => mistralSkippedMarkdown.includes(`\`${row.model}\` - version: \`${row.version || 'not set'}\``)), 'skipped Mistral rows appear in the semantic diff without becoming material changes')
+
+const reviewTest = (name, check) => {
+  try {
+    check()
+    assert(true, name)
+  } catch (error) {
+    assert(false, `${name}: ${error.message}`)
+  }
+}
+const cohereReviewTable = (headers, cells) => `<table><tr>${headers.map(label => `<th>${label}</th>`).join('')}</tr><tr>${cells.map(cell => `<td>${cell}</td>`).join('')}</tr></table>`
+const cohereReviewHeaders = ['Shutdown Date', 'Deprecated Model', 'Recommended Replacement']
+const cohereReviewSection = (table, date = '2026-09-01') => `<h3>${date}: Review retirement</h3>${table}`
+const cohereReviewRow = replacement => cohereReviewTable(cohereReviewHeaders, ['2026-10-01', '<code>command-r-03-2024</code>', replacement])
+for (const [headers, cells] of [
+  [['Fine-tuning Shutdown Date', ...cohereReviewHeaders], ['2026-09-15', '2026-10-01', '<code>command-r-03-2024</code>', '<code>command-a-03-2025</code>']],
+  [['Shutdown Date', 'Deprecated Model Price', 'Deprecated Model', 'Recommended Replacement'], ['2026-10-01', '1.00', '<code>command-r-03-2024</code>', '<code>command-a-03-2025</code>']],
+]) {
+  reviewTest(`Review F3: Cohere refuses adversarial header ${headers.join(' | ')}`, () => {
+    const reason = cohereRefusal(coherePage(cohereReviewSection(cohereReviewTable(headers, cells))))
+    strictAssert.match(reason, /header/i)
+    strictAssert.ok(headers.every(header => reason.includes(header)))
+  })
+}
+for (const label of [...cohereReviewHeaders, 'Deprecated Model Price', 'Unexpected Column']) {
+  reviewTest(`Review F3: Cohere refuses duplicate or unknown column ${label}`, () => {
+    const headers = ['Shutdown Date', 'Deprecated Model', 'Deprecated Model Price', 'Recommended Replacement', label]
+    strictAssert.match(cohereRefusal(coherePage(cohereReviewSection(cohereReviewTable(headers, ['2026-10-01', '<code>command-r-03-2024</code>', '1.00', '<code>command-a-03-2025</code>', 'extra'])))), /header/i)
+  })
+}
+reviewTest('Review F3: Cohere accepts trimmed case-insensitive labels and an optional price column', () => {
+  const table = cohereReviewTable([' shutdown date ', 'DEPRECATED MODEL', ' deprecated model PRICE ', 'Recommended Replacement'], ['2026-10-01', '<code>command-r-03-2024</code>', '1.00', '<code>command-a-03-2025</code>'])
+  strictAssert.equal(parseCohereDeprecations(coherePage(cohereReviewSection(table)))[0].id, 'command-r-03-2024')
+})
+for (const [cell, note, options] of [
+  ['<code>rerank-new</code> only after changing the request format', 'rerank-new only after changing the request format', ['rerank-new']],
+  ['Do not use <code>rerank-new</code>; contact support', 'Do not use rerank-new ; contact support', ['rerank-new']],
+  ['Contact support for rerank-new', 'Contact support for rerank-new', undefined],
+  ['rerank-new', 'rerank-new', undefined],
+  ['<code>rerank-new</code> or <code>rerank-other</code> after migration', 'rerank-new or rerank-other after migration', ['rerank-new', 'rerank-other']],
+]) {
+  reviewTest(`Review F4: Cohere keeps conditional or plain replacement text advisory: ${cell}`, () => {
+    const records = parseCohereDeprecations(coherePage(cohereReviewSection(cohereReviewRow(cell))))
+    const feed = mergeFeed({ ...cohereSeed, models: [{ id: 'rerank-new' }, { id: 'rerank-other' }] }, { deprecations: records, provider: PROVIDERS.cohere }).feed
+    const model = feed.models.find(model => model.id === 'command-r-03-2024')
+    strictAssert.equal(model.replacement, undefined)
+    strictAssert.deepEqual(model.replacement_options, options)
+    strictAssert.equal(model.replacement_note, note)
+    strictAssert.deepEqual(validateFeed(feed), [])
+  })
+}
+reviewTest('Review F4: Cohere promotes only a standalone code id that resolves in the feed', () => {
+  const records = parseCohereDeprecations(coherePage(cohereReviewSection(cohereReviewRow('<code>rerank-new</code>'))))
+  for (const models of [[], [{ id: 'rerank-new' }]]) {
+    const model = mergeFeed({ ...cohereSeed, models }, { deprecations: records, provider: PROVIDERS.cohere }).feed.models.find(model => model.id === 'command-r-03-2024')
+    strictAssert.equal(model.replacement, models.length ? 'rerank-new' : undefined)
+    strictAssert.deepEqual(model.replacement_options, models.length ? undefined : ['rerank-new'])
+    strictAssert.equal(model.replacement_note, undefined)
+  }
+})
+reviewTest('Review F7a: Cohere parses a recognised table without code markup', () => {
+  const table = cohereReviewTable(cohereReviewHeaders, ['2026-10-01', 'command-r-03-2024', 'command-a-03-2025'])
+  strictAssert.deepEqual(parseCohereDeprecations(coherePage(cohereReviewSection(table))), [{
+    id: 'command-r-03-2024', announced: '2026-09-01', shutdown: '2026-10-01', source: PROVIDERS.cohere.deprecationsUrl, replacement_note: 'command-a-03-2025',
+  }])
+})
+const cohereEarlierDeprecation = cohereSections.find(section => section[1].includes('2025-09-15'))[0]
+reviewTest('Review F7b: Cohere refuses an unaccounted shutdown paragraph, even for a listed id', () => {
+  const page = coherePage(`${cohereEarlierDeprecation}<p>We will shut down <code>command-r-plus-04-2024</code> on October 1, 2026.</p>`)
+  strictAssert.match(cohereRefusal(page), /2025-09-15: Various older command.*unrecognised code ids/)
+})
+const cohereLaterShutdown = cohereReviewSection(cohereReviewRow('<code>command-a-03-2025</code>'))
+for (const sections of [[cohereLaterShutdown, cohereEarlierDeprecation], [cohereEarlierDeprecation, cohereLaterShutdown]]) {
+  reviewTest(`Review F10: Cohere combines deprecation and later shutdown in ${sections[0] === cohereLaterShutdown ? 'reverse' : 'chronological'} order`, () => {
+    const model = parseCohereDeprecations(coherePage(sections.join(''))).find(record => record.id === 'command-r-03-2024')
+    strictAssert.deepEqual(model, { id: 'command-r-03-2024', announced: '2025-09-15', shutdown: '2026-10-01', source: PROVIDERS.cohere.deprecationsUrl, aliases: ['command-r'], replacement: 'command-a-03-2025' })
+  })
+}
+reviewTest('Review F10: Cohere still refuses conflicting shutdown dates across sections', () => {
+  const conflicting = cohereLaterShutdown.replace('2026-09-01:', '2026-09-02:').replace('2026-10-01', '2026-11-01')
+  strictAssert.match(cohereRefusal(coherePage(cohereLaterShutdown + cohereEarlierDeprecation + conflicting)), /2026-09-02: Review retirement.*conflicting rows for command-r-03-2024/)
+})
+const cohereReplacementUpdate = '<h3>2026-08-01: Replacement update</h3><p>Deprecated Models:</p><ul><li><code>command-r-03-2024</code></li></ul><p>For command model replacements, we recommend <code>command-new</code>.</p>'
+for (const sections of [[cohereEarlierDeprecation, cohereReplacementUpdate], [cohereReplacementUpdate, cohereEarlierDeprecation]]) {
+  reviewTest('Review F10: Cohere uses the latest undated replacement independently of announcement order', () => {
+    const model = parseCohereDeprecations(coherePage(sections.join(''))).find(record => record.id === 'command-r-03-2024')
+    strictAssert.equal(model.announced, '2025-09-15')
+    strictAssert.equal(model.shutdown, undefined)
+    strictAssert.deepEqual(model.replacement_options, ['command-new'])
+    strictAssert.deepEqual(model.aliases, ['command-r'])
+  })
+}
+reviewTest('Review F10: A shutdown section without replacement guidance clears earlier options', () => {
+  const shutdown = cohereReviewSection(cohereReviewRow(''))
+  const model = parseCohereDeprecations(coherePage(cohereEarlierDeprecation + shutdown + cohereReplacementUpdate)).find(record => record.id === 'command-r-03-2024')
+  strictAssert.equal(model.shutdown, '2026-10-01')
+  strictAssert.ok(!['replacement', 'replacement_options', 'replacement_note'].some(field => Object.hasOwn(model, field)))
+})
+const mistralSampleTable = '<table><tr><td>Sample</td><td>1</td><td>sample-model</td><td>5/22/2026 8/31/2026</td><td>Sample 2</td></tr></table>'
+const mistralConfirmingTable = '<table><tr><td>Sample</td><td>1</td><td>sample-model</td><td>5/22/2026 8/31/2026</td><td>Sample 2</td></tr><tr><td>Mistral Medium 3.1</td><td>25.08</td><td>mistral-medium-2508</td><td>5/22/2026 8/31/2026</td><td>Mistral Medium 3.5</td></tr></table>'
+for (let level = 1; level <= 6; level++) {
+  reviewTest(`Review F8: Mistral refuses header pairing across h${level}`, () => {
+    const page = `${mistralTables[0][0]}<h${level}>Unrelated</h${level}>${mistralSampleTable}${mistralTables[1][0]}`
+    strictAssert.match(mistralRefusal(page), /dangling header/i)
+  })
+}
+reviewTest('Review F8: Mistral refuses a dangling trailing header after valid records', () => {
+  strictAssert.match(mistralRefusal(mistralHtml + mistralTables[0][0]), /dangling header/i)
+})
+reviewTest('Review F8: Mistral consumes a pending header only once', () => {
+  strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + mistralSampleTable), mistralParsed)
+})
+reviewTest('Review F8: Mistral requires the immediately next table to contain body rows', () => {
+  for (const table of ['<table></table>', mistralTables[0][0], '<table><tr><th>Feature</th><th>Supported</th></tr><tr><td>A</td><td>Yes</td></tr></table>']) {
+    strictAssert.match(mistralRefusal(mistralTables[0][0] + table + mistralTables[1][0]), /dangling header/i)
+  }
+})
+const mistralDriftedTable = `<table><tr><th>Model</th><th>Version</th><th>API</th><th>Deprecation date / Retirement date</th><th>Alternative</th></tr>${mistralSampleTable.slice(7, -8)}</table>`
+reviewTest('Review F9: Mistral refuses drifted lifecycle headers alongside valid tables', () => {
+  const reason = mistralRefusal(mistralHtml + mistralDriftedTable)
+  strictAssert.match(reason, /header/i)
+  strictAssert.ok(reason.includes('Deprecation date / Retirement date'))
+})
+reviewTest('Review F9: Mistral requires the exact lifecycle header set', () => {
+  for (const labels of [
+    ['Model*', 'Version', 'API', 'Deprecation Retirement', 'Alternative'],
+    ['Model', 'Version'],
+    ['Retirement date'],
+    ['Model', 'Version', 'API', 'Deprecation Retirement', 'Alternative', 'Feature'],
+    ['Model', 'Version', 'API', 'Deprecation Retirement', 'Alternative', 'Model'],
+  ]) {
+    const table = `<table><tr>${labels.map(label => `<th>${label}</th>`).join('')}</tr></table>`
+    strictAssert.match(mistralRefusal(mistralHtml + table), /header/i)
+  }
+})
+reviewTest('Review F9: Mistral skips unrelated headers', () => {
+  strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + '<table><tr><th>Feature</th><th>Supported</th></tr><tr><td>A</td><td>Yes</td></tr></table>'), mistralParsed)
+})
+for (const canonical of ['mistral-medium-2608', 'mistral-medium-2508']) {
+  const sources = await loadProviderSources(PROVIDERS.mistral, {
+    env: { MISTRAL_API_KEY: 'fixture-key' }, notice: () => {},
+    fetchImpl: async url => ({ ok: true, text: async () => url === PROVIDERS.mistral.modelsUrl
+      ? JSON.stringify({ object: 'list', data: [{ id: canonical, aliases: ['mistral-medium-latest'] }] })
+      : mistralTables[0][0] + (canonical === 'mistral-medium-2508' ? mistralConfirmingTable : mistralSampleTable) }),
+  })
+  for (const fields of [
+    {},
+    { announced: '2026-05-22', replacement: 'mistral-next', replacement_note: 'Preserve guidance' },
+    { announced: '2026-05-22', replacement_options: ['mistral-next'], replacement_note: 'Preserve guidance' },
+  ]) {
+    reviewTest(`Review F1: Mistral preserves committed lifecycle when endpoint alias is ${canonical === 'mistral-medium-2608' ? 'moved' : 'unchanged'} (${fields.replacement ? 'replacement' : fields.replacement_options ? 'options' : 'exact review'} record)`, () => {
+      const old = { id: 'mistral-medium-2508', aliases: ['mistral-medium-latest'], shutdown: '2026-08-31', ...fields }
+      const seed = { ...mistralSeed, models: [old, { id: 'mistral-next' }] }
+      const original = structuredClone(seed)
+      const merged = mergeFeed(seed, { ...sources, provider: PROVIDERS.mistral })
+      const kept = merged.feed.models.find(model => model.id === old.id)
+      if (canonical === old.id) {
+        strictAssert.equal(kept.shutdown, '2026-08-31')
+        strictAssert.equal(kept.announced, '2026-05-22')
+      } else {
+        const expected = { ...old }
+        delete expected.aliases
+        strictAssert.deepEqual(kept, expected)
+      }
+      strictAssert.deepEqual(merged.feed.models.find(model => model.id === canonical).aliases, ['mistral-medium-latest'])
+      strictAssert.ok(!merged.feed.models.some(model => model.aliases?.includes(old.id)))
+      strictAssert.deepEqual(validateFeed(merged.feed), [])
+      strictAssert.deepEqual(seed, original)
+      const diff = compareFeeds(seed, merged.feed)
+      strictAssert.deepEqual(diff.shutdownChanges, [])
+      if (canonical !== old.id) strictAssert.deepEqual(diff.replacementChanges, [])
+      strictAssert.equal(diff.added.some(model => model.id === 'mistral-medium-2608'), canonical !== old.id)
+    })
+  }
+  reviewTest('Review F1: Mistral endpoint alias records remain separate from deprecations', () => {
+    strictAssert.deepEqual(sources.currentModels, [{ id: canonical, aliases: ['mistral-medium-latest'] }])
+    strictAssert.deepEqual(sources.deprecations.map(record => record.id), canonical === 'mistral-medium-2508' ? ['sample-model', 'mistral-medium-2508'] : ['sample-model'])
+  })
+}
 const openaiById = new Map(openaiEntries.map(entry => [entry.id, entry]))
 const anthropicStatusHeader = '<tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>'
 const anthropicStatusTable = (id, state, deprecated, retirement) => `<table>${anthropicStatusHeader}<tr><td><code>${id}</code></td><td>${state}</td><td>${deprecated}</td><td>${retirement}</td></tr></table>`
