@@ -36,7 +36,7 @@ format instead of each scraping the same pages.
   replacement, `distributions` for per-channel lifecycles, and publisher `policy`
   floors. It is small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (30 entries), Cohere (12 entries), Google (93 entries), Mistral (40 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-09-09<!-- /feeds-status -->. Every
+- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (32 entries), Cohere (12 entries), Google (93 entries), Mistral (40 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-09-09<!-- /feeds-status -->. Every
   dated entry carries a source URL. Anthropic's "not sooner than" dates for
   active models are included as `tentative` planning floors.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
@@ -515,6 +515,12 @@ node scripts/feed-changelog.mjs                       # local rendering of the h
 ```
 
 A parse failure stops the run. The refresh never writes a guessed feed.
+
+Anthropic reads model IDs and aliases from overview pages listed in `https://platform.claude.com/docs/llms.txt`.
+It reads at most 100 unique pages with 30-second deadlines and 8 MiB response limits.
+Only the deprecations page supplies Anthropic dates.
+Offline checks use `anthropic-llms.txt` and `anthropic-model-pages/<slug>.md`; missing pages stop refresh.
+Alias attachments and moves emit notices and appear in semantic diffs.
 
 AWS changed its Bedrock lifecycle policy on 2026-09-07.
 The legacy table covers models launched before that date; newer models publish lifecycle dates on individual cards.

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { fetchBoundedBody } from './fetch.mjs'
 
 export const PROVIDERS = {
   openai: {
@@ -15,6 +16,7 @@ export const PROVIDERS = {
     feedFile: 'anthropic.json',
     modelsUrl: 'https://api.anthropic.com/v1/models',
     deprecationsUrl: 'https://platform.claude.com/docs/en/about-claude/model-deprecations',
+    aliasesUrl: 'https://platform.claude.com/docs/llms.txt',
     keyEnv: 'ANTHROPIC_API_KEY',
     headers: {
       'anthropic-version': '2023-06-01',
@@ -55,6 +57,8 @@ const MONTHS = new Map([
   ['jul', 7], ['aug', 8], ['sep', 9], ['sept', 9], ['oct', 10], ['nov', 11], ['dec', 12],
 ])
 export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+export const MAX_ANTHROPIC_MODEL_PAGES = 100
+const ANTHROPIC_MODEL_PAGE_PATTERN = /^https:\/\/platform\.claude\.com\/docs\/en\/models\/[a-z0-9-]+\/overview\.md$/
 const REPLACEMENT_TOKEN_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]*(?:\*)?/g
 
 function pad(number) {
@@ -749,6 +753,91 @@ export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic
   const records = [...announcements, ...status.records]
   if (!records.length) throw new Error('anthropic deprecations page has no model entries')
   return records
+}
+
+export function parseAnthropicModelsIndex(markdown, url = PROVIDERS.anthropic.aliasesUrl) {
+  const urls = new Set()
+  for (const match of String(markdown).matchAll(/https?:\/\/[^\s<>()[\]"'`]+/g)) {
+    if (!ANTHROPIC_MODEL_PAGE_PATTERN.test(match[0])) continue
+    urls.add(match[0])
+    if (urls.size > MAX_ANTHROPIC_MODEL_PAGES) {
+      throw new Error(`anthropic model index ${url} exceeds cap of ${MAX_ANTHROPIC_MODEL_PAGES} pages`)
+    }
+  }
+  if (!urls.size) throw new Error(`anthropic model index ${url} has no model pages`)
+  return [...urls]
+}
+
+function stripFencedCodeBlocks(markdown) {
+  let fence
+  return markdown.split(/\r?\n/).map(line => {
+    if (fence) {
+      const closing = line.match(/^\s*(`{3,}|~{3,})\s*$/)
+      if (closing && closing[1][0] === fence[0] && closing[1].length >= fence.length) fence = undefined
+      return ''
+    }
+    const opening = line.match(/^\s*(`{3,}|~{3,})/)
+    if (!opening) return line
+    fence = opening[1]
+    return ''
+  }).join('\n')
+}
+
+export function parseAnthropicModelPage(markdown, url) {
+  const values = new Map()
+  const uncommented = stripComments(markdown)
+  if (/<!--|--!?>/.test(uncommented)) throw new Error(`anthropic model page ${url} has an unbalanced comment marker`)
+  const lines = stripFencedCodeBlocks(uncommented).split('\n')
+  const identityRow = line => /^\s*\|\s*Claude API(?: alias)?\s*\|/.test(line)
+  for (let offset = 0; offset < lines.length;) {
+    if (!lines[offset].startsWith('|')) {
+      if (identityRow(lines[offset])) throw new Error(`anthropic model page ${url} has an identity row outside a markdown table`)
+      offset++
+      continue
+    }
+    const table = []
+    while (offset < lines.length && lines[offset].startsWith('|')) table.push(lines[offset++])
+    const rows = table.map(line => /^\|.*\|\s*$/.test(line) ? line.trimEnd().slice(1, -1).split('|').map(cell => cell.trim()) : [])
+    const header = rows[0]
+    if (!table.some(identityRow) && !(header[0] === 'Platform' && header[1] === 'Model ID')) continue
+    if (rows.length < 3 || rows.some(row => row.length !== 2) ||
+      header[0] !== 'Platform' || header[1] !== 'Model ID' || !rows[1].every(cell => /^:?-{3,}:?$/.test(cell))) {
+      throw new Error(`anthropic model page ${url} has an invalid identity table: expected Platform | Model ID and exactly two columns`)
+    }
+    for (const [label, value] of rows.slice(2)) {
+      if (!['Claude API', 'Claude API alias'].includes(label)) continue
+      if (values.has(label)) throw new Error(`anthropic model page ${url} has duplicate ${label} rows`)
+      const code = value.match(/^`([^`]+)`$/)
+      if (!code || !MODEL_ID_PATTERN.test(code[1])) {
+        throw new Error(`anthropic model page ${url} has invalid ${label}: expected one model ID code span`)
+      }
+      values.set(label, code[1])
+    }
+  }
+  const id = values.get('Claude API')
+  if (!id) throw new Error(`anthropic model page ${url} has no Claude API row`)
+  const alias = values.get('Claude API alias')
+  return { id, aliases: alias && alias !== id ? [alias] : [] }
+}
+
+async function loadAnthropicModelPages(config, { fixtures, fetchImpl }) {
+  const read = async (filename, url) => {
+    if (!fixtures) return fetchBoundedBody(url, config.publisher, fetchImpl)
+    try {
+      return fs.readFileSync(path.join(fixtures, filename), 'utf8')
+    } catch (error) {
+      throw new Error(`anthropic missing or unreadable fixture ${filename} for ${url}: ${error.message}`)
+    }
+  }
+  const index = await read('anthropic-llms.txt', config.aliasesUrl)
+  const models = []
+  for (const url of parseAnthropicModelsIndex(index, config.aliasesUrl)) {
+    const slug = new URL(url).pathname.split('/').at(-2)
+    const markdown = await read(path.join('anthropic-model-pages', `${slug}.md`), url)
+    models.push(parseAnthropicModelPage(markdown, url))
+  }
+  identityIndex(models)
+  return models
 }
 
 function googleModelId(fragment) {
@@ -1458,10 +1547,11 @@ function routeReplacementFields(models) {
  * entry. The endpoint argument is null when credentials were unavailable and
  * an empty array when the endpoint explicitly returned no models.
  */
-export function mergeFeed(committed, { deprecations = [], currentIds = null, currentModels = [], generated, provider }) {
+export function mergeFeed(committed, { deprecations = [], currentIds = null, currentModels = [], generated, provider, notice = console.error }) {
   if (!committed || !Array.isArray(committed.models)) throw new Error('committed feed has no models array')
   const models = committed.models.map(clone)
   const committedEntries = committed.models.map((old, index) => ({ id: old.id, model: models[index] }))
+  const committedIds = new Set(committed.models.map(model => model.id))
   const confirmed = new Set()
   const deprecationConfirmed = new Set()
   let index = identityIndex(models)
@@ -1474,6 +1564,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
   }
   const absorb = (target, other, aliases) => {
     if (target === other) return
+    if (committedIds.has(other.id)) throw new Error(`deprecation alias for ${target.id} conflicts with canonical model id ${other.id}`)
     aliases.add(other.id)
     for (const alias of other.aliases ?? []) aliases.add(alias)
     const metadata = new Set(['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note', 'source'])
@@ -1503,6 +1594,9 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     for (const alias of [record.id, ...(record.aliases ?? [])]) {
       if (!alias || alias === canonicalId) continue
       const owner = locate(alias)
+      if (committedIds.has(alias) || (owner && owner !== target && owner.id === alias)) {
+        throw new Error(`deprecation alias ${alias} for ${canonicalId} conflicts with a canonical model id`)
+      }
       if (owner && owner !== target) absorb(target, owner, aliases)
       aliases.add(alias)
     }
@@ -1541,12 +1635,17 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     if (!target) target = add({ id: model.id })
     const aliases = new Set(target.aliases ?? [])
     for (const alias of model.aliases ?? []) {
-      if (alias === target.id) continue
+      if (alias === model.id) continue
       const owner = locate(alias)
+      if (committedIds.has(alias) || (owner && owner !== target && owner.id === alias)) {
+        throw new Error(`${provider.publisher === 'anthropic' ? 'model page' : 'endpoint'} alias ${alias} for ${model.id} conflicts with a canonical model id`)
+      }
       if (owner && owner !== target) {
-        if (owner.id === alias) throw new Error(`endpoint alias ${alias} for ${model.id} conflicts with a canonical model id`)
         owner.aliases = owner.aliases.filter(value => value !== alias)
         if (!owner.aliases.length) delete owner.aliases
+      }
+      if (owner !== target) {
+        notice(`notice: ${provider.publisher} alias ${alias} ${owner ? `moved from ${owner.id} to` : 'attached to'} ${target.id}`)
       }
       aliases.add(alias)
     }
@@ -1589,7 +1688,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
   }
   return {
     feed,
-    unconfirmedIds: models.filter(model => !confirmed.has(model.id)).map(model => model.id),
+    unconfirmedIds: models.filter(model => committedIds.has(model.id) && !confirmed.has(model.id)).map(model => model.id),
   }
 }
 
@@ -1731,5 +1830,6 @@ export async function loadProviderSources(config, options = {}) {
   for (const id of undatedDeprecatedIds) {
     notice(`notice: ${config.publisher} models endpoint flags ${id} as deprecated without a dated announcement`)
   }
+  if (config.publisher === 'anthropic') currentModels = await loadAnthropicModelPages(config, { fixtures, fetchImpl })
   return { currentIds, currentModels, endpointAvailable, deprecations, skipped, undatedDeprecatedIds }
 }

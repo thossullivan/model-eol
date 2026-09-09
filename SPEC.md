@@ -72,6 +72,7 @@ available even when it does not publish an exact shutdown date.
 Bedrock model-card floors are tentative distribution dates (`date_precision: "tentative"`) without `announced`.
 
 Azure maps GA/Preview/Legacy to `active`, Deprecated to `legacy`, and Retired to `retired`; Azure Legacy permits new deployments.
+Azure OpenAI uses a resolving bare identity for single-row models only when a dated snapshot candidate is absent.
 
 A model may contain at most one distribution for each `via`. Duplicate channel
 records are ambiguous and fail runtime semantic validation. Draft-07 can enforce

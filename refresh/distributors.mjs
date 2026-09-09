@@ -1,12 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { fetchBoundedBody as fetchBody } from './fetch.mjs'
 
 import { assertIsoDate, dateFromText, MODEL_ID_PATTERN, stripComments } from './providers.mjs'
+
+export { MAX_SOURCE_BODY_BYTES as MAX_DISTRIBUTOR_BODY_BYTES } from './fetch.mjs'
 
 export const BEDROCK_LIFECYCLE_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html'
 export const BEDROCK_MODEL_CARDS_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html'
 export const MAX_BEDROCK_MODEL_CARDS = 400
-export const MAX_DISTRIBUTOR_BODY_BYTES = 8 * 1024 * 1024
 export const VERTEX_MODEL_VERSIONS_URL = 'https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions'
 export const VERTEX_LIFECYCLE_URL = VERTEX_MODEL_VERSIONS_URL
 export const AZURE_MODEL_RETIREMENT_SCHEDULE_URL = 'https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule'
@@ -561,6 +563,7 @@ export function parseAzureModelRetirementScheduleHtml(html) {
   let recognisedTables = 0
   const unique = new Map()
   const conflicts = []
+  const modelRowCounts = new Map()
   const blocks = html.matchAll(/<(h[123]|table)\b[^>]*>([\s\S]*?)<\/\1>/gi)
   for (const block of blocks) {
     const tag = block[1].toLowerCase()
@@ -605,6 +608,8 @@ export function parseAzureModelRetirementScheduleHtml(html) {
       const snapshotVersion = publisher === 'openai' && (datedVersion || /^\d{4}$/.test(version))
       const azureId = snapshotVersion ? `${modelId}-${version}` : modelId
       const record = { azureId, modelId, version, group, section, lifecycle, status }
+      const modelRowKey = modelId.trim().toLowerCase()
+      if (publisher === 'openai') modelRowCounts.set(modelRowKey, (modelRowCounts.get(modelRowKey) ?? 0) + 1)
       if (publisher) record.publisher = publisher
       if (!validId) record.reason = 'invalid model id'
       if (shutdown !== undefined) record.shutdown = shutdown
@@ -626,6 +631,9 @@ export function parseAzureModelRetirementScheduleHtml(html) {
     if (!tableRecords) throw new Error(`azure-ai-foundry lifecycle table for ${section} has no model entries`)
   }
   if (!recognisedTables) throw new Error('azure-ai-foundry lifecycle page has no recognised lifecycle table')
+  for (const record of unique.values()) {
+    if (record.publisher === 'openai') record.modelRowCount = modelRowCounts.get(record.modelId.trim().toLowerCase())
+  }
   return { records: [...unique.values()], conflicts }
 }
 
@@ -841,7 +849,17 @@ export function mergeDistributions(feeds, {
       unmatched.push(unmatchedItem)
       continue
     }
-    const target = identity.get(record.normalizedId)
+    let target = identity.get(record.normalizedId)
+    if (!target && via === 'azure-ai-foundry' && record.expectedPublisher === 'openai' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(raw.version) && raw.modelRowCount === 1) {
+      const bare = identity.get(raw.modelId)
+      if (bare?.publisher === 'openai' && bare.model.id === raw.modelId) {
+        const prefix = `${raw.modelId}-`
+        const hasSnapshot = working[bare.feedIndex].feed.models.some(model =>
+          [model.id, ...(model.aliases ?? [])].some(id => id.startsWith(prefix) && /^(?:\d{4}-\d{2}-\d{2}|\d{4})$/.test(id.slice(prefix.length))))
+        if (!hasSnapshot) target = bare
+      }
+    }
     if (!target) {
       if (via === 'azure-ai-foundry') {
         unconfirmedDistributions.push({
@@ -956,40 +974,6 @@ export function findDistributorFixture(dir, distributor = 'aws-bedrock') {
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate
   }
   throw new Error(`missing ${distributor} fixture in ${dir}`)
-}
-
-async function fetchBody(url, distributor, fetchImpl = globalThis.fetch) {
-  if (typeof fetchImpl !== 'function') throw new Error('this Node runtime has no built-in fetch')
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30_000)
-  try {
-    // Providers geo-localize without Accept-Language; the date parsers are English-only.
-    const response = await fetchImpl(url, { headers: { 'accept-language': 'en' }, signal: controller.signal })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const tooLarge = () => new Error(`response exceeds ${MAX_DISTRIBUTOR_BODY_BYTES} bytes`)
-    if (Number(response.headers?.get('content-length')) > MAX_DISTRIBUTOR_BODY_BYTES) throw tooLarge()
-    const chunks = []
-    let bytes = 0
-    if (response.body) {
-      for await (const chunk of response.body) {
-        bytes += chunk.byteLength
-        if (bytes > MAX_DISTRIBUTOR_BODY_BYTES) throw tooLarge()
-        chunks.push(Buffer.from(chunk))
-      }
-    } else {
-      const chunk = Buffer.from(await response.text())
-      if (chunk.byteLength > MAX_DISTRIBUTOR_BODY_BYTES) throw tooLarge()
-      chunks.push(chunk)
-    }
-    const body = Buffer.concat(chunks).toString('utf8')
-    if (!body.trim()) throw new Error('empty response')
-    return body
-  } catch (error) {
-    controller.abort()
-    throw new Error(`${distributor} fetch failed for ${url}: ${error.message}`)
-  } finally {
-    clearTimeout(timeout)
-  }
 }
 
 function readBedrockCardFixture(dir, filename, url) {
