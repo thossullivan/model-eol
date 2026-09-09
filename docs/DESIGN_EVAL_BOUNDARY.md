@@ -10,8 +10,10 @@ model-eol owns two things around migration verification:
 
 1. **The deadline.** The feeds carry the date a model stops answering on each
    clock: the publisher's API, and each distributor (Bedrock, Azure, Vertex).
-   That date is the last day a baseline can be captured from the old model.
-   On the applied clock it is the finding's `shutdown`. When the feed lists
+   An exact date is the last day a baseline can be captured from the old
+   model. A tentative or earliest floor is only "at least until": the old
+   model may answer past it, and the bot words it that way. On the applied
+   clock the date is the finding's `shutdown`. When the feed lists
    another clock on which the model still answers, `check` appends
    `[still answers via <channel> until <date>]` to the retiring or retired
    line, and the bot adds a `## Capture window` section to every PR and issue

@@ -495,15 +495,26 @@ const replacementSection = (item, now) => [
     : []),
 ]
 
-const captureSection = (group, now) => {
+const captureWindow = (group, now) => {
   const entry = group.context?.entry
-  if (!entry) return ''
+  if (!entry) return null
   const lifecycle = lifecycleFor(entry, {
     days: group.items?.[0]?.threshold_days ?? group.issues?.[0]?.threshold_days ?? 0,
     via: group.via ?? null,
     today: now,
   })
-  const capture = captureWindowFor(entry, lifecycle, { today: now })
+  return captureWindowFor(entry, lifecycle, { today: now })
+}
+
+// the first date on which the capture section changes, so a body can be refreshed when the digest cannot see it
+const captureExpiry = capture => capture
+  ? [capture.until, ...capture.alternatives.map(alternative => alternative.until)].filter(Boolean).sort()[0] ?? null
+  : null
+
+const captureExpired = (metadata, now) => typeof metadata.capture_expires === 'string' && metadata.capture_expires <= now.toISOString().slice(0, 10)
+
+const captureSection = (group, now) => {
+  const capture = captureWindow(group, now)
   if (!capture) return ''
   const clock = capture.via === 'publisher' || capture.via === 'publisher-fallback'
     ? markdownText('publisher')
@@ -537,6 +548,7 @@ export const buildPullBody = ({ group, headSha, baseSha = null, now = new Date()
     base_sha: baseSha,
     head_sha: headSha,
     feed_digest: group.feedDigest,
+    capture_expires: captureExpiry(captureWindow(group, now)),
     ...(evalConfigHash ? { eval_config_digest: evalConfigHash } : {}),
   }
   const sections = [
@@ -586,6 +598,7 @@ export const buildIssueBody = ({ group, now = new Date() }) => {
     replacement_note: issue.replacement_note,
     head_sha: null,
     feed_digest: group.feedDigest,
+    capture_expires: captureExpiry(captureWindow(group, now)),
     ...(group.channel ? { channel: group.channel } : {}),
   }
   const evidence = group.issues
@@ -1133,7 +1146,7 @@ const processModel = async ({ api, pulls, issueRecords, group, source, base, bas
     if (externalEval && externalEval.status !== 'pass') {
       return processEvalFailure({ api, issueRecords, group, evalResult: externalEval, root, now, issuesEnabled: config.issues.enabled, open })
     }
-    if (open.metadata.feed_digest === currentDigest && open.metadata.base_sha === baseHead && (!evalConfigHash || open.metadata.eval_config_digest === evalConfigHash)) {
+    if (open.metadata.feed_digest === currentDigest && open.metadata.base_sha === baseHead && (!evalConfigHash || open.metadata.eval_config_digest === evalConfigHash) && !captureExpired(open.metadata, now)) {
       return decision(group, 'skip-unchanged', { number: open.item.number })
     }
     let patch
@@ -1293,7 +1306,7 @@ const processIssue = async ({ api, issues, group, now }) => {
   const open = matches.find(record => isOpen(record.item))
   const body = buildIssueBody({ group, now })
   if (open) {
-    if (open.metadata.feed_digest === group.feedDigest) return decision(group, 'skip-unchanged', { number: open.item.number, body })
+    if (open.metadata.feed_digest === group.feedDigest && !captureExpired(open.metadata, now)) return decision(group, 'skip-unchanged', { number: open.item.number, body })
     await api.updateIssue(open.item.number, { title: issueTitle(group), body })
     return decision(group, 'update', { number: open.item.number, body })
   }

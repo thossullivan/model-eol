@@ -16,7 +16,7 @@ import {
   runBot,
   runPlan,
 } from '../bot.mjs'
-import { branchFor, markdownCode, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
+import { branchFor, itemDigest, markdownCode, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
@@ -381,7 +381,8 @@ for (const group of [captureModelGroup, captureIssueGroup]) {
   assert(body.indexOf('## Capture window') > body.indexOf('## Feed notes') && body.indexOf('## Capture window') < body.indexOf('## Eval'), `${group.kind} capture section follows feed notes and precedes eval`)
   const withoutEntry = captureBodies({ ...group, context: { ...group.context, entry: null } })
   assert(!withoutEntry.includes('## Capture window'), `${group.kind} body omits capture when the entry is missing`)
-  assert(JSON.stringify(parseMetadata(body)) === JSON.stringify(parseMetadata(withoutEntry)) && parseMetadata(body)?.id === group.id, `${group.kind} capture prose preserves metadata identity`)
+  const identityOf = text => { const { capture_expires, ...rest } = parseMetadata(text); return JSON.stringify(rest) }
+  assert(identityOf(body) === identityOf(withoutEntry) && parseMetadata(body)?.id === group.id && parseMetadata(withoutEntry)?.capture_expires === null, `${group.kind} capture prose preserves metadata identity`)
   for (const entry of [{ id: group.id }, { id: group.id, announced: '2000-01-01' }]) {
     assert(!captureBodies({ ...group, context: { ...group.context, entry } }).includes('## Capture window'), `${group.kind} body omits capture for an undated lifecycle`)
   }
@@ -443,13 +444,13 @@ const writeClockDigestFeed = distributions => write(path.join(clockDigestFeeds, 
 writeClockDigestFeed(clockDigestRows('active'))
 const clockDigestRepo = makeRepo({ name: 'clock-digest', files: { 'app.py': 'from openai import OpenAI\n\nclient = OpenAI()\nMODEL = "clock-digest-model"\n' }, config })
 const clockDigestGithub = new FakeGitHub()
-const clockDigestRun = () => runBot({
+const clockDigestRun = (now = '2026-08-01T00:00:00Z') => runBot({
   repo: 'example/clock-digest',
   targetDir: clockDigestRepo.work,
   token: 'test-token',
   transport: clockDigestGithub.transport.bind(clockDigestGithub),
   vendoredFeeds: clockDigestFeeds,
-  now: new Date('2026-08-01T00:00:00Z'),
+  now: new Date(now),
 })
 const clockDigestCreate = (await clockDigestRun()).decisions.find(item => item.group.kind === 'model')
 const clockDigestPull = clockDigestGithub.pulls.find(item => item.number === clockDigestCreate?.number)
@@ -463,6 +464,40 @@ const clockDigestUpdate = (await clockDigestRun()).decisions.find(item => item.g
 assert(clockDigestUpdate?.action === 'update' && !clockDigestUpdate.body.includes('It still answers via') && clockDigestUpdate.body.includes('lists no dated clock on which the old model still answers'), 'a distribution row change outside the plan items refreshes the PR body')
 const clockDigestUndated = buildPullBody({ group: { kind: 'model', id: 'clock-digest-model', publisher: 'openai', via: null, feedDigest: 'x', context: { announced: null, notes: [], entry: { id: 'clock-digest-model', shutdown: '2000-01-01', distributions: [{ via: 'aws-bedrock', status: 'active' }] } }, items: [{ file: 'app.py', line: 1, shutdown: '2000-01-01', replacement: 'clock-digest-next', status: 'retired', threshold_days: 90 }] }, headSha: 'h', now: new Date('2026-08-01T00:00:00Z') })
 assert(clockDigestUndated.includes('lists no dated clock on which the old model still answers') && !clockDigestUndated.includes('It still answers via'), 'an undated active clock is reported as unknown, not as closed')
+assert(parseMetadata(clockDigestCreate.body)?.capture_expires === '2999-10-14' && parseMetadata(clockDigestUndated)?.capture_expires === null, 'bot metadata records the first date on which the capture section changes')
+writeClockDigestFeed([{ via: 'aws-bedrock', shutdown: '2026-08-02', status: 'active' }])
+const clockExpiryUpdate = (await clockDigestRun()).decisions.find(item => item.group.kind === 'model')
+assert(clockExpiryUpdate?.action === 'update' && parseMetadata(clockExpiryUpdate.body)?.capture_expires === '2026-08-02', 'a near-term alternative is recorded as the capture expiry')
+clockDigestPull.head.sha = parseMetadata(clockExpiryUpdate.body)?.head_sha
+assert((await clockDigestRun()).decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'the PR stays untouched before the capture expiry')
+const clockExpired = (await clockDigestRun('2026-08-02T00:00:00Z')).decisions.find(item => item.group.kind === 'model')
+assert(clockExpired?.action === 'update' && !clockExpired.body.includes('It still answers via') && parseMetadata(clockExpired.body)?.capture_expires === null, 'an expired alternative refreshes the PR body on the expiry date even though the digest is unchanged')
+const clockIssueRepo = makeRepo({ name: 'clock-issue', files: { 'app.py': 'from openai import OpenAI\n\nclient = OpenAI()\nMODEL = "clock-issue-model"\n' }, config: { issues: { enabled: true } } })
+const clockIssueFeeds = path.join(tempRoot, 'clock-issue-feeds')
+fs.mkdirSync(clockIssueFeeds)
+write(path.join(clockIssueFeeds, 'openai.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'openai',
+  generated: '2026-07-01T00:00:00Z',
+  source: 'https://example.invalid/openai',
+  models: [{ id: 'clock-issue-model', shutdown: '2000-01-01', distributions: [{ via: 'aws-bedrock', shutdown: '2026-08-02', status: 'active' }] }],
+}))
+const clockIssueGithub = new FakeGitHub()
+const clockIssueRun = now => runBot({
+  repo: 'example/clock-issue',
+  targetDir: clockIssueRepo.work,
+  token: 'test-token',
+  transport: clockIssueGithub.transport.bind(clockIssueGithub),
+  vendoredFeeds: clockIssueFeeds,
+  now: new Date(now),
+})
+const clockIssueCreate = (await clockIssueRun('2026-08-01T00:00:00Z')).decisions.find(item => item.group.kind === 'issue')
+assert(clockIssueCreate?.action === 'create' && clockIssueCreate.body.includes('- It still answers via `aws-bedrock` until 2026-08-02.'), 'issue body lists the live alternative before expiry')
+assert((await clockIssueRun('2026-08-01T12:00:00Z')).decisions.find(item => item.group.kind === 'issue')?.action === 'skip-unchanged', 'issue stays untouched before the capture expiry')
+const clockIssueExpired = (await clockIssueRun('2026-08-02T00:00:00Z')).decisions.find(item => item.group.kind === 'issue')
+assert(clockIssueExpired?.action === 'update' && !clockIssueExpired.body.includes('It still answers via'), 'an expired alternative refreshes the issue body on the expiry date')
+const digestOrder = [{ via: 'caf\u00e9', shutdown: '2026-10-14' }, { via: 'cafe\u0301', shutdown: '2026-10-14' }]
+assert(itemDigest(digestOrder) === itemDigest(digestOrder.slice().reverse()) && itemDigest([{ via: 'B' }, { via: 'a' }]) === itemDigest([{ via: 'a' }, { via: 'B' }]), 'sorted digests are order-independent for locale-equal and case-different strings')
 
 const httpsAuth = gitAuthentication('https://github.com/example/private.git', 'private-token')
 assert(httpsAuth?.key === 'http.https://github.com/.extraheader', 'GitHub HTTPS authentication is scoped to the remote host')

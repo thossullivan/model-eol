@@ -315,8 +315,10 @@ Under `--via aws-bedrock`, these floors remain `scheduled` and display "not soon
 A distributor's later date gives you more time for the same migration. It is not a reason to
 skip it.
 
-The later date is also the last day you can still call the old model. When a
-retired or retiring model still answers on another channel, `check` appends
+The later date is also the last day you can still call the old model, when the
+feed gives it as an exact date. A tentative or earliest floor is "at least until",
+and the old model may answer past it. When a retired or retiring model still
+answers on another channel, `check` appends
 `[still answers via aws-bedrock until 2026-10-14]` to the line, and the bot adds
 a `## Capture window` section to its PRs and issues. If your eval compares the
 replacement's outputs against the old model's, capture that baseline before the
