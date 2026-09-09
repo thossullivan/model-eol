@@ -1639,6 +1639,7 @@ reviewTest('Comment stripping loops until no marker survives', () => {
   const nested = parseBedrockModelCardHtml(`${reviewCard}<!<!---->--<p>Model EOL date: December 1, 2026</p>-->`, reviewCardSource)
   strictAssert.equal(nested.records[0]?.date_precision, 'tentative')
   strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<!-- unterminated`, reviewCardSource), /unbalanced comment marker/)
+  strictAssert.equal(parseBedrockModelCardHtml(`${reviewCard}<!--<p>Model EOL date: December 1, 2026</p>--!>`, reviewCardSource).records[0]?.date_precision, 'tentative')
 })
 reviewTest('Second pass F4: Bedrock refuses colspan="9007199254740992" within bounded memory and time', () => {
   const html = `${reviewCard}<table><tr><td colspan="9007199254740992">x</td></tr></table>`

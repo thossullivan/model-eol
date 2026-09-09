@@ -359,7 +359,7 @@ export function parseBedrockModelCardHtml(html, source) {
   try {
     if (typeof html !== 'string' || !html.trim()) throw new Error('empty page')
     html = stripComments(html)
-    if (/<!--|-->/.test(html)) throw new Error('unbalanced comment marker')
+    if (/<!--|--!?>/.test(html)) throw new Error('unbalanced comment marker')
     const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].map(table => expandRows(tableRows(table[1])))
     const idTables = tables.filter(rows => rows[0]?.cells.some(cell => cell.text === 'Model ID'))
     if (!idTables.length) throw new Error('no Model ID table')

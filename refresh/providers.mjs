@@ -86,7 +86,7 @@ function validDate(year, month, day) {
 // Loop so a nested marker such as <!<!---->-- cannot survive a single pass.
 export function stripComments(html) {
   let text = String(html)
-  const pattern = /<!--[\s\S]*?-->/g
+  const pattern = /<!--[\s\S]*?--!?>/g
   while (pattern.test(text)) text = text.replace(pattern, '')
   return text
 }
