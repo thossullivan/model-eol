@@ -9,6 +9,7 @@ import {
   DISTRIBUTORS,
   loadDistributorSource,
   mergeDistributions,
+  sourceConflictSummary,
 } from './distributors.mjs'
 import {
   PROVIDERS,
@@ -45,8 +46,8 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
     help: values.help ?? false,
   }
 
-  if (!['openai', 'anthropic', 'google', 'all'].includes(options.provider)) {
-    throw new Error(`--provider must be openai, anthropic, google, or all`)
+  if (!['openai', 'anthropic', 'google', 'mistral', 'cohere', 'all'].includes(options.provider)) {
+    throw new Error(`--provider must be openai, anthropic, google, mistral, cohere, or all`)
   }
   const distributorArgs = values.distributor ?? []
   const distributors = (Array.isArray(distributorArgs) ? distributorArgs : [distributorArgs])
@@ -55,7 +56,7 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
     .filter(Boolean)
   for (const distributor of distributors) {
     if (!DISTRIBUTORS[distributor]) {
-      throw new Error(`--distributor must be aws-bedrock or vertex-ai`)
+      throw new Error(`--distributor must be aws-bedrock, vertex-ai, or azure-ai-foundry`)
     }
   }
   options.distributors = [...new Set(distributors)]
@@ -64,7 +65,7 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
     : options.distributors.length
       ? options.distributors.join(',')
       : undefined
-  options.providers = options.provider === 'all' ? ['openai', 'anthropic', 'google'] : [options.provider]
+  options.providers = options.provider === 'all' ? ['openai', 'anthropic', 'google', 'mistral', 'cohere'] : [options.provider]
   options.out = path.resolve(options.out)
   if (options.fixtures) options.fixtures = path.resolve(options.fixtures)
   return options
@@ -72,7 +73,7 @@ export function parseRefreshArgs(argv = process.argv.slice(2)) {
 
 export function usage() {
   return [
-    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|google|all] [--distributor aws-bedrock[,vertex-ai]] [--check] [--out feeds/] [--fixtures DIR]',
+    'Usage: node refresh/refresh.mjs [--provider openai|anthropic|google|mistral|cohere|all] [--distributor aws-bedrock[,vertex-ai,azure-ai-foundry]] [--check] [--out feeds/] [--fixtures DIR]',
     '',
     '--distributor accepts comma-separated values and may run standalone against committed publisher feeds, or compose with --provider.',
     '--check exits 0 when the semantic diff is empty, 3 when it has changes, and 1 on failure.',
@@ -110,6 +111,7 @@ export async function generateProviderFeed(providerName, options = {}) {
   const merged = mergeFeed(committed, {
     deprecations: sources.deprecations,
     currentIds: sources.currentIds,
+    currentModels: sources.currentModels,
     generated: options.generated,
     provider: sourceProvider,
   })
@@ -118,6 +120,8 @@ export async function generateProviderFeed(providerName, options = {}) {
     committed,
     feed: merged.feed,
     unconfirmedIds: merged.unconfirmedIds,
+    skipped: sources.skipped,
+    undatedDeprecatedIds: sources.undatedDeprecatedIds,
   }
 }
 
@@ -182,7 +186,7 @@ export async function run(options) {
         provider: AMAZON_PROVIDER,
       }))
     }
-    distributorState = { unconfirmedDistributions: [], noPublisherFeed: [] }
+    distributorState = { unconfirmedDistributions: [], noPublisherFeed: [], sourceConflicts: [], skippedModelCards: [] }
     for (const distributor of distributorNames) {
       const source = await loadDistributorSource(distributor, { fixtures: options.fixtures })
       const state = mergeDistributions(generated, {
@@ -193,6 +197,9 @@ export async function run(options) {
       for (const [index, item] of generated.entries()) item.feed = state.feeds[index]
       distributorState.unconfirmedDistributions.push(...state.unconfirmedDistributions)
       distributorState.noPublisherFeed.push(...state.noPublisherFeed)
+      distributorState.sourceConflicts.push(...source.conflicts ?? [], ...state.conflicts)
+      for (const conflict of state.conflicts) console.error(`notice: ${sourceConflictSummary(conflict)}`)
+      distributorState.skippedModelCards.push(...source.skipped ?? [])
     }
   }
 
@@ -206,7 +213,11 @@ export async function run(options) {
       unconfirmed: item.unconfirmedIds,
       unconfirmedDistributions,
       noPublisherFeed,
+      sourceConflicts: index === 0 ? distributorState?.sourceConflicts ?? [] : [],
+      skippedModelCards: index === 0 ? distributorState?.skippedModelCards ?? [] : [],
       publisher: item.provider.publisher,
+      skipped: item.skipped,
+      undatedDeprecatedIds: item.undatedDeprecatedIds,
     }
     return {
       provider: item.provider,

@@ -1,0 +1,365 @@
+<!doctype html><html><head><meta charset='utf-8'><title>fixture</title></head><body>
+<div id="main-col-body"><awsdocs-language-banner data-service="$ctrl.pageService"></awsdocs-language-banner><h1 class="topictitle" id="model-card-anthropic-claude-fable-5-1">Claude Fable 5.1</h1><div class="awsdocs-page-header-container"><awsdocs-page-header></awsdocs-page-header><awsdocs-filter-selector id="awsdocs-filter-selector"></awsdocs-filter-selector></div>
+  <h2 id="model-card-anthropic-claude-fable-5-1-header"><span class="inlinemediaobject"><img src="/images/bedrock/latest/userguide/images/models/claude.png" class="aws-docs-img-whiteBg aws-docs-img-xs-padding" height="30px" /></span> Anthropic — Claude Fable 5.1</h2>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-details">Model Details</h2>
+  <p>Claude Fable 5.1 is Anthropic's frontier model for ambitious coding, long-horizon agents, and enterprise knowledge work. It handles software projects that span an entire codebase, runs multi-hour jobs across many tools inside agent harnesses, and brings best-in-class vision to dense filings, charts, and diagrams.</p>
+
+  <div class="itemizedlist">
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+  <ul class="itemizedlist"><li class="listitem" style="list-style-type: none"><p><b>Model launch date:</b> September 1, 2026</p></li><li class="listitem" style="list-style-type: none"><p><b>EOL no sooner than:</b> September 1, 2027</p></li><li class="listitem" style="list-style-type: none"><p><b>Legacy period:</b> at least 6 months</p></li><li class="listitem" style="list-style-type: none"><p><b>Model lifecycle policy:</b> <a href="./model-lifecycle-legacy.html">Model lifecycle (For Models Launched Prior to Sept 7 2026)</a></p></li><li class="listitem" style="list-style-type: none"><p><b>Model EOL date:</b> N/A</p></li><li class="listitem" style="list-style-type: none"><p><b>End User License Agreements and Terms of Use:</b> <a href="https://aws.amazon.com/legal/bedrock/third-party-models/" rel="noopener noreferrer" target="_blank"><span>View</span><awsui-icon class="awsdocs-link-icon" name="external"></awsui-icon></a></p></li><li class="listitem" style="list-style-type: none"><p><b>Model lifecycle:</b> Active</p></li><li class="listitem" style="list-style-type: none"><p><b>Context window:</b> 1M tokens</p></li><li class="listitem" style="list-style-type: none"><p><b>Max output tokens:</b> 128K</p></li><li class="listitem" style="list-style-type: none"><p><b>Sampling parameters:</b> temperature must be 1.0 or unset; top_p must be 0.99 or unset; temperature and top_p cannot be specified together; top_k is not supported</p></li><li class="listitem" style="list-style-type: none"><p><b>Reasoning:</b> Supported (adaptive thinking is always on and cannot be disabled; effort level configurable — low, medium, high, xhigh, max; default: high)</p></li><li class="listitem" style="list-style-type: none"><p><b>Knowledge cutoff:</b> June 2026</p></li><li class="listitem" style="list-style-type: none"><p><b>Marketplace product ID:</b> prod-lt3y75wunrtv4</p></li></ul></div>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8b4b7"><thead>
+     <tr>
+      <th><b>Input Modalities</b></th>
+      <th><b>Output Modalities</b></th>
+     </tr>
+    </thead>
+     <tr><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Audio</td><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Embedding</td></tr>
+     <tr><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="Green circle with white checkmark icon." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Image</td><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Image</td></tr>
+     <tr><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Speech</td><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Speech</td></tr>
+     <tr><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="Green circle with white checkmark icon." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Text</td><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="Green circle with white checkmark icon." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Text</td></tr>
+     <tr><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Video</td><td tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /> Video</td></tr>
+    </table></div></div>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-apis-endpoints">Endpoints and APIs supported</h2>
+  <p>The following tables show which endpoints and APIs are supported for Claude Fable 5.1. For more information, see <a href="./apis.html">APIs supported by Amazon Bedrock</a> and <a href="./endpoints.html">Endpoints supported by Amazon Bedrock</a>.</p>
+  <p><b>Endpoint support</b></p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8b6b7"><thead>
+     <tr>
+      <th><b>Endpoint</b></th>
+      <th><b>Supported</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td tabindex="-1"><code class="code">bedrock-runtime</code></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td>
+     </tr>
+     <tr>
+      <td tabindex="-1"><code class="code">bedrock-mantle</code></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td>
+     </tr>
+    </table></div></div>
+  <p><b>APIs supported on <code class="code">bedrock-runtime</code> endpoint</b></p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8b6c11"><thead>
+     <tr>
+      <th><b>Messages</b></th>
+      <th><b>Responses</b></th>
+      <th><b>Chat Completions</b></th>
+      <th><b>Converse</b></th>
+      <th><b>Invoke</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td>
+     </tr>
+    </table></div></div>
+  <p><b>APIs supported on <code class="code">bedrock-mantle</code> endpoint</b></p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8b6c15"><thead>
+     <tr>
+      <th><b>Messages</b></th>
+      <th><b>Responses</b></th>
+      <th><b>Chat Completions</b></th>
+      <th><b>Converse</b></th>
+      <th><b>Invoke</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td>
+     </tr>
+    </table></div></div>
+  <div class="awsdocs-note awsdocs-tip"><div class="awsdocs-note-title"><awsui-icon name="status-info" variant="link"></awsui-icon><h6>Tip</h6></div><div class="awsdocs-note-text"><p>Whenever possible, we recommend using the <code class="code">bedrock-runtime</code> endpoint for new applications. See <a href="./endpoints.html">Endpoints supported by Amazon Bedrock</a> for details.</p></div></div>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-capabilities">Capabilities and Features</h2>
+  <p><b><u>Bedrock Features</u></b></p>
+  <p><b>Features supported using <code class="code">bedrock-runtime</code> endpoint</b></p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8b8b7"><thead>
+     <tr>
+      <th><b>Supported</b></th>
+      <th><b>Not Supported</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td tabindex="-1">
+       <div class="itemizedlist">
+         
+         
+         
+         
+         
+         
+         
+         
+         
+         
+       <ul class="itemizedlist"><li class="listitem"><p><a href="/bedrock/latest/APIReference/API_runtime_InvokeModelWithResponseStream.html" rel="noopener noreferrer" target="_blank">Response streaming</a></p></li><li class="listitem"><p><a href="prompt-caching.html" rel="noopener noreferrer" target="_blank">Prompt caching</a></p></li><li class="listitem"><p><a href="abuse-detection.html" rel="noopener noreferrer" target="_blank">Abuse detection</a></p></li><li class="listitem"><p><a href="guardrails.html" rel="noopener noreferrer" target="_blank">Guardrails</a></p></li><li class="listitem"><p><a href="prompt-management-optimize.html" rel="noopener noreferrer" target="_blank">Prompt optimization</a></p></li><li class="listitem"><p><a href="knowledge-base.html" rel="noopener noreferrer" target="_blank">Knowledge base</a></p></li><li class="listitem"><p><a href="evaluation.html" rel="noopener noreferrer" target="_blank">Model evaluation</a></p></li><li class="listitem"><p><a href="prompt-management.html" rel="noopener noreferrer" target="_blank">Prompt management</a></p></li><li class="listitem"><p><a href="flows.html" rel="noopener noreferrer" target="_blank">Flows</a></p></li><li class="listitem"><p><a href="agents.html" rel="noopener noreferrer" target="_blank">Agents</a></p></li></ul></div>
+      </td>
+      <td tabindex="-1">
+       <div class="itemizedlist">
+         
+       <ul class="itemizedlist"><li class="listitem"><p><a href="prompt-routing.html" rel="noopener noreferrer" target="_blank">Intelligent prompt routing</a></p></li></ul></div>
+      </td>
+     </tr>
+    </table></div></div>
+  <p><b><u>Bedrock Features</u></b></p>
+  <p><b>Features supported using <code class="code">bedrock-mantle</code> endpoint</b></p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8b8c13"><thead>
+     <tr>
+      <th><b>Supported</b></th>
+      <th><b>Not Supported</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td tabindex="-1">
+       <div class="itemizedlist">
+         
+         
+         
+         
+       <ul class="itemizedlist"><li class="listitem"><p><a href="/bedrock/latest/APIReference/API_runtime_InvokeModelWithResponseStream.html" rel="noopener noreferrer" target="_blank">Response streaming</a></p></li><li class="listitem"><p><a href="prompt-caching.html" rel="noopener noreferrer" target="_blank">Prompt caching</a></p></li><li class="listitem"><p><a href="abuse-detection.html" rel="noopener noreferrer" target="_blank">Abuse detection</a></p></li><li class="listitem"><p><a href="count-tokens.html" rel="noopener noreferrer" target="_blank">Count tokens</a></p></li></ul></div>
+      </td>
+      <td tabindex="-1">
+       <div class="itemizedlist">
+         
+         
+         
+         
+         
+         
+         
+         
+       <ul class="itemizedlist"><li class="listitem"><p><a href="guardrails.html" rel="noopener noreferrer" target="_blank">Guardrails</a></p></li><li class="listitem"><p><a href="prompt-management-optimize.html" rel="noopener noreferrer" target="_blank">Prompt optimization</a></p></li><li class="listitem"><p><a href="knowledge-base.html" rel="noopener noreferrer" target="_blank">Knowledge base</a></p></li><li class="listitem"><p><a href="evaluation.html" rel="noopener noreferrer" target="_blank">Model evaluation</a></p></li><li class="listitem"><p><a href="prompt-management.html" rel="noopener noreferrer" target="_blank">Prompt management</a></p></li><li class="listitem"><p><a href="flows.html" rel="noopener noreferrer" target="_blank">Flows</a></p></li><li class="listitem"><p><a href="agents.html" rel="noopener noreferrer" target="_blank">Agents</a></p></li><li class="listitem"><p><a href="prompt-routing.html" rel="noopener noreferrer" target="_blank">Intelligent prompt routing</a></p></li></ul></div>
+      </td>
+     </tr>
+    </table></div></div>
+  <p><b><u>Prompt caching using <code class="code">bedrock-runtime</code> and <code class="code">bedrock-mantle</code> endpoints</u></b></p>
+  <p>For more information, see <a href="prompt-caching.html" rel="noopener noreferrer" target="_blank">Prompt caching for faster model inference</a>.</p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8b8c19"><thead>
+     <tr>
+      <th><b>Prompt caching supported</b></th>
+      <th><b>Min tokens per cache checkpoint</b></th>
+      <th><b>Max cache checkpoints per request</b></th>
+      <th><b>Supported TTL</b></th>
+      <th><b>Fields that accept prompt cache checkpoint</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td tabindex="-1">Yes</td>
+      <td tabindex="-1">512</td>
+      <td tabindex="-1">4</td>
+      <td tabindex="-1">5 minutes, 1 hour</td>
+      <td tabindex="-1"><code class="code">system</code>, <code class="code">messages</code>, and <code class="code">tools</code></td>
+     </tr>
+    </table></div></div>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-content-restrictions">Content Restrictions</h2>
+  <p>Claude Fable 5.1 includes blocking classifiers for dual-use content in cybersecurity and life sciences. When a classifier blocks a request, the API returns a standard HTTP 200 response with <code class="code">stop_reason: "refusal"</code> and a <code class="code">stop_details</code> object containing the restriction category. Refusal rates on this model are materially higher than on previous Claude models.</p>
+  <p>Customers should handle <code class="code">stop_reason: "refusal"</code> as a primary response path. Prompt-stage refusals (blocked before inference begins) are not billed. Mid-stream refusals (blocked after partial output) are billed for tokens generated before the block.</p>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-pricing">Pricing</h2>
+  <p>For pricing information, see the <a href="https://aws.amazon.com/bedrock/pricing/" rel="noopener noreferrer" target="_blank"><span>Amazon Bedrock Pricing</span><awsui-icon class="awsdocs-link-icon" name="external"></awsui-icon></a> page.</p>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-programmatic-access">Programmatic Access</h2>
+  <p>Use the following model IDs and endpoint URLs to access this model programmatically. For more information about the available APIs and endpoints, see <a href="apis.html" rel="noopener noreferrer" target="_blank">APIs supported</a> and <a href="endpoints.html" rel="noopener noreferrer" target="_blank">Endpoints supported</a>.</p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8c14b5"><thead>
+     <tr>
+      <th><b>Endpoint</b></th>
+      <th><b>Model ID</b></th>
+      <th><b>In-Region endpoint URL</b></th>
+      <th><b>Geo inference ID</b></th>
+      <th><b>Global inference ID</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td tabindex="-1"><code class="code">bedrock-runtime</code></td>
+      <td tabindex="-1"><code class="code">anthropic.claude-fable-5-1</code></td>
+      <td tabindex="-1">N/A</td>
+      <td tabindex="-1"><code class="code">us.anthropic.claude-fable-5-1</code></td>
+      <td tabindex="-1"><code class="code">global.anthropic.claude-fable-5-1</code></td>
+     </tr>
+     <tr>
+      <td tabindex="-1"><code class="code">bedrock-mantle</code></td>
+      <td tabindex="-1"><code class="code">anthropic.claude-fable-5-1</code></td>
+      <td tabindex="-1"><code class="code">https://bedrock-mantle.<span>{</span>region}.api.aws/anthropic/v1/messages</code></td>
+      <td tabindex="-1">N/A</td>
+      <td tabindex="-1">N/A</td>
+     </tr>
+    </table></div></div>
+  <p><em>For example, if region is us-east-1 (N. Virginia), then the bedrock-runtime endpoint URL will be "https://bedrock-runtime.us-east-1.amazonaws.com" and for bedrock-mantle will be "https://bedrock-mantle.us-east-1.api.aws".</em></p>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-tiers">Service Tiers</h2>
+  <p>Amazon Bedrock offers multiple service tiers to match your workload requirements. <b>Standard</b> provides pay-per-token access with no commitment (set <code class="code">"service_tier": "default"</code> or omit the field). <b>Priority</b> delivers the fastest response times for a price premium (set <code class="code">"service_tier": "priority"</code>). <b>Flex</b> provides lower-cost access for flexible, non-time-sensitive workloads (set <code class="code">"service_tier": "flex"</code>). <b>Reserved</b> provides dedicated throughput with a term commitment for predictable workloads; it is set at the account level rather than per request (contact your AWS account team to enable). For more information, see <a href="service-tiers-inference.html" rel="noopener noreferrer" target="_blank">service tiers</a>.</p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8c16b5"><thead>
+     <tr>
+      <th><b>Standard</b></th>
+      <th><b>Priority</b></th>
+      <th><b>Flex</b></th>
+      <th><b>Reserved</b></th>
+     </tr>
+    </thead>
+     <tr>
+      <td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="Green circle with white checkmark icon." data-alt-text-source="generated" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="Red circle with white X icon indicating error, cancel, or close action." data-alt-text-source="generated" style="max-width:10px" height="10px" /></td>
+     </tr>
+    </table></div></div>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-regional-availability">Regional Availability</h2>
+  <p><b><u>Regional availability at a glance</u></b></p>
+  <p>Amazon Bedrock offers three inference options: <b>In-Region</b> keeps requests within a single Region for strict compliance, <b>Geo Cross-Region</b> routes across Regions within a geography (such as US, EU, and APAC) while respecting data residency, and <b>Global Cross-Region</b> routes anywhere worldwide when there are no residency constraints. Refer to the <a href="./models-region-compatibility.html">Regional availability by models</a> page for more details.</p>
+  <p>Availability differs by endpoint.</p>
+  <p><b>Availability using the <code class="code">bedrock-runtime</code> endpoint</b></p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8c18c11"><thead>
+     <tr>
+      <th><b>Region</b></th>
+      <th><b>In-Region</b></th>
+      <th><b>Geo</b></th>
+      <th><b>Global</b></th>
+     </tr>
+    </thead>
+     <tr><td tabindex="-1"><code class="code">us-east-1</code> (N. Virginia)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">us-east-2</code> (Ohio)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">us-west-1</code> (N. California)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">us-west-2</code> (Oregon)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ca-central-1</code> (Canada)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ca-west-1</code> (Calgary)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">eu-central-1</code> (Frankfurt)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">eu-central-2</code> (Zurich)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">eu-north-1</code> (Stockholm)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">eu-south-1</code> (Milan)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">eu-south-2</code> (Spain)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">eu-west-1</code> (Ireland)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">eu-west-2</code> (London)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">eu-west-3</code> (Paris)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-east-2</code> (Taipei)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-northeast-1</code> (Tokyo)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-northeast-2</code> (Seoul)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-northeast-3</code> (Osaka)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-south-1</code> (Mumbai)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-south-2</code> (Hyderabad)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-southeast-1</code> (Singapore)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-southeast-2</code> (Sydney)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-southeast-3</code> (Jakarta)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-southeast-4</code> (Melbourne)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-southeast-5</code> (Malaysia)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-southeast-6</code> (New Zealand)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">ap-southeast-7</code> (Thailand)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">il-central-1</code> (Tel Aviv)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">me-central-1</code> (UAE)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">me-south-1</code> (Bahrain)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">af-south-1</code> (Cape Town)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">sa-east-1</code> (São Paulo)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">mx-central-1</code> (Mexico)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">us-gov-east-1</code> (GovCloud East)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td></tr>
+     <tr><td tabindex="-1"><code class="code">us-gov-west-1</code> (GovCloud West)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td></tr>
+    </table></div></div>
+  <p><b>Availability using the <code class="code">bedrock-mantle</code> endpoint</b></p>
+  <div class="table-container"><div class="table-contents"><table id="w625aac11c10b8c18c15"><thead>
+     <tr>
+      <th><b>Region</b></th>
+      <th><b>In-Region</b></th>
+      <th><b>Geo</b></th>
+      <th><b>Global</b></th>
+     </tr>
+    </thead>
+     <tr><td tabindex="-1"><code class="code">us-gov-west-1</code> (GovCloud West)</td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-yes.png" alt="supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td><td align="center" style="text-align: center;" tabindex="-1"><img src="/images/bedrock/latest/userguide/images/icons/icon-no.png" alt="not-supported" style="max-width:10px" height="10px" /></td></tr>
+    </table></div></div>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-data-retention">Data Retention</h2>
+  <p>To use this model, you must opt in to AWS review by setting your data retention mode to <code class="code">aws_review</code> via the Data Retention API. For more information, see <a href="abuse-detection.html" rel="noopener noreferrer" target="_blank">Amazon Bedrock abuse detection</a>.</p>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-quotas">Quotas and Limits</h2>
+  <p>Your AWS account has default quotas to maintain the performance of the service and to ensure appropriate usage of Amazon Bedrock. The default quotas assigned to an account might be updated depending on regional factors, payment history, fraudulent usage, and/or approval of a quota <a href="quotas-increase.html" rel="noopener noreferrer" target="_blank">increase request</a>. For more information, see <a href="./quotas.html">Quotas for Amazon Bedrock</a> documentation and see the <a href="/general/latest/gr/bedrock.html#limits_bedrock" rel="noopener noreferrer" target="_blank">limits</a> for the model.</p>
+  
+  <h2 id="model-card-anthropic-claude-fable-5-1-sample-code">Sample Code</h2>
+  <p><b>Step 1 - AWS Account:</b> If you have an AWS account already, skip this step. If you are new to AWS, sign up for an <a href="https://portal.aws.amazon.com/billing/signup" rel="noopener noreferrer" target="_blank"><span>AWS account</span><awsui-icon class="awsdocs-link-icon" name="external"></awsui-icon></a>.</p>
+  <p><b>Step 2 - API key:</b> Go to the <a href="https://console.aws.amazon.com/bedrock/home#/api-keys/long-term/create" rel="noopener noreferrer" target="_blank"><span>Amazon Bedrock console</span><awsui-icon class="awsdocs-link-icon" name="external"></awsui-icon></a> and generate a long-term API key.</p>
+  <p><b>Step 3 - Get the SDK:</b> To use this getting started guide, you must have Python already installed. Then install the relevant software depending on the APIs you are using.</p>
+  <awsdocs-tabs><dl style="display: none">
+   <dt>Messages API</dt><dd tab-id="messages-api">
+     <pre class="programlisting"><div class="code-btn-container"><div class="btn-copy-code" title="Copy"><awsui-icon name="copy"></awsui-icon></div></div><!--DEBUG: cli ()--><code class="">pip install -U anthropic aws-bedrock-token-generator</code></pre>
+    </dd>
+   <dt>Invoke/Converse API</dt><dd tab-id="invoke/converse-api">
+     <pre class="programlisting"><div class="code-btn-container"><div class="btn-copy-code" title="Copy"><awsui-icon name="copy"></awsui-icon></div></div><!--DEBUG: cli ()--><code class="">pip install boto3</code></pre>
+    </dd>
+  </dl></awsdocs-tabs>
+  <p><b>Step 4 - Set environment variables:</b> Configure your environment to use the API key for authentication.</p>
+  <awsdocs-tabs><dl style="display: none">
+   <dt>Messages API</dt><dd tab-id="messages-api">
+     <pre class="programlisting"><div class="code-btn-container"><div class="btn-copy-code" title="Copy"><awsui-icon name="copy"></awsui-icon></div></div><!--DEBUG: cli ()--><code class="">AWS_BEARER_TOKEN_BEDROCK="&lt;provide your Bedrock API key&gt;"</code></pre>
+    </dd>
+   <dt>Invoke/Converse API</dt><dd tab-id="invoke/converse-api">
+     <pre class="programlisting"><div class="code-btn-container"><div class="btn-copy-code" title="Copy"><awsui-icon name="copy"></awsui-icon></div></div><!--DEBUG: cli ()--><code class="">AWS_BEARER_TOKEN_BEDROCK="&lt;provide your Bedrock API key&gt;"</code></pre>
+    </dd>
+  </dl></awsdocs-tabs>
+  <p><b>Step 5 - Run your first inference request:</b> Save the file as <code>bedrock-first-request.py</code></p>
+  <awsdocs-tabs><dl style="display: none">
+   <dt>Messages API</dt><dd tab-id="messages-api">
+     <pre class="programlisting"><div class="code-btn-container"><div class="btn-copy-code" title="Copy"><awsui-icon name="copy"></awsui-icon></div></div><!--DEBUG: cli (python)--><code class="python ">from anthropic import Anthropic
+from aws_bedrock_token_generator import provide_token
+
+token = provide_token(region="us-east-1")
+
+client = Anthropic(
+    base_url="https://bedrock-runtime.us-east-1.amazonaws.com/anthropic",
+    api_key=token,
+)
+
+response = client.messages.create(
+    model="global.anthropic.claude-fable-5-1",
+    max_tokens=1024,
+    messages=[<span>{</span>"role": "user", "content": "Can you explain the features of Amazon Bedrock?"}],
+)
+
+print(response)</code></pre>
+    </dd>
+   <dt>Invoke API</dt><dd tab-id="invoke-api">
+     <pre class="programlisting"><div class="code-btn-container"><div class="btn-copy-code" title="Copy"><awsui-icon name="copy"></awsui-icon></div></div><!--DEBUG: cli (python)--><code class="python ">import json
+import boto3
+
+client = boto3.client('bedrock-runtime', region_name='us-east-1')
+response = client.invoke_model(
+    modelId='global.anthropic.claude-fable-5-1',
+    body=json.dumps(<span>{</span>
+            'anthropic_version': 'bedrock-2023-05-31',
+            'messages': [<span>{</span> 'role': 'user', 'content': 'Can you explain the features of Amazon Bedrock?'}],
+            'max_tokens': 1024
+    })
+)
+print(json.loads(response['body'].read()))</code></pre>
+    </dd>
+   <dt>Converse API</dt><dd tab-id="converse-api">
+     <pre class="programlisting"><div class="code-btn-container"><div class="btn-copy-code" title="Copy"><awsui-icon name="copy"></awsui-icon></div></div><!--DEBUG: cli (python)--><code class="python ">import boto3
+
+client = boto3.client('bedrock-runtime', region_name='us-east-1')
+response = client.converse(
+    modelId='global.anthropic.claude-fable-5-1',
+    messages=[
+        <span>{</span>
+            'role': 'user',
+            'content': [<span>{</span>'text': 'Can you explain the features of Amazon Bedrock?'}]
+        }
+    ]
+)
+print(response)</code></pre>
+    </dd>
+  </dl></awsdocs-tabs>
+ <awsdocs-copyright class="copyright-print"></awsdocs-copyright><awsdocs-thumb-feedback right-edge="{{$ctrl.thumbFeedbackRightEdge}}"></awsdocs-thumb-feedback></div><noscript><div><div><div><div id="js_error_message"><p><img src="https://d1ge0kk1l5kms0.cloudfront.net/images/G/01/webservices/console/warning.png" alt="Warning" /> <strong>Javascript is disabled or is unavailable in your browser.</strong></p><p>To use the Amazon Web Services Documentation, Javascript must be enabled. Please refer to your browser's Help pages for instructions.</p></div></div></div></div></noscript>
+</body></html>

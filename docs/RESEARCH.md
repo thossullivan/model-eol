@@ -23,9 +23,21 @@ the July 2026 shutoff wave.
 - Anthropic policy (60-day floor, lifecycle states):
   https://platform.claude.com/docs/en/about-claude/model-deprecations
 - Azure (12 mo from launch + 60 days notice; keeps models past OpenAI's own dates):
-  https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/model-retirements
-- Bedrock (12 mo on platform + 6 mo Legacy notice + paid Extended Access):
-  https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
+  https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirements
+  The old `ai-foundry` URL redirects to this lifecycle policy article.
+- Mistral (deprecation and retirement days per model, product-name alternatives):
+  https://docs.mistral.ai/models
+- Cohere (dated announcements; deprecated means no new customers, shutdown assigned later):
+  https://docs.cohere.com/docs/deprecations
+- xAI: no lifecycle index. Retirements appear only on per-event migration pages
+  (https://docs.x.ai/developers/migration/may-15-retirement,
+  https://docs.x.ai/developers/migration/imagine-image-quality-nov-2) and the
+  models API has no deprecation fields. Not ingested; Azure carries grok clocks
+  for Foundry only.
+- Bedrock changed its lifecycle policy on 2026-09-07.
+  Models launched earlier retain the [legacy lifecycle table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html).
+  Newer models publish lifecycle dates on [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
+  Refresh reads both sources; the legacy table wins overlaps, and card not-before floors become tentative distribution dates.
 - Cross-provider calendars (community scrapers - the demand signal):
   https://benchr.org/deprecations and
   https://hidekazu-konishi.com/entry/ai_model_deprecation_and_lifecycle_calendar.html
@@ -71,6 +83,6 @@ the July 2026 shutoff wave.
   successor (community analysis):
   https://community.openai.com/t/o4-mini-deep-research-o3-deep-research-deprecation/1379560
 - Azure keeps o3-deep-research until 2026-12-26 (retirement table):
-  https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/model-retirements
+  https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule
 - Shutdown-day failure mode: "a production 404 on the shutdown day":
   https://ecorpit.com/openai-model-shutdowns-23-july-2026-migration-map/

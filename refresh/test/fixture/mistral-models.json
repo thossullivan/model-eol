@@ -1,0 +1,8 @@
+{
+  "object": "list",
+  "data": [
+    { "id": "mistral-medium-2508", "aliases": ["mistral-medium-latest"] },
+    { "id": "labs-leanstral-2603", "aliases": [] },
+    { "id": "voxtral-mini-2507", "aliases": [] }
+  ]
+}

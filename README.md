@@ -36,7 +36,7 @@ format instead of each scraping the same pages.
   replacement, `distributions` for per-channel lifecycles, and publisher `policy`
   floors. It is small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (30 entries), Google (93 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock and Google Vertex AI lifecycle pages, feed data generated 2026-09-07<!-- /feeds-status -->. Every
+- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (30 entries), Cohere (12 entries), Google (93 entries), Mistral (40 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-09-09<!-- /feeds-status -->. Every
   dated entry carries a source URL. Anthropic's "not sooner than" dates for
   active models are included as `tentative` planning floors.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
@@ -115,7 +115,8 @@ files. The checker, PR gate, schedule, SBOM export, and badge run with no
 credentials at all. The bot needs a GitHub token, and a fine-grained PAT if you
 want its PRs to trigger checks. Provider API keys are optional in exactly two
 places: your own eval command, and the models-endpoint coverage in the feed
-refresh.
+refresh. Refresh accepts `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+(or `GOOGLE_API_KEY`), `MISTRAL_API_KEY`, and `COHERE_API_KEY`.
 
 Both command-line binaries ship in one zero-dependency npm package. The test
 suite packs that package, installs it into an empty directory with the network
@@ -306,8 +307,12 @@ until January 8, 2027.
 
 `distributions` in the spec carries these per-channel dates. `--via <distributor>`
 judges your repo by the channel you call. The distributor refresh keeps the
-Bedrock and Vertex dates current from their lifecycle pages. A distributor's
-later date gives you more time for the same migration. It is not a reason to
+Bedrock, Vertex, and Azure Foundry dates current from their lifecycle pages.
+Bedrock combines its [legacy table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html)
+with [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
+Card floors become tentative distribution dates without announcements.
+Under `--via aws-bedrock`, these floors remain `scheduled` and display "not sooner than".
+A distributor's later date gives you more time for the same migration. It is not a reason to
 skip it.
 
 ## Policy floors
@@ -505,11 +510,21 @@ read-only evaluation job, and write tokens live only in the reconciliation job.
 
 ```sh
 node refresh/refresh.mjs --check                      # semantic diff vs live pages; exit 3 = PR-worthy
-node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai # distributor lifecycle clocks
+node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry # distributor lifecycle clocks
 node scripts/feed-changelog.mjs                       # local rendering of the hosted Atom feed
 ```
 
 A parse failure stops the run. The refresh never writes a guessed feed.
+
+AWS changed its Bedrock lifecycle policy on 2026-09-07.
+The legacy table covers models launched before that date; newer models publish lifecycle dates on individual cards.
+The Bedrock refresh reads both sources and keeps legacy-table records when IDs overlap.
+Conflicting exact dates appear under "Source conflicts"; the legacy table wins.
+When two card floors differ, the later day-precision date applies.
+Cards without lifecycle fields or day-precision dates appear under "Model cards without lifecycle fields" and emit notices.
+The crawl reads at most 400 unique cards sequentially, with 30-second deadlines and 8 MiB response limits.
+Offline checks use `bedrock-lifecycle.html`, `bedrock-model-cards.html`, and `bedrock-model-cards/<basename>` fixtures.
+Missing card fixtures stop the refresh.
 
 This runs automatically. A weekly workflow
 (`.github/workflows/feed-refresh.yml`, Mondays 05:23 UTC) checks the live
@@ -566,9 +581,9 @@ is the most useful thing any of us can do here.
 - The checker matches known IDs only. It does not discover models that are
   absent from the feeds. This is deliberate: a CI gate needs precision more than
   discovery.
-- Fetchers: OpenAI, Anthropic, Google, aws-bedrock, and vertex-ai are live.
-  Azure dates are carried where OpenAI's own page publishes them. A standalone
-  Azure lifecycle fetcher is not built yet.
+- Fetchers: OpenAI, Anthropic, Google, Mistral, Cohere, aws-bedrock, vertex-ai,
+  and azure-ai-foundry are live. xAI publishes no lifecycle index and its models
+  API carries no deprecation fields, so xAI is not ingested.
 - On npm as [`model-eol`](https://www.npmjs.com/package/model-eol). Material
   feed changes republish automatically as patch versions, with trusted
   publishing and provenance. Code releases require an explicit stable version.

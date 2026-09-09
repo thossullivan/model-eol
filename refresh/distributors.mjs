@@ -1,22 +1,40 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { assertIsoDate, dateFromText } from './providers.mjs'
+import { assertIsoDate, dateFromText, MODEL_ID_PATTERN, stripComments } from './providers.mjs'
 
-export const BEDROCK_LIFECYCLE_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html'
+export const BEDROCK_LIFECYCLE_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html'
+export const BEDROCK_MODEL_CARDS_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html'
+export const MAX_BEDROCK_MODEL_CARDS = 400
+export const MAX_DISTRIBUTOR_BODY_BYTES = 8 * 1024 * 1024
 export const VERTEX_MODEL_VERSIONS_URL = 'https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions'
 export const VERTEX_LIFECYCLE_URL = VERTEX_MODEL_VERSIONS_URL
+export const AZURE_MODEL_RETIREMENT_SCHEDULE_URL = 'https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule'
+export const AZURE_PUBLISHER_BY_SECTION = new Map([
+  ['Azure OpenAI', 'openai'],
+  ['Anthropic', 'anthropic'],
+  ['Mistral AI', 'mistral'],
+  ['Cohere', 'cohere'],
+])
 
 export const DISTRIBUTORS = {
   'aws-bedrock': {
     name: 'aws-bedrock',
     sourceUrl: BEDROCK_LIFECYCLE_URL,
     fixture: 'bedrock-lifecycle.html',
+    indexUrl: BEDROCK_MODEL_CARDS_URL,
+    indexFixture: 'bedrock-model-cards.html',
+    cardFixtureDir: 'bedrock-model-cards',
   },
   'vertex-ai': {
     name: 'vertex-ai',
     sourceUrl: VERTEX_MODEL_VERSIONS_URL,
     fixture: 'vertex-model-versions.html',
+  },
+  'azure-ai-foundry': {
+    name: 'azure-ai-foundry',
+    sourceUrl: AZURE_MODEL_RETIREMENT_SCHEDULE_URL,
+    fixture: 'azure-model-retirement-schedule.html',
   },
 }
 
@@ -32,8 +50,7 @@ function decodeEntities(text) {
 }
 
 function plainText(fragment) {
-  return decodeEntities(String(fragment)
-    .replace(/<!--(?:[\s\S]*?)-->/g, ' ')
+  return decodeEntities(stripComments(fragment)
     .replace(/<br\s*\/?\s*>/gi, '\n')
     .replace(/<[^>]*>/g, ' '))
     .replace(/[\u00a0\u2007\u202f]/g, ' ')
@@ -59,13 +76,17 @@ function tableRows(table) {
 function span(cell, name) {
   const match = cell.attrs.match(new RegExp(`\\b${name}\\s*=\\s*["']?(\\d+)`, 'i'))
   const value = match ? Number(match[1]) : 1
+  if (value > 64) throw new Error(`table ${name} exceeds 64: ${match[1]}`)
   return Number.isInteger(value) && value > 0 ? value : 1
 }
 
-// The AWS page uses rowspan for regions. Expanding it here makes the parser
-// operate on logical rows and keeps the model/date columns aligned.
+// Bound logical cells, including carried rowspans, before allocation.
 function expandRows(rows) {
   const active = []
+  let expandedCells = 0
+  const countCell = () => {
+    if (++expandedCells > 10000) throw new Error('table exceeds 10000 expanded cells')
+  }
   return rows.map(row => {
     const cells = []
     let column = 0
@@ -74,6 +95,7 @@ function expandRows(rows) {
     const fillActive = () => {
       while (active[column]?.remaining > 0) {
         const slot = active[column]
+        countCell()
         cells[column] = slot.cell
         slot.remaining--
         if (slot.remaining === 0) active[column] = undefined
@@ -87,6 +109,7 @@ function expandRows(rows) {
       const columns = span(cell, 'colspan')
       const rowsRemaining = span(cell, 'rowspan') - 1
       for (let offset = 0; offset < columns; offset++) {
+        countCell()
         cells[column] = cell
         if (rowsRemaining > 0) active[column] = { cell, remaining: rowsRemaining }
         column++
@@ -270,6 +293,161 @@ export function parseBedrockLifecycleHtml(html) {
 export const parseAwsBedrockLifecycle = parseBedrockLifecycleHtml
 export const parseAWSBedrockLifecycle = parseBedrockLifecycleHtml
 
+export function parseBedrockModelCardsIndexHtml(html) {
+  const urls = new Set()
+  const directory = new URL('.', BEDROCK_MODEL_CARDS_URL).href
+  for (const anchor of stripComments(html).matchAll(/<a\b[^>]*>/gi)) {
+    const attribute = anchor[0].match(/\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i)
+    const href = attribute?.[1] ?? attribute?.[2] ?? attribute?.[3]
+    if (!href) continue
+    const decoded = decodeEntities(href)
+    let url
+    try {
+      url = new URL(decoded, BEDROCK_MODEL_CARDS_URL)
+    } catch {
+      if (/model-card-/i.test(decoded.split(/[?#]/)[0])) {
+        throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} has invalid model card href: ${href}`)
+      }
+      continue
+    }
+    url.search = ''
+    url.hash = ''
+    if (!/model-card-/i.test(url.pathname)) continue
+    if (url.protocol !== 'https:' || new URL('.', url).href !== directory || !/^model-card-[a-z0-9_.-]+\.html$/i.test(path.posix.basename(url.pathname))) {
+      throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} has invalid model card href: ${href}`)
+    }
+    urls.add(url.href)
+    if (urls.size > MAX_BEDROCK_MODEL_CARDS) {
+      throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} exceeds ${MAX_BEDROCK_MODEL_CARDS} model cards`)
+    }
+  }
+  if (!urls.size) throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} has no model card links`)
+  return [...urls]
+}
+
+const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy period', 'Model lifecycle policy', 'Model EOL date']
+const BEDROCK_CARD_MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+const BEDROCK_CARD_DAY = new RegExp(`^${BEDROCK_CARD_MONTH} \\d{1,2}, (?:19|20)\\d{2}$`, 'i')
+const BEDROCK_CARD_MONTH_ONLY = new RegExp(`^${BEDROCK_CARD_MONTH} (?:19|20)\\d{2}$`, 'i')
+
+function bedrockCardFields(html) {
+  const fields = new Map()
+  for (const paragraph of html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)) {
+    const text = plainText(paragraph[1])
+    const label = BEDROCK_CARD_LABELS.find(candidate => text.startsWith(`${candidate}:`))
+    if (!label) continue
+    if (fields.has(label)) throw new Error(`duplicate ${label} field`)
+    const value = text.slice(label.length + 1).trim()
+    if (!value) throw new Error(`empty ${label} field`)
+    fields.set(label, value)
+  }
+  const text = plainText(html)
+  for (const label of BEDROCK_CARD_LABELS) {
+    const count = [...text.matchAll(new RegExp(`\\b${label}\\b`, 'gi'))].length
+    if (count !== Number(fields.has(label))) throw new Error(`unaccounted ${label} field outside its paragraph`)
+  }
+  return fields
+}
+
+function bedrockCardDate(value, label, allowMonth = false) {
+  if (allowMonth && BEDROCK_CARD_MONTH_ONLY.test(value)) return undefined
+  if (!BEDROCK_CARD_DAY.test(value)) throw new Error(`unrecognised ${label} date: ${value}`)
+  return dateFromText(value)
+}
+
+export function parseBedrockModelCardHtml(html, source) {
+  try {
+    if (typeof html !== 'string' || !html.trim()) throw new Error('empty page')
+    html = stripComments(html)
+    if (/<!--|--!?>/.test(html)) throw new Error('unbalanced comment marker')
+    const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].map(table => expandRows(tableRows(table[1])))
+    const idTables = tables.filter(rows => rows[0]?.cells.some(cell => cell.text === 'Model ID'))
+    if (!idTables.length) throw new Error('no Model ID table')
+    if (idTables.length > 1) throw new Error('more than one Model ID table')
+    const rows = idTables[0]
+    const columns = rows[0].cells.flatMap((cell, index) => cell.text === 'Model ID' ? [index] : [])
+    if (columns.length !== 1) throw new Error('ambiguous Model ID columns')
+    if (rows.length < 2) throw new Error('Model ID table has no entries')
+    const ids = new Set()
+    for (const [offset, row] of rows.slice(1).entries()) {
+      const id = row.cells[columns[0]]?.text ?? ''
+      if (!isBedrockModelId(id)) throw new Error(`invalid Model ID in row ${offset + 2}: ${id || '(empty)'}`)
+      ids.add(id)
+    }
+    const fields = bedrockCardFields(html)
+    const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
+    const eol = fields.get('Model EOL date')
+    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || eol === 'N/A')) return skip('no lifecycle fields')
+
+    const launch = fields.get('Model launch date')
+    if (launch !== undefined) bedrockCardDate(launch, 'Model launch date', true)
+    const period = fields.get('Legacy period')
+    if (period !== undefined && !/^at least \d+ (?:months?|days)$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
+    const floor = fields.get('EOL no sooner than')
+    const candidates = []
+    if (floor !== undefined) {
+      const date = bedrockCardDate(floor, 'EOL no sooner than', true)
+      if (date) candidates.push(date)
+    }
+    let exact
+    let legacyField = false
+    if (eol !== undefined && eol !== 'N/A') {
+      const us = eol.match(/^No sooner than (\d{1,2})\/(\d{1,2})\/((?:19|20)\d{2})$/)
+      const legacy = eol.match(/^Legacy: (.+)$/)
+      if (us) candidates.push(assertIsoDate(`${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`, 'Model EOL date'))
+      else if (legacy) {
+        exact = bedrockCardDate(legacy[1], 'Model EOL date')
+        legacyField = true
+      } else exact = bedrockCardDate(eol, 'Model EOL date')
+    }
+    const regionDates = []
+    for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
+      if (cell.kind !== 'td' || !cell.text.startsWith('Legacy (EOL:')) continue
+      const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
+      if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
+      const date = assertIsoDate(match[1], 'region EOL')
+      if (exact && date !== exact) throw new Error(`region EOL ${date} differs from Model EOL date ${exact}`)
+      regionDates.push(date)
+    }
+    if (!exact && !candidates.length) return skip('no day-precision date')
+    const payload = exact
+      ? { shutdown: exact, status: regionDates.length || legacyField ? 'legacy' : 'active' }
+      : { shutdown: candidates.sort().at(-1), date_precision: 'tentative', status: 'active' }
+    return { records: [...ids].map(bedrockId => ({ bedrockId, ...payload, source })), skipped: [] }
+  } catch (error) {
+    throw new Error(`aws-bedrock model card ${source}: ${error.message}`)
+  }
+}
+
+function sameLifecycle(left, right) {
+  return ['announced', 'shutdown', 'date_precision', 'status'].every(field => left[field] === right[field])
+}
+
+export function mergeBedrockSources(legacyRecords, cardRecords) {
+  const legacy = new Map(legacyRecords.map(record => [record.bedrockId, { ...record, source: BEDROCK_LIFECYCLE_URL }]))
+  const cards = new Map()
+  const conflicts = []
+  for (const record of cardRecords) {
+    const table = legacy.get(record.bedrockId)
+    if (table) {
+      if (table.eol && record.shutdown && !record.date_precision && table.eol !== record.shutdown) {
+        conflicts.push({ via: 'aws-bedrock', id: record.bedrockId, kept: table, discarded: record })
+      }
+      continue
+    }
+    const previous = cards.get(record.bedrockId)
+    if (previous && !sameLifecycle(previous, record)) {
+      throw new Error(`aws-bedrock cards conflict for ${previous.bedrockId} (${previous.source}) and ${record.bedrockId} (${record.source})`)
+    }
+    if (!previous) cards.set(record.bedrockId, record)
+  }
+  return { records: [...legacy.values(), ...cards.values()], conflicts }
+}
+
+export function skippedModelCardSummary(card) {
+  return `aws-bedrock model card ${card.source}: skipped ${card.ids.join(', ')}; ${card.reason}`
+}
+
 function vertexModelId(fragment) {
   const code = [...String(fragment).matchAll(/<code\b[^>]*>([\s\S]*?)<\/code>/gi)]
     .map(match => plainText(match[1]))
@@ -300,7 +478,7 @@ export function parseVertexModelVersionsHtml(html) {
   const records = []
   let recognisedTables = 0
   for (const table of tables) {
-    const rows = tableRows(table[1])
+    const rows = expandRows(tableRows(table[1]))
     const headers = vertexHeaderIndexes(rows)
     if (!headers) continue
     recognisedTables++
@@ -342,11 +520,130 @@ export const parseVertexLifecycleHtml = parseVertexModelVersionsHtml
 export const parseVertexModelLifecycle = parseVertexModelVersionsHtml
 export const parseVertexModelVersions = parseVertexModelVersionsHtml
 
+const AZURE_LIFECYCLE_STATUSES = new Map([
+  ['GA', 'active'],
+  ['Preview', 'active'],
+  ['Legacy', 'active'],
+  ['Deprecated', 'legacy'],
+  ['Retired', 'retired'],
+])
+
+function azureHeaderIndexes(rows) {
+  for (const [row, candidate] of rows.entries()) {
+    if (row > 0 && !candidate.cells.some(cell => cell.kind === 'th')) continue
+    const labels = candidate.cells.map(cell => cell.text.toLowerCase())
+    const fineTuning = ['model', 'version', 'training retirement date', 'deployment retirement date']
+    if (labels.length === fineTuning.length && fineTuning.every(label => labels.includes(label))) return undefined
+    const lifecycleHeader = labels.some(label => /retirement|lifecycle|replacement/.test(label))
+      || ['model', 'model id', 'version', 'status'].filter(label => labels.includes(label)).length >= 2
+    if (!lifecycleHeader) continue
+    const columns = ['model', 'version', 'lifecycle', 'retirement date', 'replacement']
+    if (labels.length !== columns.length || columns.some(label => !labels.includes(label))) {
+      throw new Error(`azure-ai-foundry lifecycle table has invalid header row: ${labels.join(' | ')}`)
+    }
+    return { row, indexes: columns.map(label => labels.indexOf(label)) }
+  }
+  return undefined
+}
+
+function azureIsoDate(value, label) {
+  try {
+    return assertIsoDate(value, label)
+  } catch {
+    throw new Error(`azure-ai-foundry lifecycle entry ${label} has an invalid date: ${value || '(empty)'}`)
+  }
+}
+
+export function parseAzureModelRetirementScheduleHtml(html) {
+  if (typeof html !== 'string' || !html.trim()) throw new Error('azure-ai-foundry lifecycle page is empty')
+  let group = ''
+  let section = ''
+  let recognisedTables = 0
+  const unique = new Map()
+  const conflicts = []
+  const blocks = html.matchAll(/<(h[123]|table)\b[^>]*>([\s\S]*?)<\/\1>/gi)
+  for (const block of blocks) {
+    const tag = block[1].toLowerCase()
+    if (tag !== 'table') {
+      if (tag === 'h3') section = plainText(block[2])
+      else {
+        group = plainText(block[2])
+        section = ''
+      }
+      continue
+    }
+    const rows = expandRows(tableRows(block[2]))
+    const headers = azureHeaderIndexes(rows)
+    if (!headers) continue
+    recognisedTables++
+    let tableRecords = 0
+    for (const row of rows.slice(headers.row + 1)) {
+      if (!row.cells.some(cell => cell.text)) continue
+      const [modelCell, versionCell, lifecycleCell, retirementCell] = headers.indexes.map(index => row.cells[index])
+      const label = `${section || '(missing section)'}/${modelCell?.text || '(empty)'} version ${versionCell?.text || '(empty)'}`
+      if (!section) throw new Error(`azure-ai-foundry lifecycle entry ${label} is missing a publisher section`)
+      if (row.cells.length !== headers.indexes.length) {
+        throw new Error(`azure-ai-foundry lifecycle entry ${label} is missing lifecycle columns or has extra cells`)
+      }
+      const modelId = modelCell.text.replace(/\s*\([^()]*\)\s*$/, '').trim()
+      const publisher = AZURE_PUBLISHER_BY_SECTION.get(section)
+      const validId = MODEL_ID_PATTERN.test(modelId)
+      if (!validId && publisher) throw new Error(`azure-ai-foundry lifecycle entry ${label} has an invalid model id`)
+      const version = versionCell.text
+      const datedVersion = /^\d{4}-\d{2}-\d{2}$/.test(version)
+      const hostingVersion = publisher === 'mistral' || publisher === 'cohere'
+      const supportedVersion = publisher === 'openai' ? /^(?:\d{4}|1|2|001|-)$/ : /^(?:\d+|-)$/
+      if (datedVersion && !hostingVersion) azureIsoDate(version, `${label} version`)
+      else if (!supportedVersion.test(version)) {
+        throw new Error(`azure-ai-foundry lifecycle entry ${label} has an unsupported version: ${version || '(empty)'}`)
+      }
+      const lifecycle = lifecycleCell.text
+      const status = AZURE_LIFECYCLE_STATUSES.get(lifecycle)
+      if (!status) throw new Error(`azure-ai-foundry lifecycle entry ${label} has an unsupported lifecycle status: ${lifecycle || '(empty)'}`)
+      const retirement = retirementCell.text
+      const shutdown = retirement === '-' ? undefined : azureIsoDate(retirement, `${label} retirement`)
+      const snapshotVersion = publisher === 'openai' && (datedVersion || /^\d{4}$/.test(version))
+      const azureId = snapshotVersion ? `${modelId}-${version}` : modelId
+      const record = { azureId, modelId, version, group, section, lifecycle, status }
+      if (publisher) record.publisher = publisher
+      if (!validId) record.reason = 'invalid model id'
+      if (shutdown !== undefined) record.shutdown = shutdown
+      const key = JSON.stringify(publisher ? [section, azureId] : [group, section, azureId, version])
+      const previous = unique.get(key)
+      if (!previous) unique.set(key, record)
+      else if (previous.shutdown !== shutdown || previous.lifecycle !== lifecycle) {
+        if (hostingVersion) throw new Error(`azure-ai-foundry lifecycle entry ${label} has conflicting rows`)
+        if (!previous.shutdown || !shutdown || previous.shutdown === shutdown) {
+          throw new Error(`azure-ai-foundry lifecycle entry ${label} has conflicting rows without distinct retirement dates`)
+        }
+        const kept = previous.shutdown < shutdown ? previous : record
+        const discarded = kept === previous ? record : previous
+        conflicts.push({ via: 'azure-ai-foundry', section, id: azureId, kept, discarded })
+        unique.set(key, kept)
+      }
+      tableRecords++
+    }
+    if (!tableRecords) throw new Error(`azure-ai-foundry lifecycle table for ${section} has no model entries`)
+  }
+  if (!recognisedTables) throw new Error('azure-ai-foundry lifecycle page has no recognised lifecycle table')
+  return { records: [...unique.values()], conflicts }
+}
+
+export function sourceConflictSummary(conflict) {
+  if (conflict.via === 'aws-bedrock') {
+    return `${conflict.via} ${conflict.id}: kept ${conflict.kept.eol ?? conflict.kept.shutdown} (${conflict.kept.source}); discarded ${conflict.discarded.shutdown} (${conflict.discarded.source}); legacy table wins`
+  }
+  const row = item => `${item.shutdown} (${item.lifecycle}, version ${item.version})`
+  return `${conflict.via} ${conflict.section}/${conflict.id}: kept ${row(conflict.kept)}; discarded ${row(conflict.discarded)}; earliest retirement wins`
+}
+
 const PUBLISHER_BY_NAMESPACE = new Map([
   ['anthropic', 'anthropic'],
   ['amazon', 'amazon'],
   ['openai', 'openai'],
   ['google', 'google'],
+  ['cohere', 'cohere'],
+  ['mistral', 'mistral'],
 ])
 
 function sourceNamespace(value, via) {
@@ -426,26 +723,30 @@ function statusField(value, modelId, via) {
 
 function recordForMerge(record, via) {
   const isBedrock = via === 'aws-bedrock'
-  const idField = isBedrock ? 'bedrockId' : 'vertexId'
-  const rawId = isBedrock ? record?.bedrockId : record?.vertexId ?? record?.modelId ?? record?.id
-  if (typeof rawId !== 'string' || !rawId.trim()) {
+  const isAzure = via === 'azure-ai-foundry'
+  const idField = isBedrock ? 'bedrockId' : isAzure ? 'azureId' : 'vertexId'
+  const rawId = isBedrock ? record?.bedrockId : isAzure ? record?.azureId : record?.vertexId ?? record?.modelId ?? record?.id
+  const publisher = isAzure ? AZURE_PUBLISHER_BY_SECTION.get(record?.section) : undefined
+  if (typeof rawId !== 'string' || (!rawId.trim() && (!isAzure || publisher))) {
     throw new Error(`${via} record is missing ${idField}`)
   }
   const sourceId = rawId.trim()
   const announcedValue = isBedrock ? record.legacy : record.announced
-  const shutdownValue = isBedrock ? record.eol : record.shutdown ?? record.retirement
+  const shutdownValue = isBedrock ? record.eol ?? record.shutdown : record.shutdown ?? record.retirement
   const announced = dateField(announcedValue, isBedrock ? 'legacy' : 'announced', sourceId, via)
   const shutdown = dateField(shutdownValue, isBedrock ? 'EOL' : 'retirement', sourceId, via)
   if (announced && shutdown && shutdown < announced) {
     throw new Error(`${via} record ${sourceId} has shutdown before announced`)
   }
-  const namespace = sourceNamespace(sourceId, via)
+  const namespace = isAzure ? record.section : sourceNamespace(sourceId, via)
   return {
     idField,
     sourceId,
     namespace,
-    expectedPublisher: expectedPublisher(namespace),
-    normalizedId: isBedrock ? normalizeBedrockId(sourceId) : normalizeVertexId(sourceId),
+    expectedPublisher: isAzure ? publisher : expectedPublisher(namespace),
+    normalizedId: isBedrock ? normalizeBedrockId(sourceId) : isAzure
+      ? publisher === 'cohere' ? sourceId.replace(/^(?:Cohere|cohere)-/, '') : sourceId
+      : normalizeVertexId(sourceId),
     announced,
     shutdown,
     date_precision: precisionField(record.date_precision, sourceId, via),
@@ -484,7 +785,7 @@ function assertDistributorPreserved(before, after, via) {
   }
 }
 
-/** Upsert one distributor clock across loaded publisher feeds. */
+// Upsert one distributor clock across loaded publisher feeds.
 export function mergeDistributions(feeds, {
   records = [],
   sourceUrl,
@@ -524,19 +825,32 @@ export function mergeDistributions(feeds, {
   }
 
   const unmatched = []
+  const unconfirmedDistributions = []
   const confirmed = new Set()
   const matchedRecords = new Map()
+  const conflicts = []
   for (const raw of records) {
     const record = recordForMerge(raw, via)
     const unmatchedItem = { normalizedId: record.normalizedId, [record.idField]: record.sourceId }
+    if (record.idField === 'azureId') {
+      unmatchedItem.section = raw.section
+      if (raw.reason) unmatchedItem.reason = raw.reason
+    }
     if (record.idField === 'vertexId') unmatchedItem.modelId = record.sourceId
-    if (record.namespace && !record.expectedPublisher) {
+    if ((via === 'azure-ai-foundry' || record.namespace) && !record.expectedPublisher) {
       unmatched.push(unmatchedItem)
       continue
     }
     const target = identity.get(record.normalizedId)
     if (!target) {
-      unmatched.push(unmatchedItem)
+      if (via === 'azure-ai-foundry') {
+        unconfirmedDistributions.push({
+          publisher: record.expectedPublisher,
+          id: record.normalizedId,
+          via,
+          reason: 'source model is absent from publisher feed',
+        })
+      } else unmatched.push(unmatchedItem)
       continue
     }
     if (record.expectedPublisher && target.publisher !== record.expectedPublisher) {
@@ -544,24 +858,38 @@ export function mergeDistributions(feeds, {
     }
 
     const targetKey = `${target.feedIndex}:${target.model.id}`
-    const priorRecord = matchedRecords.get(targetKey)
-    if (priorRecord && (
-      priorRecord.announced !== record.announced ||
-      priorRecord.shutdown !== record.shutdown ||
-      priorRecord.date_precision !== record.date_precision ||
-      priorRecord.status !== record.status
-    )) {
-      throw new Error(`${via} records map to ${target.model.id} with conflicting lifecycle data`)
+    const recordSource = raw.source ?? source
+    try {
+      new URL(recordSource)
+    } catch {
+      throw new Error(`${via} record ${record.sourceId} source is not a URL: ${recordSource}`)
     }
-    matchedRecords.set(targetKey, record)
+    const matched = matchedRecords.get(targetKey) ?? { target, legacy: [], other: [] }
+    const group = via === 'aws-bedrock' && recordSource === BEDROCK_LIFECYCLE_URL ? matched.legacy : matched.other
+    const priorRecord = group[0]
+    if (priorRecord && !sameLifecycle(priorRecord, record)) {
+      throw new Error(`${via} records ${priorRecord.sourceId} and ${record.sourceId} map to ${target.model.id} with conflicting lifecycle data`)
+    }
+    group.push({ ...record, source: recordSource, raw })
+    matchedRecords.set(targetKey, matched)
+  }
 
+  for (const [targetKey, { target, legacy, other }] of matchedRecords) {
+    const record = legacy[0] ?? other[0]
+    if (legacy.length) {
+      for (const card of other) {
+        if ([record, card].every(item => item.shutdown && (!item.date_precision || item.date_precision === 'exact')) && record.shutdown !== card.shutdown) {
+          conflicts.push({ via, id: record.sourceId, kept: { ...record.raw, source: record.source }, discarded: { ...card.raw, source: card.source } })
+        }
+      }
+    }
     const existing = distributionFor(target.model, via)
     const distribution = { via }
     if (record.announced !== undefined) distribution.announced = record.announced
     if (record.shutdown !== undefined) distribution.shutdown = record.shutdown
     if (record.date_precision !== undefined) distribution.date_precision = record.date_precision
     if (record.status !== undefined) distribution.status = record.status
-    distribution.source = source
+    distribution.source = record.source
     if (existing) {
       target.model.distributions[existing.index] = distribution
     } else {
@@ -571,7 +899,6 @@ export function mergeDistributions(feeds, {
     confirmed.add(targetKey)
   }
 
-  const unconfirmedDistributions = []
   for (const [feedIndex, part] of working.entries()) {
     for (const model of part.feed.models) {
       const existing = distributionFor(model, via)
@@ -588,13 +915,14 @@ export function mergeDistributions(feeds, {
     assertDistributorPreserved(part.before, part.feed, via)
   }
 
-  unmatched.sort((a, b) => `${a.bedrockId ?? a.vertexId}`.localeCompare(`${b.bedrockId ?? b.vertexId}`))
+  unmatched.sort((a, b) => `${a.bedrockId ?? a.vertexId ?? a.azureId}`.localeCompare(`${b.bedrockId ?? b.vertexId ?? b.azureId}`))
   unconfirmedDistributions.sort((a, b) => `${a.publisher}:${a.id}`.localeCompare(`${b.publisher}:${b.id}`))
   return {
     feeds: working.map(part => part.feed),
     noPublisherFeed: unmatched,
     noPublisherFeeds: unmatched,
     unconfirmedDistributions,
+    conflicts,
   }
 }
 
@@ -632,17 +960,61 @@ export function findDistributorFixture(dir, distributor = 'aws-bedrock') {
 
 async function fetchBody(url, distributor, fetchImpl = globalThis.fetch) {
   if (typeof fetchImpl !== 'function') throw new Error('this Node runtime has no built-in fetch')
-  let response
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30_000)
   try {
     // Providers geo-localize without Accept-Language; the date parsers are English-only.
-    response = await fetchImpl(url, { headers: { 'accept-language': 'en' } })
+    const response = await fetchImpl(url, { headers: { 'accept-language': 'en' }, signal: controller.signal })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const tooLarge = () => new Error(`response exceeds ${MAX_DISTRIBUTOR_BODY_BYTES} bytes`)
+    if (Number(response.headers?.get('content-length')) > MAX_DISTRIBUTOR_BODY_BYTES) throw tooLarge()
+    const chunks = []
+    let bytes = 0
+    if (response.body) {
+      for await (const chunk of response.body) {
+        bytes += chunk.byteLength
+        if (bytes > MAX_DISTRIBUTOR_BODY_BYTES) throw tooLarge()
+        chunks.push(Buffer.from(chunk))
+      }
+    } else {
+      const chunk = Buffer.from(await response.text())
+      if (chunk.byteLength > MAX_DISTRIBUTOR_BODY_BYTES) throw tooLarge()
+      chunks.push(chunk)
+    }
+    const body = Buffer.concat(chunks).toString('utf8')
+    if (!body.trim()) throw new Error('empty response')
+    return body
   } catch (error) {
+    controller.abort()
     throw new Error(`${distributor} fetch failed for ${url}: ${error.message}`)
+  } finally {
+    clearTimeout(timeout)
   }
-  if (!response.ok) throw new Error(`distributor fetch failed for ${url}: HTTP ${response.status}`)
-  const body = await response.text()
-  if (!body.trim()) throw new Error(`${distributor} fetch returned an empty response for ${url}`)
-  return body
+}
+
+function readBedrockCardFixture(dir, filename, url) {
+  try {
+    return fs.readFileSync(path.join(dir, filename), 'utf8')
+  } catch (error) {
+    throw new Error(`aws-bedrock missing or unreadable fixture ${filename} for ${url}: ${error.message}`)
+  }
+}
+
+async function loadBedrockCards(config, options) {
+  const index = options.fixtures
+    ? readBedrockCardFixture(options.fixtures, config.indexFixture, config.indexUrl)
+    : await fetchBody(config.indexUrl, config.name, options.fetchImpl)
+  const records = []
+  const skipped = []
+  for (const url of parseBedrockModelCardsIndexHtml(index)) {
+    const html = options.fixtures
+      ? readBedrockCardFixture(options.fixtures, path.join(config.cardFixtureDir, path.basename(new URL(url).pathname)), url)
+      : await fetchBody(url, config.name, options.fetchImpl)
+    const parsed = parseBedrockModelCardHtml(html, url)
+    records.push(...parsed.records)
+    skipped.push(...parsed.skipped)
+  }
+  return { records, skipped }
 }
 
 export async function loadDistributorSource(distributor = 'aws-bedrock', options = {}) {
@@ -657,11 +1029,22 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
   } else {
     html = await fetchBody(config.sourceUrl, distributor, options.fetchImpl)
   }
+  let parsed = distributor === 'azure-ai-foundry'
+    ? parseAzureModelRetirementScheduleHtml(html)
+    : { records: distributor === 'aws-bedrock' ? parseBedrockLifecycleHtml(html) : parseVertexModelVersionsHtml(html) }
+  if (distributor === 'aws-bedrock') {
+    const cards = await loadBedrockCards(config, options)
+    parsed = { ...mergeBedrockSources(parsed.records, cards.records), skipped: cards.skipped }
+  }
+  for (const conflict of parsed.conflicts ?? []) {
+    ;(options.notice ?? console.error)(`notice: ${sourceConflictSummary(conflict)}`)
+  }
+  for (const card of parsed.skipped ?? []) {
+    ;(options.notice ?? console.error)(`notice: ${skippedModelCardSummary(card)}`)
+  }
   return {
     ...config,
     fixturePath,
-    records: distributor === 'aws-bedrock'
-      ? parseBedrockLifecycleHtml(html)
-      : parseVertexModelVersionsHtml(html),
+    ...parsed,
   }
 }

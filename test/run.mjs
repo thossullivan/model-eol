@@ -130,6 +130,21 @@ const azure = bj.findings.find(f => f.id === 'o3-deep-research-2025-06-26')
 assert(azure?.via === 'azure-ai-foundry', 'azure distribution clock applied')
 assert(azure?.shutdown === '2026-12-26', 'azure shutdown date used')
 
+{
+  const azureProofDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-azure-proof-'))
+  try {
+    fs.writeFileSync(path.join(azureProofDir, 'app.py'), 'model = "o3-deep-research-2025-06-26"\n')
+    const azureProof = run([azureProofDir, '--via', 'azure-ai-foundry', '--days', '90', '--json'])
+    const publisherProof = run([azureProofDir, '--days', '90', '--json'])
+    const azureFindings = JSON.parse(azureProof.out).findings
+    const publisherFindings = JSON.parse(publisherProof.out).findings
+    assert([0, 1].includes(azureProof.code) && azureFindings.length === 1 && azureFindings[0].via === 'azure-ai-foundry' && azureFindings[0].shutdown === '2026-12-26', 'dated research consumer uses regenerated Azure shutdown with --via and --days 90')
+    assert(publisherProof.code === 1 && publisherFindings.length === 1 && publisherFindings[0].via === 'publisher' && publisherFindings[0].shutdown === '2026-07-23', 'the same dated research consumer uses OpenAI shutdown without --via')
+  } finally {
+    fs.rmSync(azureProofDir, { recursive: true, force: true })
+  }
+}
+
 // A model-eol feed document is lifecycle data, not usage - scanning one would
 // flag every retired id it exists to describe (the repo's own feeds/ made the
 // self-scan permanently red before this).
@@ -224,6 +239,37 @@ assert(!cyclonedx.components.some(item => item.name === 'gpt-9-ultra-20990101'),
 assert(cyclonedx.metadata?.properties?.some(item => item.name === 'model-eol:generator' && item.value === 'model-eol/inventory-cyclonedx@0.1'), 'CycloneDX records explicit model-eol generator provenance')
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
+
+const cohereConsumerDir = path.join(tempRoot, 'cohere-consumer')
+fs.mkdirSync(cohereConsumerDir)
+fs.writeFileSync(path.join(cohereConsumerDir, 'rerank.ts'), 'model: "rerank-english-v2.0"\n')
+const cohereConsumer = run([cohereConsumerDir, '--days', '90', '--json'])
+const cohereFindings = JSON.parse(cohereConsumer.out).findings
+assert(cohereConsumer.code === 1 && cohereFindings.length === 1 && cohereFindings[0].id === 'rerank-english-v2.0' && cohereFindings[0].shutdown === '2025-04-30' && cohereFindings[0].publisher === 'cohere', 'bundled Cohere feed reports the published Rerank v2.0 shutdown')
+const cohereAliasDir = path.join(tempRoot, 'cohere-alias-consumer')
+fs.mkdirSync(cohereAliasDir)
+fs.writeFileSync(path.join(cohereAliasDir, 'command.ts'), '"command-r"\n')
+const cohereAliasConsumer = run([cohereAliasDir, '--days', '90', '--json'])
+const cohereAliasFindings = JSON.parse(cohereAliasConsumer.out).findings
+const cohereResolvedAlias = loadFeeds(path.join(root, 'feeds')).entries.get(cohereAliasFindings[0]?.matched)?.entry
+assert(cohereAliasConsumer.code === 0 && cohereAliasFindings.length === 1 && cohereAliasFindings[0].id === 'command-r-03-2024' && cohereAliasFindings[0].shutdown === null && cohereAliasFindings[0].status === 'watch' && cohereAliasFindings[0].publisher === 'cohere' && cohereResolvedAlias?.id === 'command-r-03-2024' && cohereResolvedAlias?.announced === '2025-09-15' && !Object.hasOwn(cohereResolvedAlias, 'shutdown'), 'bundled Cohere alias resolves to its canonical announcement without a shutdown date')
+
+const mistralConsumerDir = path.join(tempRoot, 'mistral-consumer')
+fs.mkdirSync(mistralConsumerDir)
+const mistralConsumerFile = path.join(mistralConsumerDir, 'app.ts')
+fs.writeFileSync(mistralConsumerFile, 'model: "mistral-medium-2508"\n')
+const mistralConsumer = run([mistralConsumerDir, '--days', '90', '--json'])
+const mistralFindings = JSON.parse(mistralConsumer.out).findings
+assert(mistralConsumer.code === 1 && mistralFindings.length === 1 && mistralFindings[0].id === 'mistral-medium-2508' && mistralFindings[0].shutdown === '2026-08-31' && mistralFindings[0].status === 'retired', 'bundled Mistral feed reports Medium 2508 as retired with its published shutdown')
+const mistralEndpointFixture = JSON.parse(fs.readFileSync(path.join(root, 'refresh/test/fixture/mistral-models.json'), 'utf8'))
+const mistralAlias = mistralEndpointFixture.data.find(model => model.id === 'mistral-medium-2508').aliases[0]
+const mistralBundledAlias = loadFeeds(path.join(root, 'feeds')).entries.get(mistralAlias)
+if (mistralBundledAlias) {
+  fs.writeFileSync(mistralConsumerFile, `model: "${mistralAlias}"\n`)
+  const aliasConsumer = run([mistralConsumerDir, '--days', '90', '--json'])
+  const aliasFindings = JSON.parse(aliasConsumer.out).findings
+  assert(aliasFindings.length === 1 && aliasFindings[0].id === mistralBundledAlias.entry.id && aliasFindings[0].publisher === 'mistral' && aliasFindings[0].shutdown === (mistralBundledAlias.entry.shutdown ?? null), 'bundled Mistral endpoint alias resolves to its canonical model when present')
+}
 
 const waiverDir = path.join(tempRoot, 'waivers')
 const waiverConfigPath = path.join(tempRoot, 'waiver-config.json')
@@ -1262,6 +1308,22 @@ const distributorTentativeFinding = findingFromRef({
 const distributorTentativeCheck = formatCheck({ findings: [distributorTentativeFinding], bad: [], scannedFiles: 1, days: 30, scope: 'all' })
 assert(distributorTentativeCheck.includes('scheduled - tentative, not announced: not sooner than 2026-09-01') && !distributorTentativeCheck.includes('policy'), 'a distributor tentative floor never cites publisher policy')
 const tentativeFeedBase = { spec: 'model-eol/0.1', publisher: 'anthropic', generated: '2026-09-03T00:00:00Z', source: 'https://example.invalid/anthropic' }
+const bedrockFloorDir = path.join(tempRoot, 'bedrock-tentative-floor')
+const bedrockFloorFeeds = path.join(bedrockFloorDir, 'feeds')
+fs.mkdirSync(bedrockFloorFeeds, { recursive: true })
+fs.writeFileSync(path.join(bedrockFloorDir, 'app.py'), 'MODEL = "bedrock-floor-model"\n')
+for (const shutdown of ['2026-08-01', '2026-09-29']) {
+  fs.writeFileSync(path.join(bedrockFloorFeeds, 'anthropic.json'), JSON.stringify({
+    ...tentativeFeedBase,
+    models: [{ id: 'bedrock-floor-model', distributions: [{ via: 'aws-bedrock', shutdown, date_precision: 'tentative', status: 'active', source: 'https://example.invalid/model-card.html' }] }],
+  }))
+  const args = ['check', bedrockFloorDir, '--feeds', bedrockFloorFeeds, '--via', 'aws-bedrock', '--days', '30']
+  const json = run([...args, '--json'])
+  const finding = JSON.parse(json.out).findings.find(item => item.id === 'bedrock-floor-model')
+  const human = run(args)
+  assert(json.code === 0 && finding?.status === 'scheduled' && finding.via === 'aws-bedrock' && finding.date_precision === 'tentative' && finding.shutdown === shutdown, `Bedrock tentative-only temp feed stays scheduled for floor ${shutdown}`)
+  assert(human.code === 0 && human.out.includes(`scheduled - tentative, not announced: not sooner than ${shutdown}`), 'Bedrock tentative consumer reports not sooner than wording')
+}
 assert(validateFeed({ ...tentativeFeedBase, models: [{ id: 'floorless', date_precision: 'tentative' }] }).some(error => error.path.endsWith('.shutdown')), 'tentative precision requires a shutdown date')
 assert(validateFeed({ ...tentativeFeedBase, models: [{ id: 'floorless', distributions: [{ via: 'aws-bedrock', date_precision: 'tentative', source: 'https://example.invalid/bedrock' }] }] }).some(error => error.path.endsWith('.shutdown')), 'tentative distribution precision requires a shutdown date')
 const optionsCheck = formatCheck({ findings: [{ ...earliestFinding, replacement: null, replacement_options: ['first-choice', 'second-choice'] }], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })

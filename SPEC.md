@@ -69,6 +69,10 @@ Private arrangements after EOL are not represented by this status. `retired`
 means the distributor explicitly reports the model as no longer generally
 available even when it does not publish an exact shutdown date.
 
+Bedrock model-card floors are tentative distribution dates (`date_precision: "tentative"`) without `announced`.
+
+Azure maps GA/Preview/Legacy to `active`, Deprecated to `legacy`, and Retired to `retired`; Azure Legacy permits new deployments.
+
 A model may contain at most one distribution for each `via`. Duplicate channel
 records are ambiguous and fail runtime semantic validation. Draft-07 can enforce
 whole-object uniqueness, but cannot express uniqueness keyed by the `via` field,

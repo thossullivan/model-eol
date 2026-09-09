@@ -3,7 +3,7 @@
 # line, and opens a PR with the semantic diff for human review. Never pushes to
 # main directly. PR reuse is ownership-checked and protected by an exact lease.
 #
-# Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY enable
+# Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY / COHERE_API_KEY enable
 # the models endpoints so current-model entries (and policy-floor horizons)
 # populate.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
@@ -40,11 +40,13 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
         run: |
           set +e
           node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
           providers=$?
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai --check > distributor-diff.md 2> distributor-err.txt
+          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
           distributors=$?
           set -e
           cat provider-err.txt distributor-err.txt >&2 || true
@@ -71,9 +73,11 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
         run: |
           node refresh/refresh.mjs
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai
+          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
           node scripts/update-readme-freshness.mjs
           npm test
 
@@ -143,9 +147,8 @@ jobs:
             fi
             echo "Automated weekly refresh. Review the semantic diff - a broken parse reads as a nonsense diff, not silently wrong data."
             echo
-            # Include only the sources that materially changed.
-            if [ "${{ steps.check.outputs.providers }}" = "3" ]; then cat provider-diff.md; echo; fi
-            if [ "${{ steps.check.outputs.distributors }}" = "3" ]; then cat distributor-diff.md; fi
+            if [ "${{ steps.check.outputs.providers }}" = "3" ] || grep -q '^## Source conflicts$' provider-diff.md; then cat provider-diff.md; echo; fi
+            if [ "${{ steps.check.outputs.distributors }}" = "3" ] || grep -q '^## Source conflicts$' distributor-diff.md; then cat distributor-diff.md; fi
           } > pr-body.md
           if [ "$reusing" = true ]; then
             gh pr edit "$pr_number" --title "Feed refresh $(date -u +%Y-%m-%d)" --body-file pr-body.md

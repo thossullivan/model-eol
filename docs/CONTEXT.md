@@ -138,9 +138,43 @@ The direct-first product is shipped on npm and as a moving `v0` Action: bounded
 scanner, strict repository policy, mixed-repository overrides/routes, lifecycle
 reports, CycloneDX, safe plan/apply, and a stateless GitHub bot with trusted
 ownership, isolated per-migration evals, and stale-work reconciliation. Provider
-refresh covers OpenAI, Anthropic, and Google; distributor refresh covers Bedrock
-and Vertex. Weekly refresh, failure receipts, semantic PRs, trusted npm publishing,
+refresh covers OpenAI, Anthropic, Google, Mistral, and Cohere; distributor refresh covers Bedrock,
+Vertex, and Azure Foundry. Weekly refresh, failure receipts, semantic PRs, trusted npm publishing,
 and exact-package consumer tests are live.
+
+Bedrock refresh follows the 2026-09-07 policy change.
+It combines the [legacy table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html)
+with [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
+The legacy table wins overlaps; card floors become tentative distribution dates without announcements.
+Refresh reports exact-date conflicts, unmatched publisher IDs, and cards without usable lifecycle dates.
+Legacy precedence also applies when different Bedrock IDs resolve to one publisher model through aliases.
+Conflicting card records still stop refresh after alias resolution.
+Each card must contain exactly one Model ID table.
+Any first-row cell containing the exact text `Model ID` identifies that table, including `td` cells.
+Card parsing removes comments before extraction and rejects lifecycle labels outside their expected paragraphs.
+The label guard counts whole labels regardless of case or colon presence.
+A standalone non-N/A Model EOL date supplies lifecycle data.
+Index links resolve within the index directory after query and fragment removal.
+Invalid card links stop refresh.
+Distributor table expansion caps each span at 64 and each table at 10,000 cells.
+
+Mistral rejects lifecycle headers containing data cells or unexpected labels.
+Mistral checks rows containing `th` cells for header drift.
+Without `th` cells or a pending header, it checks only the first row.
+Cohere collects identities and aliases from every section before merging records in ascending heading-date order.
+
+Azure binds publisher feeds through the Azure OpenAI, Anthropic, Mistral AI, and Cohere section headings.
+OpenAI dates and four-digit versions require exact snapshot IDs or aliases.
+OpenAI versions `1`, `2`, `001`, and dashes use bare IDs.
+Mistral and Cohere integer versions and dashes use bare IDs.
+Cohere binding strips one leading `Cohere-` or `cohere-` prefix.
+Binding preserves the remaining case.
+Missing candidates remain unconfirmed.
+Matching hosting rows collapse.
+Conflicting Mistral or Cohere rows stop refresh.
+Lifecycle header drift stops refresh.
+Fine-tuning and unrelated tables remain excluded.
+Refresh PR bodies include source conflicts even when the corresponding check reports no material changes.
 
 The staged public-contract milestone gives every public schema a canonical ID, exposes
 `model-eol validate`, and adds a Pages publisher for hosted feeds, Atom, and

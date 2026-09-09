@@ -1,6 +1,8 @@
 // Semantic feed diffing for the refresh job. Feed metadata such as generated
 // timestamps is intentionally excluded from the comparison.
 
+import { skippedModelCardSummary, sourceConflictSummary } from './distributors.mjs'
+
 const value = item => item === undefined || item === null || item === '' ? 'not set' : item
 
 const code = item => `\`${String(value(item))}\``
@@ -27,9 +29,10 @@ function indexModels(feed) {
   return index
 }
 
-function findModel(index, model) {
+function findModel(index, model, canonicalIds) {
   for (const key of keysFor(model)) {
     const found = index.get(key)
+    if (found && found.id !== model.id && canonicalIds.has(found.id)) continue
     if (found) return found
   }
   return undefined
@@ -78,7 +81,7 @@ function normaliseNoPublisherFeed(options) {
   return values
     .filter(Boolean)
     .map(item => typeof item === 'string' ? { bedrockId: item, normalizedId: item } : item)
-    .sort((a, b) => String(a.bedrockId ?? a.vertexId ?? a.modelId ?? a.id ?? '').localeCompare(String(b.bedrockId ?? b.vertexId ?? b.modelId ?? b.id ?? '')))
+    .sort((a, b) => String(a.bedrockId ?? a.vertexId ?? a.azureId ?? a.modelId ?? a.id ?? '').localeCompare(String(b.bedrockId ?? b.vertexId ?? b.azureId ?? b.modelId ?? b.id ?? '')))
 }
 
 function distributionChanges(oldModel, model, publisher) {
@@ -118,6 +121,7 @@ function distributionChanges(oldModel, model, publisher) {
  */
 export function compareFeeds(committed, generated, options = {}) {
   const oldIndex = indexModels(committed)
+  const canonicalIds = new Set((generated.models ?? []).map(model => model.id))
   const added = []
   const shutdownChanges = []
   const replacementChanges = []
@@ -128,7 +132,7 @@ export function compareFeeds(committed, generated, options = {}) {
   const publisher = options.publisher ?? generated.publisher
 
   for (const model of generated.models ?? []) {
-    const old = findModel(oldIndex, model)
+    const old = findModel(oldIndex, model, canonicalIds)
     if (!old) {
       added.push(model)
     } else {
@@ -199,6 +203,10 @@ export function compareFeeds(committed, generated, options = {}) {
     unconfirmedDistributions,
     noPublisherFeed,
     noPublisherFeeds: noPublisherFeed,
+    sourceConflicts: options.sourceConflicts ?? [],
+    skippedModelCards: options.skippedModelCards ?? [],
+    skipped: options.skipped ?? [],
+    undatedDeprecatedIds: options.undatedDeprecatedIds ?? [],
     // Informational sections never alter the files, so they never trip exit 3.
     changed: Boolean(
       added.length ||
@@ -248,11 +256,11 @@ function renderDistributionChanges(result) {
   }
   for (const item of result.unconfirmedDistributions) {
     const label = item.publisher ? `${item.publisher}/${item.id}` : item.id
-    lines.push(`- ${code(label)} - ${code(item.via ?? 'aws-bedrock')} distribution unconfirmed; retained from committed feed`)
+    lines.push(`- ${code(label)} - ${code(item.via ?? 'aws-bedrock')} distribution unconfirmed; ${item.reason ?? 'retained from committed feed'}`)
   }
   for (const item of result.noPublisherFeed) {
-    const sourceId = item.bedrockId ?? item.vertexId ?? item.modelId ?? item.id
-    lines.push(`- ${code(sourceId)} - no publisher feed for normalized id ${code(item.normalizedId)}`)
+    const sourceId = item.bedrockId ?? item.vertexId ?? item.azureId ?? item.modelId ?? item.id
+    lines.push(`- ${code(sourceId)} - no publisher feed for normalized id ${code(item.normalizedId)}${item.section ? `; section: ${code(item.section)}` : ''}${item.reason ? `; ${item.reason}` : ''}`)
   }
   return lines
 }
@@ -304,9 +312,20 @@ function renderResult(result, publisher) {
     result.newlyAnnounced.map(model => `- ${code(model.id)} - ${dateLine(model)}; ${replacementSummary(model)}`),
   ))
   pushSection(section('Distribution changes', renderDistributionChanges(result)))
+  pushSection(section('Source conflicts', (result.sourceConflicts ?? []).map(conflict => `- ${sourceConflictSummary(conflict)}`)))
+  pushSection(section('Model cards without lifecycle fields', (result.skippedModelCards ?? []).map(card => `- ${skippedModelCardSummary(card)}`)))
   pushSection(section(
     'Unconfirmed entries',
     result.unconfirmed.map(model => `- ${code(model.id)} - retained because neither source confirmed it`),
+  ))
+  pushSection(section(
+    'Rows without an API id',
+    (result.skipped ?? []).map(row => `- ${code(row.model)} - version: ${code(row.version)}; skipped because the API cell is empty`),
+  ))
+
+  pushSection(section(
+    'Models endpoint notices',
+    (result.undatedDeprecatedIds ?? []).map(id => `- models endpoint flags ${code(id)} as deprecated without a dated announcement`),
   ))
 
   if (!result.changed) lines.push('No semantic changes.', '')

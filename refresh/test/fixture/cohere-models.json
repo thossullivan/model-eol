@@ -1,0 +1,8 @@
+{
+  "models": [
+    { "name": "command-a-03-2025", "is_deprecated": false, "endpoints": ["chat"] },
+    { "name": "rerank-v3.5", "is_deprecated": false, "endpoints": ["rerank"] },
+    { "name": "command-r-03-2024", "is_deprecated": true, "endpoints": ["chat"] },
+    { "name": "cohere-fixture-undated", "is_deprecated": true, "endpoints": ["chat"] }
+  ]
+}
