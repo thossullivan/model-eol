@@ -32,6 +32,7 @@ function indexModels(feed) {
 function findModel(index, model, canonicalIds) {
   for (const key of keysFor(model)) {
     const found = index.get(key)
+    if (found && key !== model.id && key !== found.id) continue
     if (found && found.id !== model.id && canonicalIds.has(found.id)) continue
     if (found) return found
   }
@@ -224,6 +225,8 @@ const dateValue = (date, precision) => `${code(date)}${precision === 'earliest' 
 
 const dateLine = model => `announced: ${code(model.announced)}; shutdown: ${dateValue(model.shutdown, model.date_precision)}`
 
+const aliasSummary = model => model.aliases?.length ? `; aliases: ${model.aliases.map(code).join(', ')}` : ''
+
 function distributionDateLine(distribution) {
   return `announced: ${code(distribution?.announced)}; EOL: ${dateValue(distribution?.shutdown, distribution?.date_precision)}; status: ${code(distribution?.status)}`
 }
@@ -279,12 +282,12 @@ function renderResult(result, publisher) {
   pushSection(section(
     'Models added',
     result.added.filter(model => model.announced || model.shutdown)
-      .map(model => `- ${code(model.id)} - ${dateLine(model)}; ${replacementSummary(model)}`),
+      .map(model => `- ${code(model.id)} - ${dateLine(model)}; ${replacementSummary(model)}${aliasSummary(model)}`),
   ))
   const currentAdded = result.added.filter(model => !model.announced && !model.shutdown)
   pushSection(section(
     'Current models added - no retirement scheduled',
-    currentAdded.map(model => `- ${code(model.id)}`),
+    currentAdded.map(model => `- ${code(model.id)}${aliasSummary(model)}`),
   ))
   pushSection(section(
     'Shutdown date changes',

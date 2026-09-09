@@ -768,19 +768,49 @@ export function parseAnthropicModelsIndex(markdown, url = PROVIDERS.anthropic.al
   return [...urls]
 }
 
+function stripFencedCodeBlocks(markdown) {
+  let fence
+  return markdown.split(/\r?\n/).map(line => {
+    if (fence) {
+      const closing = line.match(/^\s*(`{3,}|~{3,})\s*$/)
+      if (closing && closing[1][0] === fence[0] && closing[1].length >= fence.length) fence = undefined
+      return ''
+    }
+    const opening = line.match(/^\s*(`{3,}|~{3,})/)
+    if (!opening) return line
+    fence = opening[1]
+    return ''
+  }).join('\n')
+}
+
 export function parseAnthropicModelPage(markdown, url) {
   const values = new Map()
-  for (const line of String(markdown).split(/\r?\n/)) {
-    const row = line.match(/^\s*\|([^|]*)\|(.*)\|\s*$/)
-    if (!row) continue
-    const label = row[1].trim()
-    if (!['Claude API', 'Claude API alias'].includes(label)) continue
-    if (values.has(label)) throw new Error(`anthropic model page ${url} has duplicate ${label} rows`)
-    const code = row[2].trim().match(/^`([^`]+)`$/)
-    if (!code || !MODEL_ID_PATTERN.test(code[1])) {
-      throw new Error(`anthropic model page ${url} has invalid ${label}: expected one model ID code span`)
+  const lines = stripFencedCodeBlocks(stripComments(markdown)).split('\n')
+  const identityRow = line => /^\s*\|\s*Claude API(?: alias)?\s*\|/.test(line)
+  for (let offset = 0; offset < lines.length;) {
+    if (!lines[offset].startsWith('|')) {
+      if (identityRow(lines[offset])) throw new Error(`anthropic model page ${url} has an identity row outside a markdown table`)
+      offset++
+      continue
     }
-    values.set(label, code[1])
+    const table = []
+    while (offset < lines.length && lines[offset].startsWith('|')) table.push(lines[offset++])
+    const rows = table.map(line => /^\|.*\|\s*$/.test(line) ? line.trimEnd().slice(1, -1).split('|').map(cell => cell.trim()) : [])
+    const header = rows[0]
+    if (!table.some(identityRow) && !(header[0] === 'Platform' && header[1] === 'Model ID')) continue
+    if (rows.length < 3 || rows.some(row => row.length !== 2) ||
+      header[0] !== 'Platform' || header[1] !== 'Model ID' || !rows[1].every(cell => /^:?-{3,}:?$/.test(cell))) {
+      throw new Error(`anthropic model page ${url} has an invalid identity table: expected Platform | Model ID and exactly two columns`)
+    }
+    for (const [label, value] of rows.slice(2)) {
+      if (!['Claude API', 'Claude API alias'].includes(label)) continue
+      if (values.has(label)) throw new Error(`anthropic model page ${url} has duplicate ${label} rows`)
+      const code = value.match(/^`([^`]+)`$/)
+      if (!code || !MODEL_ID_PATTERN.test(code[1])) {
+        throw new Error(`anthropic model page ${url} has invalid ${label}: expected one model ID code span`)
+      }
+      values.set(label, code[1])
+    }
   }
   const id = values.get('Claude API')
   if (!id) throw new Error(`anthropic model page ${url} has no Claude API row`)
@@ -1532,6 +1562,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
   }
   const absorb = (target, other, aliases) => {
     if (target === other) return
+    if (committedIds.has(other.id)) throw new Error(`deprecation alias for ${target.id} conflicts with canonical model id ${other.id}`)
     aliases.add(other.id)
     for (const alias of other.aliases ?? []) aliases.add(alias)
     const metadata = new Set(['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note', 'source'])
@@ -1561,6 +1592,9 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     for (const alias of [record.id, ...(record.aliases ?? [])]) {
       if (!alias || alias === canonicalId) continue
       const owner = locate(alias)
+      if (committedIds.has(alias) || (owner && owner !== target && owner.id === alias)) {
+        throw new Error(`deprecation alias ${alias} for ${canonicalId} conflicts with a canonical model id`)
+      }
       if (owner && owner !== target) absorb(target, owner, aliases)
       aliases.add(alias)
     }
@@ -1652,7 +1686,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
   }
   return {
     feed,
-    unconfirmedIds: models.filter(model => !confirmed.has(model.id)).map(model => model.id),
+    unconfirmedIds: models.filter(model => committedIds.has(model.id) && !confirmed.has(model.id)).map(model => model.id),
   }
 }
 

@@ -608,7 +608,8 @@ export function parseAzureModelRetirementScheduleHtml(html) {
       const snapshotVersion = publisher === 'openai' && (datedVersion || /^\d{4}$/.test(version))
       const azureId = snapshotVersion ? `${modelId}-${version}` : modelId
       const record = { azureId, modelId, version, group, section, lifecycle, status }
-      if (publisher === 'openai') modelRowCounts.set(modelId, (modelRowCounts.get(modelId) ?? 0) + 1)
+      const modelRowKey = modelId.trim().toLowerCase()
+      if (publisher === 'openai') modelRowCounts.set(modelRowKey, (modelRowCounts.get(modelRowKey) ?? 0) + 1)
       if (publisher) record.publisher = publisher
       if (!validId) record.reason = 'invalid model id'
       if (shutdown !== undefined) record.shutdown = shutdown
@@ -631,7 +632,7 @@ export function parseAzureModelRetirementScheduleHtml(html) {
   }
   if (!recognisedTables) throw new Error('azure-ai-foundry lifecycle page has no recognised lifecycle table')
   for (const record of unique.values()) {
-    if (record.publisher === 'openai') record.modelRowCount = modelRowCounts.get(record.modelId)
+    if (record.publisher === 'openai') record.modelRowCount = modelRowCounts.get(record.modelId.trim().toLowerCase())
   }
   return { records: [...unique.values()], conflicts }
 }
@@ -852,7 +853,12 @@ export function mergeDistributions(feeds, {
     if (!target && via === 'azure-ai-foundry' && record.expectedPublisher === 'openai' &&
       /^\d{4}-\d{2}-\d{2}$/.test(raw.version) && raw.modelRowCount === 1) {
       const bare = identity.get(raw.modelId)
-      if (bare?.publisher === 'openai') target = bare
+      if (bare?.publisher === 'openai' && bare.model.id === raw.modelId) {
+        const prefix = `${raw.modelId}-`
+        const hasSnapshot = working[bare.feedIndex].feed.models.some(model =>
+          [model.id, ...(model.aliases ?? [])].some(id => id.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(id.slice(prefix.length))))
+        if (!hasSnapshot) target = bare
+      }
     }
     if (!target) {
       if (via === 'azure-ai-foundry') {

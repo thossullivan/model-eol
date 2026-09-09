@@ -214,6 +214,7 @@ assert(anthropicPageModels.filter(model => !model.aliases.length).length === 10 
 assert(anthropicPageModels.every(model => Object.keys(model).join() === 'id,aliases'), 'Anthropic model pages ingest only model IDs and aliases')
 const anthropicTestUrl = 'https://platform.claude.com/docs/en/models/test/overview.md'
 const anthropicTestRow = '| Claude API | `claude-test` |'
+const anthropicTestTable = rows => `| Platform | Model ID |\n| --- | --- |\n${rows}`
 for (const [label, markdown] of [
   ['missing Claude API row', '| Status | Active |'],
   ['duplicate Claude API rows', `${anthropicTestRow}\n${anthropicTestRow}`],
@@ -227,11 +228,11 @@ for (const [label, markdown] of [
   ['malformed alias', `${anthropicTestRow}\n| Claude API alias | \`bad alias\` |`],
   ['two alias spans', `${anthropicTestRow}\n| Claude API alias | \`claude-a\` \`claude-b\` |`],
 ]) {
-  strictAssert.throws(() => parseAnthropicModelPage(markdown, anthropicTestUrl), error => error.message.includes(anthropicTestUrl))
+  strictAssert.throws(() => parseAnthropicModelPage(anthropicTestTable(markdown), anthropicTestUrl), error => error.message.includes(anthropicTestUrl))
   assert(true, `Anthropic model pages reject ${label} and name the URL`)
 }
-assert(parseAnthropicModelPage(`${anthropicTestRow}\n| Claude API alias | \`claude-test\` |`, anthropicTestUrl).aliases.length === 0, 'Anthropic ignores a self alias')
-const anthropicIgnoredRows = `${anthropicTestRow}\n| Status | Retired |\n| Released | invalid date |\n| Retirement | 2000-01-01 |\n| Amazon Bedrock (InvokeModel) | \`anthropic.claude-test-v1:0\` |\n| Google Cloud | \`claude-test@20260101\` |\n| Microsoft Foundry | \`other-model\` |\n| Claude Platform on AWS | \`other-model\` |`
+assert(parseAnthropicModelPage(anthropicTestTable(`${anthropicTestRow}\n| Claude API alias | \`claude-test\` |`), anthropicTestUrl).aliases.length === 0, 'Anthropic ignores a self alias')
+const anthropicIgnoredRows = anthropicTestTable(`${anthropicTestRow}\n| Status | Retired |\n| Released | invalid date |\n| Retirement | 2000-01-01 |\n| Amazon Bedrock (InvokeModel) | \`anthropic.claude-test-v1:0\` |\n| Google Cloud | \`claude-test@20260101\` |\n| Microsoft Foundry | \`other-model\` |\n| Claude Platform on AWS | \`other-model\` |`)
 assert(JSON.stringify(parseAnthropicModelPage(anthropicIgnoredRows, anthropicTestUrl)) === JSON.stringify({ id: 'claude-test', aliases: [] }), 'Anthropic ignores platform, status, release, and retirement rows')
 const anthropicCapUrls = Array.from({ length: MAX_ANTHROPIC_MODEL_PAGES }, (_, index) => `https://platform.claude.com/docs/en/models/test-${index}/overview.md`)
 assert(parseAnthropicModelsIndex([...anthropicCapUrls, ...anthropicCapUrls].join('\n')).length === 100, 'Anthropic index deduplicates URLs before applying its 100-page cap')
@@ -1291,7 +1292,7 @@ const anthropicAliasAnnouncementMerge = mergeFeed({
   ...minimalCommitted,
   publisher: 'anthropic',
   source: PROVIDERS.anthropic.deprecationsUrl,
-  models: [{ id: aliasStatusId }, { id: 'claude-next' }],
+  models: [{ id: aliasAnnouncementId, aliases: [aliasStatusId] }, { id: 'claude-next' }],
 }, {
   deprecations: matchingAliasAnnouncement,
   generated: '2026-08-01T00:00:00Z',
@@ -1778,9 +1779,7 @@ assert(!azureSnapshotMerge.feeds[0].models[0].distributions && azureSnapshotMerg
 for (const version of ['0314', '0613', '1106', '2025-01-01']) {
   const source = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [azureRow('snapshot-model', version)]))
   const missing = mergeDistributions([{ publisher: 'openai', models: [{ id: 'bare-target', aliases: ['snapshot-model'] }] }], { via: 'azure-ai-foundry', records: source.records })
-  assert(version.includes('-')
-    ? missing.feeds[0].models[0].distributions?.length === 1 && !missing.unconfirmedDistributions.length
-    : !missing.feeds[0].models[0].distributions && missing.unconfirmedDistributions.some(item => item.id === `snapshot-model-${version}` && item.reason === 'source model is absent from publisher feed'), `Azure missing snapshot ${version} allows bare alias fallback only for a single dated row`)
+  assert(!missing.feeds[0].models[0].distributions && missing.unconfirmedDistributions.some(item => item.id === `snapshot-model-${version}` && item.reason === 'source model is absent from publisher feed'), `Azure missing snapshot ${version} never falls back through a bare alias`)
   const alias = mergeDistributions([{ publisher: 'openai', models: [{ id: 'exact-alias-target', aliases: [`snapshot-model-${version}`] }] }], { via: 'azure-ai-foundry', records: source.records })
   assert(alias.feeds[0].models[0].distributions?.length === 1, `Azure snapshot ${version} binds through an exact alias`)
 }
@@ -1994,6 +1993,135 @@ const aliasDiff = compareFeeds(aliasDiffOld, aliasDiffNew)
 const aliasDiffMarkdown = renderSemanticDiff(aliasDiffOld, aliasDiffNew)
 assert(aliasDiff.changed && aliasDiffMarkdown.includes('## Alias changes') && aliasDiffMarkdown.includes('new-alias') && aliasDiffMarkdown.includes('old-alias'), 'semantic diff marks and renders alias changes')
 
+const azureReviewSnapshot = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [
+  ['gpt-4o', '2024-05-13', 'GA', '2026-09-30', '-'],
+]))
+for (const [label, models] of [
+  ['bare alias to another snapshot', [{ id: 'gpt-4o-2024-08-06', aliases: ['gpt-4o'] }]],
+  ['another dated canonical ID', [{ id: 'gpt-4o' }, { id: 'gpt-4o-2024-08-06' }]],
+  ['another dated alias', [{ id: 'gpt-4o' }, { id: 'snapshot-target', aliases: ['gpt-4o-2024-08-06'] }]],
+  ['dated alias on the bare model', [{ id: 'gpt-4o', aliases: ['gpt-4o-2024-08-06'] }]],
+]) {
+  reviewTest(`Alias review F1: Azure refuses fallback with ${label}`, () => {
+    const result = mergeDistributions([{ publisher: 'openai', models }], { via: 'azure-ai-foundry', records: azureReviewSnapshot.records })
+    strictAssert.ok(result.feeds[0].models.every(model => !model.distributions))
+    strictAssert.deepEqual(result.unconfirmedDistributions.map(row => row.id), ['gpt-4o-2024-05-13'])
+  })
+}
+reviewTest('Alias review F1: Azure still binds the single gpt-5.5 version', () => {
+  strictAssert.equal(azureSingleBinding.feeds[0].models[0].distributions[0].shutdown, '2027-10-26')
+})
+
+const anthropicReviewRow = '| Claude API | `claude-sonnet-4-6` |'
+const anthropicReviewAlias = '| Claude API alias | `claude-opus-4-5` |'
+const anthropicReviewTable = anthropicTestTable(anthropicReviewRow)
+for (const [label, markdown] of [
+  ['comment input outside a table', `${anthropicReviewRow}\n<!-- ${anthropicReviewAlias} -->`],
+  ['commented identity table', `<!--\n${anthropicReviewTable}\n-->`],
+  ['backtick fenced identity table', ['```markdown', anthropicReviewTable, '```'].join('\n')],
+  ['tilde fenced identity table', ['~~~markdown', anthropicReviewTable, '~~~'].join('\n')],
+  ['unterminated fenced identity table', ['```markdown', anthropicReviewTable].join('\n')],
+  ['three-column header', `| Platform | Model ID | Extra |\n| --- | --- | --- |\n${anthropicReviewRow}`],
+  ['three-column separator', `| Platform | Model ID |\n| --- | --- | --- |\n${anthropicReviewRow}`],
+  ['three-column platform row', `${anthropicReviewTable}\n| Amazon Bedrock | unused | extra |`],
+  ['unknown header text', anthropicReviewTable.replace('Platform', 'Provider')],
+  ['missing separator', `| Platform | Model ID |\n${anthropicReviewRow}`],
+  ['nonseparator cells', `| Platform | Model ID |\n| invalid | --- |\n${anthropicReviewRow}`],
+  ['detached identity row', `| Platform | Model ID |\n| --- | --- |\n\n${anthropicReviewRow}`],
+  ['detached alias row', `${anthropicReviewTable}\n\n${anthropicReviewAlias}`],
+]) {
+  reviewTest(`Alias review F2: Anthropic refuses ${label} and names the URL`, () => {
+    strictAssert.throws(() => parseAnthropicModelPage(markdown, anthropicTestUrl), error => error.message.includes(anthropicTestUrl))
+  })
+}
+for (const [label, hidden] of [
+  ['inline comment', `<!-- ${anthropicReviewAlias} -->`],
+  ['multiline comment', `<!--\n${anthropicReviewAlias}\n-->`],
+  ['backtick block', ['```markdown', anthropicTestTable(anthropicReviewAlias), '```'].join('\n')],
+  ['tilde block', ['~~~markdown', anthropicTestTable(anthropicReviewAlias), '~~~'].join('\n')],
+  ['shorter interior fence', ['````markdown', '```', anthropicTestTable(anthropicReviewAlias), '````'].join('\n')],
+  ['different interior fence', ['~~~markdown', '```', anthropicTestTable(anthropicReviewAlias), '~~~'].join('\n')],
+]) {
+  reviewTest(`Alias review F2: Anthropic ignores alias rows inside ${label}`, () => {
+    strictAssert.deepEqual(parseAnthropicModelPage(`${anthropicReviewTable}\n\n${hidden}`, anthropicTestUrl), { id: 'claude-sonnet-4-6', aliases: [] })
+  })
+}
+reviewTest('Alias review F2: all 13 fixtures use Platform and Model ID headers and yield three aliases', () => {
+  strictAssert.equal(anthropicModelUrls.length, 13)
+  for (const url of anthropicModelUrls) {
+    strictAssert.match(anthropicModelMarkdown(url), /^\| Platform\s+\| Model ID\s+\|\s*$/m)
+  }
+  strictAssert.deepEqual(anthropicPageModels.filter(model => model.aliases.length), anthropicExpectedAliases)
+})
+
+reviewTest('Alias review F3: deprecations cannot absorb a committed canonical ID', () => {
+  const committed = { ...anthropicFeed, models: [{ id: 'claude-a' }, { id: 'claude-b' }] }
+  const before = structuredClone(committed)
+  strictAssert.throws(() => mergeFeed(committed, {
+    deprecations: [{ id: 'claude-a', aliases: ['claude-b'] }],
+    currentIds: ['claude-a'], provider: PROVIDERS.anthropic, notice: () => {},
+  }), error => error.message.includes('claude-a') && error.message.includes('claude-b') && error.message.includes('canonical model id'))
+  strictAssert.deepEqual(committed, before)
+})
+reviewTest('Alias review F3: deprecations cannot absorb a committed canonical ID through its alias', () => {
+  strictAssert.throws(() => mergeFeed({ ...anthropicFeed, models: [{ id: 'claude-a' }, { id: 'claude-b', aliases: ['claude-indirect'] }] }, {
+    deprecations: [{ id: 'claude-a', aliases: ['claude-indirect'] }],
+    currentIds: ['claude-a'], provider: PROVIDERS.anthropic, notice: () => {},
+  }), error => error.message.includes('claude-a') && error.message.includes('claude-b') && error.message.includes('canonical model id'))
+})
+
+reviewTest('Alias review F4: Azure counts case variants together and leaves both versions unconfirmed', () => {
+  const source = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [
+    ['gpt-5-chat', '2025-08-07', 'GA', '2027-01-01', '-'],
+    [' GPT-5-CHAT ', '2025-10-03', 'GA', '2027-02-01', '-'],
+  ]))
+  const result = mergeDistributions([{ publisher: 'openai', models: [{ id: 'gpt-5-chat' }] }], { via: 'azure-ai-foundry', records: source.records })
+  strictAssert.deepEqual(source.records.map(row => row.modelRowCount), [2, 2])
+  strictAssert.ok(!result.feeds[0].models[0].distributions)
+  strictAssert.deepEqual(result.unconfirmedDistributions.map(row => row.id), ['gpt-5-chat-2025-08-07', 'GPT-5-CHAT-2025-10-03'])
+})
+
+for (const lifecycle of [{}, { shutdown: '2026-12-01' }]) {
+  reviewTest(`Alias review F5: a new ${lifecycle.shutdown ? 'dated' : 'current'} model lists its aliases`, () => {
+    const committed = { ...anthropicFeed, models: [] }
+    const generated = { ...committed, models: [{ id: 'claude-new', aliases: ['claude-moving', 'claude-added'], ...lifecycle }] }
+    const rendered = renderSemanticDiff(committed, generated)
+    strictAssert.match(rendered, /^- `claude-new`[^\n]*aliases: `claude-moving`, `claude-added`/m)
+  })
+}
+reviewTest('Alias review F5: moving an alias to a newly added model names its destination', () => {
+  const committed = { ...anthropicFeed, models: [{ id: 'claude-old', aliases: ['claude-moving'] }] }
+  const incoming = { id: 'claude-new', aliases: ['claude-moving'] }
+  const merged = mergeFeed(committed, { currentModels: [incoming], provider: PROVIDERS.anthropic, notice: () => {} }).feed
+  strictAssert.deepEqual(compareFeeds(committed, merged).added.map(model => model.id), ['claude-new'])
+  const rendered = renderSemanticDiff(committed, merged)
+  strictAssert.match(rendered, /^- `claude-new`[^\n]*aliases: `claude-moving`/m)
+  strictAssert.match(rendered, /^- `claude-old` - aliases removed: `claude-moving`/m)
+  const direct = { ...committed, models: [incoming] }
+  strictAssert.deepEqual(compareFeeds(committed, direct).added.map(model => model.id), ['claude-new'])
+  strictAssert.match(renderSemanticDiff(committed, direct), /^- `claude-new`[^\n]*aliases: `claude-moving`/m)
+})
+
+reviewTest('Alias review F6: keyless page-only discoveries appear only as added', () => {
+  const committed = { ...anthropicFeed, models: [] }
+  const merged = mergeFeed(committed, { currentIds: null, currentModels: anthropicExpectedAliases, provider: PROVIDERS.anthropic, notice: () => {} })
+  strictAssert.deepEqual(merged.unconfirmedIds, [])
+  const diff = compareFeeds(committed, merged.feed, merged)
+  strictAssert.deepEqual(diff.added, anthropicExpectedAliases)
+  strictAssert.deepEqual(diff.unconfirmed, [])
+  strictAssert.doesNotMatch(renderSemanticDiff(diff), /Unconfirmed entries|retained because neither source confirmed it/)
+})
+reviewTest('Alias review F6: retained models remain unconfirmed when only page identities confirm them', () => {
+  const committed = { ...anthropicFeed, models: [{ id: 'claude-retained', shutdown: '2026-12-01' }] }
+  const merged = mergeFeed(committed, {
+    currentIds: null, currentModels: [{ id: 'claude-retained' }, { id: 'claude-discovered' }],
+    provider: PROVIDERS.anthropic, notice: () => {},
+  })
+  strictAssert.deepEqual(merged.unconfirmedIds, ['claude-retained'])
+  strictAssert.deepEqual(merged.feed.models[0], committed.models[0])
+  strictAssert.deepEqual(compareFeeds(committed, merged.feed, merged).added, [{ id: 'claude-discovered' }])
+})
+
 const announcementDiffOld = { ...oldFeed, models: [{ id: 'announcement-model', announced: '2026-01-01', shutdown: '2026-10-01' }] }
 const announcementDiffNew = { ...announcementDiffOld, models: [{ id: 'announcement-model', announced: '2026-02-01', shutdown: '2026-10-01' }] }
 const announcementDiff = compareFeeds(announcementDiffOld, announcementDiffNew)
@@ -2045,7 +2173,7 @@ for (const [index, expectedPages, diagnostic] of [
         if (url === PROVIDERS.anthropic.deprecationsUrl) return responseFor(anthropicHtml)
         if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(index)
         pageCalls++
-        return responseFor(`| Claude API | \`claude-test-${pageCalls}\` |`)
+        return responseFor(anthropicTestTable(`| Claude API | \`claude-test-${pageCalls}\` |`))
       },
     })
   } catch (error) { reason = error.message }
