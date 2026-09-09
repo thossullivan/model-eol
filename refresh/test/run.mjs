@@ -954,9 +954,10 @@ const realBedrockMerge = mergeBedrockDistributions(realBedrockFeeds, { records: 
 const bedrockDistribution = (publisher, id) => realBedrockMerge.feeds.find(feed => feed.publisher === publisher).models.find(model => model.id === id)?.distributions?.find(distribution => distribution.via === 'aws-bedrock')
 assert(normalizeBedrockId(commandCard.bedrockId) === 'command-r' && bedrockDistribution('cohere', 'command-r-03-2024')?.shutdown === '2026-08-19', 'Cohere namespace binds Command R through its committed alias')
 assert(normalizeBedrockId(mistralCard.bedrockId) === 'mistral-7b-instruct' && realBedrockMerge.noPublisherFeed.some(item => item.bedrockId === mistralCard.bedrockId), 'Mistral namespace leaves the absent 7B publisher ID unmatched')
-for (const record of [embedCard, jambaCard, liteCard, haikuCards[1]]) {
+for (const record of [embedCard, jambaCard, liteCard]) {
   assert(realBedrockMerge.noPublisherFeed.some(item => item.bedrockId === record.bedrockId), `absent publisher ID remains unmatched: ${record.bedrockId}`)
 }
+assert(!realBedrockMerge.noPublisherFeed.some(item => item.bedrockId === haikuCards[1].bedrockId) && bedrockDistribution('anthropic', 'claude-haiku-4-5-20251001')?.date_precision === 'tentative', 'the bare Haiku 4.5 Bedrock ID binds through the committed publisher alias')
 assert(bedrockDistribution('anthropic', 'claude-fable-5-1')?.source === fableCard.source && bedrockDistribution('anthropic', 'claude-haiku-4-5-20251001')?.date_precision === 'tentative', 'Fable and dated Haiku bind tentative distributions with card sources')
 assert(bedrockDistribution('amazon', 'nova-canvas')?.source === BEDROCK_LIFECYCLE_URL && bedrockDistribution('cohere', 'command-r-03-2024')?.source === BEDROCK_LIFECYCLE_URL, 'legacy-bound distributions use the legacy page source')
 assert(realBedrockMerge.feeds.every(feed => validateFeed(feed).length === 0), 'combined Bedrock fixture feeds pass semantic validation')

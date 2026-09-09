@@ -36,7 +36,7 @@ format instead of each scraping the same pages.
   replacement, `distributions` for per-channel lifecycles, and publisher `policy`
   floors. It is small enough that a provider could serve it at
   `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (30 entries), Cohere (12 entries), Google (93 entries), Mistral (40 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-09-09<!-- /feeds-status -->. Every
+- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (32 entries), Cohere (12 entries), Google (93 entries), Mistral (40 entries) and OpenAI (195 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-09-09<!-- /feeds-status -->. Every
   dated entry carries a source URL. Anthropic's "not sooner than" dates for
   active models are included as `tentative` planning floors.
 - **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX

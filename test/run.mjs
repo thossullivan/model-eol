@@ -561,7 +561,9 @@ assert(automaticConfigJson.scanned_files === 1 && automaticConfigJson.scan_notes
 const configuredPlan = run(['plan', repositoryConfigSrc])
 const configuredPlanJson = JSON.parse(configuredPlan.out)
 assert(configuredPlan.code === 0 && configuredPlanJson.scan_notes.length === 0, 'git-root config is discovered for a subdirectory target and ignored large files do not block plan')
-assert(configuredPlanJson.items.length === 0 && configuredPlanJson.issues.length === 0, 'model ignores apply consistently to migration plans')
+const configuredPlanIgnored = ['o3-deep-research-2025-06-26', 'o3-deep-research', 'gpt-9-config-ignore']
+assert(configuredPlanJson.items.length === 0 && !configuredPlanJson.issues.some(issue => configuredPlanIgnored.includes(issue.id) || configuredPlanIgnored.includes(issue.matched)), 'model ignores apply consistently to migration plans')
+assert(configuredPlanJson.issues.every(issue => issue.id === 'gpt-5.6-sol' && issue.reason === 'outside-threshold'), 'the unignored current model appears only as an informational scheduled issue')
 
 const explicitConfigFile = path.join(tempRoot, 'explicit-model-eol.json')
 fs.writeFileSync(explicitConfigFile, JSON.stringify({
