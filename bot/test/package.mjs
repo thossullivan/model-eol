@@ -95,7 +95,8 @@ try {
   assert(registryDelays.reduce((sum, delay) => sum + delay, 0) === 600_000 && registryDelays.length === 24 && registryDelays[0] === 5000 && Math.max(...registryDelays) === 30_000, 'smoke test waits up to ten minutes for registry propagation with 5 to 30 second backoff')
   assert(JSON.stringify(registryWaitSchedule(21)) === JSON.stringify([5000, 5000, 10000, 1000]), 'registry wait window clips its remainder and never overshoots')
   assert(registryWaitSchedule(0).length === 0, 'a zero wait window yields a single attempt')
-  assert(registryWaitSeconds('') === 600 && registryWaitSeconds(undefined) === 600 && registryWaitSeconds(' 20 ') === 20, 'blank overrides fall back to the ten-minute default')
+  assert(registryWaitSeconds('') === 600 && registryWaitSeconds(null) === 600 && registryWaitSeconds(' 20 ') === 20 && registryWaitSeconds('1.5') === 1.5, 'blank overrides fall back to the ten-minute default and the parser never reads the environment when given a value')
+  assert(registryWaitSchedule(1.2345).every(delay => Number.isInteger(delay)) && registryWaitSchedule(1.2345).reduce((sum, delay) => sum + delay, 0) === 1235, 'fractional wait windows yield integer millisecond delays')
   for (const bad of ['-1', 'abc', '1e308', '3601']) {
     let reason = ''
     try { registryWaitSeconds(bad) } catch (error) { reason = error.message }

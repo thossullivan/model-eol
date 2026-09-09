@@ -64,8 +64,8 @@ export function registryWaitSchedule(totalSeconds = registryWaitSeconds()) {
   const delays = []
   let elapsed = 0
   let step = 5000
-  while (elapsed < totalSeconds * 1000) {
-    const delay = Math.min(step, REGISTRY_WAIT_STEP_CAP_MS, totalSeconds * 1000 - elapsed)
+  while (elapsed < Math.round(totalSeconds * 1000)) {
+    const delay = Math.min(step, REGISTRY_WAIT_STEP_CAP_MS, Math.round(totalSeconds * 1000) - elapsed)
     delays.push(delay)
     elapsed += delay
     if (delays.length % 2 === 0) step = Math.min(step * 2, REGISTRY_WAIT_STEP_CAP_MS)
@@ -94,7 +94,7 @@ export function probeTarball(url, { version, timeoutMs = REGISTRY_REQUEST_TIMEOU
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, url], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: Math.max(1, Math.min(timeoutMs, REGISTRY_REQUEST_TIMEOUT_MS)),
+    timeout: Math.max(1, Math.min(Math.ceil(timeoutMs), REGISTRY_REQUEST_TIMEOUT_MS)),
   })
   if (result.error || result.status !== 0) {
     const detail = result.error?.message || result.stderr?.trim().split('\n').pop() || result.stdout?.trim() || `exit ${result.status}`
@@ -108,12 +108,15 @@ const waitForPublishedVersion = ({ version, expectedIntegrity, cache, delays = r
   const started = now()
   const deadline = started + delays.reduce((sum, delay) => sum + delay, 0)
   const attempts = delays.length + 1
+  const remaining = () => Math.max(0, deadline - now())
+  // The first attempt always gets a full request budget; later attempts only what the window has left.
+  const budget = attempt => attempt === 1 ? REGISTRY_REQUEST_TIMEOUT_MS : Math.max(1, Math.min(REGISTRY_REQUEST_TIMEOUT_MS, Math.ceil(remaining())))
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const remaining = () => Math.max(0, deadline - now())
+    if (attempt > 1 && remaining() === 0) break
     const result = spawnSync(npm, ['view', `model-eol@${version}`, 'version', 'dist.integrity', 'dist.tarball', '--json', '--cache', cache, '--prefer-online'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: Math.max(1000, Math.min(REGISTRY_REQUEST_TIMEOUT_MS, remaining() || REGISTRY_REQUEST_TIMEOUT_MS)),
+      timeout: budget(attempt),
     })
     if (!result.error && result.status === 0) {
       let metadata = null
@@ -126,7 +129,7 @@ const waitForPublishedVersion = ({ version, expectedIntegrity, cache, delays = r
         if (registryIntegrity !== expectedIntegrity) {
           throw new Error(`model-eol@${version} registry integrity ${registryIntegrity} does not match release integrity ${expectedIntegrity}`)
         }
-        const tarball = probeTarball(metadata['dist.tarball'], { version, timeoutMs: remaining() || REGISTRY_REQUEST_TIMEOUT_MS })
+        const tarball = probeTarball(metadata['dist.tarball'], { version, timeoutMs: budget(attempt) })
         if (tarball.ok) return registryIntegrity
         detail = tarball.detail
       } else {
