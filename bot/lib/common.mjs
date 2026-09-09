@@ -111,7 +111,11 @@ export const markdownText = value => String(value ?? '')
   .map(line => line.replace(/^(\s*)([-+>]\s|\d+\.\s)/, '$1&#45; '))
   .join('\n')
 
-export const markdownCode = value => `\`${markdownText(value)}\``
+// code spans show entities literally, so drop backticks and line breaks instead of escaping
+export const markdownCode = value => {
+  const text = String(value ?? '').replace(/[\r\n]+/g, ' ').replaceAll('`', '')
+  return `\`${text === '' ? ' ' : text}\``
+}
 
 export const markdownLink = (label, value) => {
   const text = String(value ?? '')

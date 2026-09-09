@@ -16,7 +16,7 @@ import {
   runBot,
   runPlan,
 } from '../bot.mjs'
-import { branchFor, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
+import { branchFor, markdownCode, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
@@ -377,7 +377,7 @@ for (const group of [captureModelGroup, captureIssueGroup]) {
   const body = captureBodies(group)
   assert(body.includes('## Capture window\n- The old model no longer answers on the publisher clock. No baseline can be captured from it there.'), `${group.kind} body reports the retired publisher capture clock`)
   assert(body.includes('- It still answers via `aws-bedrock` until 2999-10-14.') && body.includes('- It still answers via `vertex-ai` at least until 2999-11-14.') && body.includes('- It still answers via `azure-ai-foundry` at least until 2999-12-14.'), `${group.kind} body renders live alternatives with exact, tentative, and earliest precision`)
-  assert(body.includes('- Capture a baseline from the old model before that date if your eval compares outputs. model-eol does not run captures.'), `${group.kind} body includes the required baseline guidance`)
+  assert(body.includes('- Capture a baseline from the old model before the window closes if your eval compares outputs. model-eol does not run captures.'), `${group.kind} body includes the required baseline guidance`)
   assert(body.indexOf('## Capture window') > body.indexOf('## Feed notes') && body.indexOf('## Capture window') < body.indexOf('## Eval'), `${group.kind} capture section follows feed notes and precedes eval`)
   const withoutEntry = captureBodies({ ...group, context: { ...group.context, entry: null } })
   assert(!withoutEntry.includes('## Capture window'), `${group.kind} body omits capture when the entry is missing`)
@@ -397,7 +397,8 @@ for (const group of [captureModelGroup, captureIssueGroup]) {
   const livePublisher = captureBodies({ ...group, via: 'aws-bedrock', context: { ...group.context, entry: { ...captureEntry, shutdown: '2998-01-01' } } })
   assert(livePublisher.includes('- It still answers via `publisher` until 2998-01-01.'), `${group.kind} body renders a publisher alternative with unknown precision`)
   const escapedBody = captureBodies({ ...group, context: { ...group.context, entry: { ...captureEntry, distributions: [{ via: '<custom_channel>`', shutdown: '2999-01-01' }] } } })
-  assert(escapedBody.includes('`&lt;custom&#95;channel&gt;&#96;`') && !escapedBody.includes('<custom_channel>'), `${group.kind} body escapes capture clock values`)
+  const escapedLine = escapedBody.split('\n').find(line => line.startsWith('- It still answers via '))
+  assert(escapedLine === '- It still answers via `<custom_channel>` until 2999-01-01.', `${group.kind} body renders capture clock values literally inside one code span`)
 }
 
 const tentativeBotFeeds = path.join(tempRoot, 'tentative-floor-feeds')
@@ -421,6 +422,39 @@ const tentativeBotResult = await runBot({
   now: new Date('2026-09-03T00:00:00Z'),
 })
 assert(tentativeBotResult.plan.items.length === 0 && tentativeBotResult.decisions.length === 0, 'tentative-floor models produce no migration item or bot work')
+
+assert(markdownCode('custom_hub') === '`custom_hub`' && markdownCode('a`b``c') === '`abc`' && markdownCode('x\r\ny') === '`x y`' && markdownCode('') === '` `' && markdownCode(null) === '` `', 'code spans keep underscores literal and never contain backticks or line breaks')
+const clockDigestFeeds = path.join(tempRoot, 'clock-digest-feeds')
+fs.mkdirSync(clockDigestFeeds)
+const writeClockDigestFeed = status => write(path.join(clockDigestFeeds, 'openai.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'openai',
+  generated: '2026-07-01T00:00:00Z',
+  source: 'https://example.invalid/openai',
+  models: [
+    { id: 'clock-digest-model', shutdown: '2000-01-01', replacement: 'clock-digest-next', distributions: [{ via: 'aws-bedrock', shutdown: '2999-10-14', status }] },
+    { id: 'clock-digest-next' },
+  ],
+}))
+writeClockDigestFeed('active')
+const clockDigestRepo = makeRepo({ name: 'clock-digest', files: { 'app.py': 'from openai import OpenAI\n\nclient = OpenAI()\nMODEL = "clock-digest-model"\n' }, config })
+const clockDigestGithub = new FakeGitHub()
+const clockDigestRun = () => runBot({
+  repo: 'example/clock-digest',
+  targetDir: clockDigestRepo.work,
+  token: 'test-token',
+  transport: clockDigestGithub.transport.bind(clockDigestGithub),
+  vendoredFeeds: clockDigestFeeds,
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const clockDigestCreate = (await clockDigestRun()).decisions.find(item => item.group.kind === 'model')
+const clockDigestPull = clockDigestGithub.pulls.find(item => item.number === clockDigestCreate?.number)
+if (clockDigestPull) clockDigestPull.head.sha = parseMetadata(clockDigestCreate?.body)?.head_sha
+assert(clockDigestCreate?.action === 'create' && clockDigestCreate.body.includes('- It still answers via `aws-bedrock` until 2999-10-14.'), 'capture window PR body lists the live distributor clock')
+assert((await clockDigestRun()).decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'unchanged clocks keep the PR untouched')
+writeClockDigestFeed('retired')
+const clockDigestUpdate = (await clockDigestRun()).decisions.find(item => item.group.kind === 'model')
+assert(clockDigestUpdate?.action === 'update' && !clockDigestUpdate.body.includes('It still answers via `aws-bedrock`') && clockDigestUpdate.body.includes('No clock in the feed still answers'), 'a distribution row change outside the plan items refreshes the PR body')
 
 const httpsAuth = gitAuthentication('https://github.com/example/private.git', 'private-token')
 assert(httpsAuth?.key === 'http.https://github.com/.extraheader', 'GitHub HTTPS authentication is scoped to the remote host')
@@ -1242,7 +1276,7 @@ const structuredIssueBody = buildIssueBody({
   },
   now: new Date('2026-08-01T00:00:00Z'),
 })
-assert(structuredIssueBody.includes('Replacement options') && structuredIssueBody.includes('first&#95;choice') && structuredIssueBody.includes('second-choice'), 'issue body renders escaped replacement options')
+assert(structuredIssueBody.includes('Replacement options') && structuredIssueBody.includes('`first_choice`') && !structuredIssueBody.includes('&#95;choice') && structuredIssueBody.includes('second-choice'), 'issue body renders escaped replacement options')
 const structuredNoteLine = structuredIssueBody.split('\n').find(line => line.startsWith('- Replacement note:'))
 assert(structuredNoteLine?.includes('reasoning.mode: pro') && structuredNoteLine.includes('&lt;when needed&gt;') && structuredNoteLine.includes('&#96;'), 'issue body renders escaped replacement notes')
 

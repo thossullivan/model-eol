@@ -364,10 +364,20 @@ const buildModelGroups = (plan, config, root, records) => {
   }
   for (const group of groups.values()) {
     group.items.sort((a, b) => `${a.file}:${a.line}:${a.occurrence}`.localeCompare(`${b.file}:${b.line}:${b.occurrence}`))
-    group.feedDigest = itemDigest(group.items)
+    group.feedDigest = groupDigest(group.items, group.context?.entry)
   }
   return [...groups.values()].sort((a, b) => `${a.publisher}/${a.id}`.localeCompare(`${b.publisher}/${b.id}`))
 }
+
+// the capture section reads clocks outside the plan items, so they join the digest that gates body updates
+const clockRows = entry => entry
+  ? {
+      shutdown: entry.shutdown ?? null,
+      date_precision: entry.date_precision ?? null,
+      distributions: (entry.distributions ?? []).map(row => ({ via: row.via, shutdown: row.shutdown ?? null, status: row.status ?? null, date_precision: row.date_precision ?? null })),
+    }
+  : null
+const groupDigest = (items, entry) => sha256(stableJson({ items: itemDigest(items), clocks: clockRows(entry) }))
 
 const buildIssueGroups = (plan, config, root, records) => {
   const ignoredIds = ignoredModelIds(plan, config)
@@ -399,7 +409,7 @@ const buildIssueGroups = (plan, config, root, records) => {
   }
   for (const group of groups.values()) {
     group.issues.sort((a, b) => `${a.file}:${a.line}:${a.reason}`.localeCompare(`${b.file}:${b.line}:${b.reason}`))
-    group.feedDigest = itemDigest(group.issues)
+    group.feedDigest = groupDigest(group.issues, group.context?.entry)
   }
   return [...groups.values()].sort((a, b) => `${a.publisher}/${a.subject}/${a.shutdown ?? ''}`.localeCompare(`${b.publisher}/${b.subject}/${b.shutdown ?? ''}`))
 }
@@ -505,7 +515,9 @@ const captureSection = (group, now) => {
       ? `- The old model answers on the ${clock} clock ${untilText(capture)}.`
       : `- The old model no longer answers on the ${clock} clock. No baseline can be captured from it there.`,
     ...capture.alternatives.map(alternative => `- It still answers via ${markdownCode(alternative.via)} ${untilText(alternative)}.`),
-    '- Capture a baseline from the old model before that date if your eval compares outputs. model-eol does not run captures.',
+    capture.until === null && capture.alternatives.length === 0
+      ? '- No clock in the feed still answers, so no baseline can be captured from the old model. model-eol does not run captures.'
+      : '- Capture a baseline from the old model before the window closes if your eval compares outputs. model-eol does not run captures.',
   ].join('\n')
 }
 
