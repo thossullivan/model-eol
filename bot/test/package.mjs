@@ -3,9 +3,10 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 
 import { verifyPackageIntegrity } from '../../scripts/package-integrity.mjs'
+import { expectedTarballUrl, probeTarball, registryWaitSchedule, registryWaitSeconds } from '../../scripts/published-consumer-uat.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-package-test-'))
@@ -90,6 +91,53 @@ try {
   const setupNodeCount = repositoryWorkflows.match(/actions\/setup-node@v7/g)?.length ?? 0
   assert(setupNodeCount > 0 && repositoryWorkflows.match(/package-manager-cache: false/g)?.length === setupNodeCount, 'repository workflows disable automatic package-manager caching in every Node job')
   assert(repositoryWorkflows.includes('node scripts/published-consumer-uat.mjs'), 'release automation smoke-tests the exact published package')
+  const registryDelays = registryWaitSchedule(600)
+  assert(registryDelays.reduce((sum, delay) => sum + delay, 0) === 600_000 && registryDelays.length === 24 && registryDelays[0] === 5000 && Math.max(...registryDelays) === 30_000, 'smoke test waits up to ten minutes for registry propagation with 5 to 30 second backoff')
+  assert(JSON.stringify(registryWaitSchedule(21)) === JSON.stringify([5000, 5000, 10000, 1000]), 'registry wait window clips its remainder and never overshoots')
+  assert(registryWaitSchedule(0).length === 0, 'a zero wait window yields a single attempt')
+  assert(registryWaitSeconds('') === 600 && registryWaitSeconds(null) === 600 && registryWaitSeconds(' 20 ') === 20 && registryWaitSeconds('1.5') === 1.5, 'blank overrides fall back to the ten-minute default and the parser never reads the environment when given a value')
+  assert(registryWaitSchedule(1.2345).every(delay => Number.isInteger(delay)) && registryWaitSchedule(1.2345).reduce((sum, delay) => sum + delay, 0) === 1235, 'fractional wait windows yield integer millisecond delays')
+  for (const bad of ['-1', 'abc', '1e308', '3601']) {
+    let reason = ''
+    try { registryWaitSeconds(bad) } catch (error) { reason = error.message }
+    assert(reason.includes('MODEL_EOL_REGISTRY_WAIT_SECONDS'), `registry wait override ${JSON.stringify(bad)} is refused`)
+  }
+  const foreignTarball = probeTarball('https://example.com/model-eol-0.7.0.tgz', { version: '0.7.0' })
+  assert(!foreignTarball.ok && foreignTarball.detail.includes('unexpected tarball URL'), 'tarball probe accepts only the registry tarball for the expected version without contacting the network')
+  assert(!probeTarball(expectedTarballUrl('0.6.0'), { version: '0.7.0' }).ok && !probeTarball(undefined, { version: '0.7.0' }).ok && !probeTarball(expectedTarballUrl('0.7.0'), {}).ok, 'tarball probe binds the filename to the expected version and fails closed without one')
+  // The probe uses spawnSync, which would block an in-process server, so the fixture registry runs as a child.
+  const tarballServerScript = [
+    "const http = require('node:http')",
+    "const server = http.createServer((request, response) => {",
+    "  const mode = request.url.split('/')[1]",
+    "  if (mode === 'ok') return response.writeHead(request.headers.range ? 206 : 200, { 'content-type': 'application/octet-stream', 'content-length': '1' }).end('x')",
+    "  if (mode === 'redirect') return response.writeHead(302, { location: `http://127.0.0.1:${server.address().port}/ok/model-eol/-/model-eol-0.7.0.tgz` }).end()",
+    "  if (mode === 'empty') return response.writeHead(204).end()",
+    "  if (mode === 'html') return response.writeHead(200, { 'content-type': 'text/html' }).end('<html>error</html>')",
+    "  response.writeHead(404).end('missing')",
+    "})",
+    "server.listen(0, '127.0.0.1', () => process.stdout.write(`${server.address().port}\\n`))",
+  ].join('\n')
+  const tarballServer = spawn(process.execPath, ['-e', tarballServerScript], { stdio: ['ignore', 'pipe', 'inherit'] })
+  const tarballPort = await new Promise((resolve, reject) => {
+    let buffered = ''
+    tarballServer.stdout.on('data', chunk => {
+      buffered += chunk
+      const line = buffered.split('\n')[0]
+      if (/^\d+$/.test(line)) resolve(Number(line))
+    })
+    tarballServer.once('exit', code => reject(new Error(`tarball fixture server exited with ${code}`)))
+  })
+  try {
+    const registry = mode => `http://127.0.0.1:${tarballPort}/${mode}`
+    const probe = mode => probeTarball(expectedTarballUrl('0.7.0', registry(mode)), { version: '0.7.0', registry: registry(mode) })
+    assert(probe('ok').ok && probe('ok').detail.includes('206 application/octet-stream'), 'tarball probe accepts a ranged octet-stream response')
+    for (const [mode, label] of [['redirect', 'a redirect'], ['empty', 'a 204'], ['html', 'a non-tarball 200'], ['missing', 'a 404']]) {
+      assert(!probe(mode).ok, `tarball probe rejects ${label}`)
+    }
+  } finally {
+    tarballServer.kill()
+  }
   assert(repositoryWorkflows.includes('uses: thossullivan/model-eol@v0'), 'hosted consumer UAT exercises the moving v0 Action')
   assert(repositoryWorkflows.includes('name: npm-release-result') && repositoryWorkflows.includes('run-id: ${{ github.event.workflow_run.id }}'), 'hosted consumer UAT receives the exact release version artifact')
   assert(repositoryWorkflows.includes('Moving v0 Action validate round-trip UAT'), 'hosted moving v0 Action validates its emitted inventory')
