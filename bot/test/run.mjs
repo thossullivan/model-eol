@@ -426,17 +426,21 @@ assert(tentativeBotResult.plan.items.length === 0 && tentativeBotResult.decision
 assert(markdownCode('custom_hub') === '`custom_hub`' && markdownCode('a`b``c') === '`abc`' && markdownCode('x\r\ny') === '`x y`' && markdownCode('') === '` `' && markdownCode(null) === '` `', 'code spans keep underscores literal and never contain backticks or line breaks')
 const clockDigestFeeds = path.join(tempRoot, 'clock-digest-feeds')
 fs.mkdirSync(clockDigestFeeds)
-const writeClockDigestFeed = status => write(path.join(clockDigestFeeds, 'openai.json'), JSON.stringify({
+const clockDigestRows = status => [
+  { via: 'aws-bedrock', shutdown: '2999-10-14', status },
+  { via: 'vertex-ai', shutdown: '2999-11-14', date_precision: 'tentative' },
+]
+const writeClockDigestFeed = distributions => write(path.join(clockDigestFeeds, 'openai.json'), JSON.stringify({
   spec: 'model-eol/0.1',
   publisher: 'openai',
   generated: '2026-07-01T00:00:00Z',
   source: 'https://example.invalid/openai',
   models: [
-    { id: 'clock-digest-model', shutdown: '2000-01-01', replacement: 'clock-digest-next', distributions: [{ via: 'aws-bedrock', shutdown: '2999-10-14', status }] },
+    { id: 'clock-digest-model', shutdown: '2000-01-01', replacement: 'clock-digest-next', distributions },
     { id: 'clock-digest-next' },
   ],
 }))
-writeClockDigestFeed('active')
+writeClockDigestFeed(clockDigestRows('active'))
 const clockDigestRepo = makeRepo({ name: 'clock-digest', files: { 'app.py': 'from openai import OpenAI\n\nclient = OpenAI()\nMODEL = "clock-digest-model"\n' }, config })
 const clockDigestGithub = new FakeGitHub()
 const clockDigestRun = () => runBot({
@@ -452,9 +456,13 @@ const clockDigestPull = clockDigestGithub.pulls.find(item => item.number === clo
 if (clockDigestPull) clockDigestPull.head.sha = parseMetadata(clockDigestCreate?.body)?.head_sha
 assert(clockDigestCreate?.action === 'create' && clockDigestCreate.body.includes('- It still answers via `aws-bedrock` until 2999-10-14.'), 'capture window PR body lists the live distributor clock')
 assert((await clockDigestRun()).decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'unchanged clocks keep the PR untouched')
-writeClockDigestFeed('retired')
+writeClockDigestFeed(clockDigestRows('active').reverse())
+assert((await clockDigestRun()).decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'reordered distribution rows keep the same digest')
+writeClockDigestFeed([{ via: 'aws-bedrock', shutdown: '2999-10-14', status: 'retired' }])
 const clockDigestUpdate = (await clockDigestRun()).decisions.find(item => item.group.kind === 'model')
-assert(clockDigestUpdate?.action === 'update' && !clockDigestUpdate.body.includes('It still answers via `aws-bedrock`') && clockDigestUpdate.body.includes('No clock in the feed still answers'), 'a distribution row change outside the plan items refreshes the PR body')
+assert(clockDigestUpdate?.action === 'update' && !clockDigestUpdate.body.includes('It still answers via') && clockDigestUpdate.body.includes('lists no dated clock on which the old model still answers'), 'a distribution row change outside the plan items refreshes the PR body')
+const clockDigestUndated = buildPullBody({ group: { kind: 'model', id: 'clock-digest-model', publisher: 'openai', via: null, feedDigest: 'x', context: { announced: null, notes: [], entry: { id: 'clock-digest-model', shutdown: '2000-01-01', distributions: [{ via: 'aws-bedrock', status: 'active' }] } }, items: [{ file: 'app.py', line: 1, shutdown: '2000-01-01', replacement: 'clock-digest-next', status: 'retired', threshold_days: 90 }] }, headSha: 'h', now: new Date('2026-08-01T00:00:00Z') })
+assert(clockDigestUndated.includes('lists no dated clock on which the old model still answers') && !clockDigestUndated.includes('It still answers via'), 'an undated active clock is reported as unknown, not as closed')
 
 const httpsAuth = gitAuthentication('https://github.com/example/private.git', 'private-token')
 assert(httpsAuth?.key === 'http.https://github.com/.extraheader', 'GitHub HTTPS authentication is scoped to the remote host')

@@ -374,7 +374,7 @@ const clockRows = entry => entry
   ? {
       shutdown: entry.shutdown ?? null,
       date_precision: entry.date_precision ?? null,
-      distributions: (entry.distributions ?? []).map(row => ({ via: row.via, shutdown: row.shutdown ?? null, status: row.status ?? null, date_precision: row.date_precision ?? null })),
+      distributions: itemDigest((entry.distributions ?? []).map(row => ({ via: row.via, shutdown: row.shutdown ?? null, status: row.status ?? null, date_precision: row.date_precision ?? null }))),
     }
   : null
 const groupDigest = (items, entry) => sha256(stableJson({ items: itemDigest(items), clocks: clockRows(entry) }))
@@ -516,7 +516,7 @@ const captureSection = (group, now) => {
       : `- The old model no longer answers on the ${clock} clock. No baseline can be captured from it there.`,
     ...capture.alternatives.map(alternative => `- It still answers via ${markdownCode(alternative.via)} ${untilText(alternative)}.`),
     capture.until === null && capture.alternatives.length === 0
-      ? '- No clock in the feed still answers, so no baseline can be captured from the old model. model-eol does not run captures.'
+      ? '- The feed lists no dated clock on which the old model still answers, so model-eol cannot state a capture window. model-eol does not run captures.'
       : '- Capture a baseline from the old model before the window closes if your eval compares outputs. model-eol does not run captures.',
   ].join('\n')
 }
