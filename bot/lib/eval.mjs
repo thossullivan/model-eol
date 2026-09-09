@@ -50,7 +50,8 @@ export const readReportCapped = (file, limit) => {
   }
 }
 
-export const runEvalHook = ({ command, timeoutMs, maxReportBytes, passEnv = [], cwd, oldId, newId, planPath, reportPath }) => {
+export const runEvalHook = ({ command, timeoutMs, maxReportBytes, passEnv = [], cwd, oldId, newId, planPath, reportPath, via = null, mode = 'evaluate' }) => {
+  if (mode !== 'evaluate') throw new Error(`unsupported eval mode: ${mode}`)
   if (fs.existsSync(reportPath)) fs.rmSync(reportPath, { force: true })
   const env = {}
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'USER', 'SHELL']) {
@@ -63,6 +64,8 @@ export const runEvalHook = ({ command, timeoutMs, maxReportBytes, passEnv = [], 
   env.MODEL_EOL_NEW_ID = newId
   env.MODEL_EOL_PLAN = planPath
   env.MODEL_EOL_REPORT = reportPath
+  env.MODEL_EOL_VIA = via ?? ''
+  env.MODEL_EOL_EVAL_MODE = mode
 
   const result = spawnSync(command, {
     cwd,

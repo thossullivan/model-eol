@@ -406,7 +406,8 @@ if (command === 'plan') {
 
 if (command === 'check') {
   if (AS_JSON) {
-    console.log(JSON.stringify({ schema: 'model-eol/check@0.1', threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings }, null, 2))
+    // capture stays out of the 0.1 document until the contract grows; the human line and the bot carry it
+    console.log(JSON.stringify({ schema: 'model-eol/check@0.1', threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings.map(({ capture, ...finding }) => finding) }, null, 2))
   } else {
     console.log(formatCheck({ findings: changedFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
   }

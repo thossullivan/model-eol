@@ -93,7 +93,7 @@
           "type": ["string", "null"],
           "minLength": 1,
           "default": null,
-          "description": "Opt-in repository-owned command run independently for each patchable migration only in the read-only evaluate phase. Write-capable publication consumes its commit-bound result manifest and never executes this command."
+          "description": "Opt-in repository-owned command run independently for each patchable migration only in the read-only evaluate phase. Receives MODEL_EOL_OLD_ID, MODEL_EOL_NEW_ID, MODEL_EOL_PLAN, MODEL_EOL_REPORT, MODEL_EOL_VIA, and MODEL_EOL_EVAL_MODE. Write-capable publication consumes its commit-bound result manifest and never executes this command."
         },
         "timeout_ms": {
           "type": "integer",

@@ -105,9 +105,13 @@ bot adapter consuming versioned `plan --json`. Nothing stateful in the core.
 ### A4. Eval hook (security boundary, per Codex review - critical finding)
 
 Contract: `{"eval": {"command": "..."}}` in `.model-eol.json`; env vars
-`MODEL_EOL_OLD_ID`, `MODEL_EOL_NEW_ID`, `MODEL_EOL_PLAN`; exit 0 = pass;
+`MODEL_EOL_OLD_ID`, `MODEL_EOL_NEW_ID`, `MODEL_EOL_PLAN`, `MODEL_EOL_VIA`,
+`MODEL_EOL_EVAL_MODE`; exit 0 = pass;
 a regular bounded Markdown report is required at the `MODEL_EOL_REPORT` path for
 an exit-zero run to count as passing.
+
+- `MODEL_EOL_VIA`, the distributor channel the plan was built for, or empty for the publisher's direct API. Use it to map the publisher's replacement ID to your client's ID on that channel.
+- `MODEL_EOL_EVAL_MODE`, always `evaluate` today. The value `capture` is reserved for a future run on the unpatched checkout against the old ID. The bot does not run it, and the hook refuses any other value.
 
 The command is intentionally explicit rather than inferred from package files:
 model-eol cannot know whether a unit suite proves tool calling, structured output,

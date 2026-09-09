@@ -11,10 +11,11 @@ import path from 'node:path'
 
 import { applyPlan } from '../lib/apply.mjs'
 import { color, colorEnabled } from '../lib/color.mjs'
-import { assertIsoDate, buildModelPattern, findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
+import { assertIsoDate, buildModelPattern, captureWindowFor, findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
 import { buildPlan } from '../lib/plan.mjs'
 import { formatCheck, formatSchedule } from '../lib/reports.mjs'
 import { parseDiffPath } from '../lib/scanner.mjs'
+import { validateDocument } from '../lib/validate-document.mjs'
 import { PROVIDERS, loadProviderSources, mergeFeed } from '../refresh/providers.mjs'
 import { mergeDistributions, parseAzureModelRetirementScheduleHtml } from '../refresh/distributors.mjs'
 
@@ -1239,6 +1240,83 @@ const statusOnlyHuman = run(['check', statusOnlyDir, '--feeds', statusOnlyFeeds,
 assert(statusOnlyHuman.code === 1 && statusOnlyHuman.out.includes('RETIRED (shutdown date unavailable)'), 'human check renders status-only retirement without invalid date arithmetic')
 const statusOnlyPlan = JSON.parse(run(['plan', statusOnlyDir, '--feeds', statusOnlyFeeds, '--via', 'custom-hub']).out)
 assert(statusOnlyPlan.items.length === 0 && statusOnlyPlan.issues.some(issue => issue.reason === 'shutdown-date-unavailable'), 'status-only retirement remains non-patchable until a shutdown date is known')
+
+const captureDir = path.join(tempRoot, 'capture-window')
+const captureFeeds = path.join(captureDir, 'feeds')
+const captureDistributions = [
+  { via: 'vertex-ai', shutdown: '2999-11-14', date_precision: 'tentative', status: 'active' },
+  { via: 'aws-bedrock', shutdown: '2999-10-14', date_precision: 'exact', status: 'extended-access' },
+  { via: 'retired-channel', shutdown: '2999-12-14', status: 'retired' },
+  { via: 'undated-channel', status: 'active' },
+  { via: 'expired-channel', shutdown: '2000-01-01' },
+  { via: 'today-channel', shutdown: new Date().toISOString().slice(0, 10) },
+]
+fs.mkdirSync(captureFeeds, { recursive: true })
+fs.writeFileSync(path.join(captureDir, 'app.py'), 'MODEL = "capture-retired-model"\nFUTURE_MODEL = "capture-future-model"\nOK_MODEL = "capture-ok-model"\nWATCH_MODEL = "capture-watch-model"\n')
+const captureEntries = [
+  { id: 'capture-retired-model', shutdown: '2000-01-01', distributions: captureDistributions },
+  { id: 'capture-future-model', shutdown: '2998-01-01', date_precision: 'earliest', distributions: captureDistributions },
+  { id: 'capture-ok-model', distributions: captureDistributions },
+  { id: 'capture-watch-model', announced: '2000-01-01', distributions: captureDistributions },
+]
+fs.writeFileSync(path.join(captureFeeds, 'openai.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'openai',
+  generated: '2026-08-01T00:00:00Z',
+  source: 'https://example.invalid/capture-window',
+  models: captureEntries,
+}))
+const captureArgs = ['check', captureDir, '--feeds', captureFeeds]
+const captureFinding = (id, options) => findingFromRef({
+  file: 'app.py',
+  line: 1,
+  matched: id,
+  entry: captureEntries.find(entry => entry.id === id),
+  publisher: 'openai',
+  usage: 'direct-api',
+  resolved_provider: 'openai',
+  confidence: 'high',
+}, { days: 90, ...options })
+const captureAlternatives = [
+  { via: 'aws-bedrock', until: '2999-10-14', date_precision: 'exact', status: 'extended-access' },
+  { via: 'vertex-ai', until: '2999-11-14', date_precision: 'tentative', status: 'active' },
+]
+const captureRetired = captureFinding('capture-retired-model')
+assert(captureRetired.status === 'retired' && captureRetired.capture.until === null && captureRetired.capture.date_precision === null && captureRetired.capture.via === 'publisher', 'retired publisher capture has no remaining date or precision')
+assert(JSON.stringify(captureRetired.capture.alternatives) === JSON.stringify(captureAlternatives), 'capture alternatives sort by date and exclude retired, undated, expired, and same-day clocks')
+assert(captureFinding('capture-ok-model').capture === null, 'ok findings have no capture window despite distributor dates')
+assert(captureFinding('capture-watch-model').capture === null, 'watch findings have no capture window despite distributor dates')
+const captureBedrock = captureFinding('capture-retired-model', { via: 'aws-bedrock' }).capture
+assert(captureBedrock.until === '2999-10-14' && captureBedrock.date_precision === 'exact' && captureBedrock.via === 'aws-bedrock', 'distributor capture uses its own feed date and precision')
+assert(JSON.stringify(captureBedrock.alternatives) === JSON.stringify(captureAlternatives.slice(1)), 'distributor alternatives exclude the applied clock and retired publisher')
+const captureLivePublisher = captureFinding('capture-future-model', { via: 'aws-bedrock' }).capture.alternatives[0]
+assert(JSON.stringify(captureLivePublisher) === JSON.stringify({ via: 'publisher', until: '2998-01-01', date_precision: 'earliest', status: null }), 'distributor capture includes a later-than-today publisher clock with its own precision')
+const captureInsideThreshold = captureFinding('capture-future-model', { days: 1000000 })
+assert(captureInsideThreshold.status === 'retiring' && captureInsideThreshold.capture.until === captureInsideThreshold.shutdown, 'retiring capture preserves the shutdown date inside the threshold')
+const captureFallback = captureFinding('capture-retired-model', { via: 'azure-ai-foundry' }).capture
+assert(captureFallback.via === 'publisher-fallback' && JSON.stringify(captureFallback.alternatives) === JSON.stringify(captureAlternatives), 'publisher fallback considers all distributor clocks')
+const captureHumanRun = run(captureArgs)
+assert(captureHumanRun.code === 1 && captureHumanRun.out.includes('  [still answers via aws-bedrock until 2999-10-14, via vertex-ai at least until 2999-11-14]'), 'retired human output renders one bracket with exact and tentative capture alternatives')
+assert(captureHumanRun.out.split('\n').some(line => line.includes('capture-future-model') && line.includes('scheduled') && !line.includes('[still answers')), 'scheduled human findings omit capture alternatives')
+const captureRetiringHuman = run([...captureArgs, '--via', 'aws-bedrock', '--days', '1000000']).out
+assert(captureRetiringHuman.includes('[still answers via publisher at least until 2998-01-01, via vertex-ai at least until 2999-11-14]'), 'retiring human output renders earliest publisher and tentative distributor alternatives')
+const captureTies = captureWindowFor({ distributions: [
+  { via: 'z-channel', shutdown: '2999-01-01' },
+  { via: 'a-channel', shutdown: '2999-01-01' },
+  { via: 'invalid-channel', shutdown: 'unknown' },
+] }, { status: 'retired', shutdown: null, via: 'publisher' }, { today: testToday })
+assert(captureTies.alternatives.map(row => row.via).join(',') === 'a-channel,z-channel' && captureTies.alternatives.every(row => row.date_precision === null && row.status === null), 'capture ties sort by via, preserve unknown precision/status, and reject non-date strings')
+const captureNullPrecisionHuman = formatCheck({ findings: [{ ...captureRetired, capture: captureTies }], bad: [captureRetired], scannedFiles: 1, days: 90, scope: 'all' })
+assert(captureNullPrecisionHuman.includes('[still answers via a-channel until 2999-01-01, via z-channel until 2999-01-01]'), 'null capture precision uses until wording')
+for (const [label, args] of [['direct', captureArgs], ['distributor', [...captureArgs, '--via', 'aws-bedrock']], ['retiring', [...captureArgs, '--days', '1000000']]]) {
+  const document = JSON.parse(run([...args, '--json']).out)
+  assert(document.findings.length > 0 && document.findings.every(finding => !Object.hasOwn(finding, 'capture')), `${label} check JSON keeps capture out of the 0.1 document`)
+  assert(validateDocument(document, { type: 'check' }).errors.length === 0, `${label} capture check output validates against the public schema`)
+}
+const captureInventory = JSON.parse(run(['inventory', captureDir, '--feeds', captureFeeds, '--json']).out)
+const captureSchedule = JSON.parse(run(['schedule', captureDir, '--feeds', captureFeeds, '--json']).out)
+const capturePlan = JSON.parse(run(['plan', captureDir, '--feeds', captureFeeds]).out)
+assert([...captureInventory.model_references, ...captureSchedule.items, ...capturePlan.items, ...capturePlan.issues].every(item => !Object.hasOwn(item, 'capture')), 'capture does not extend inventory, schedule, or plan output')
 
 const tentativePolicy = { min_notice_days: 60, source: 'https://example.invalid/anthropic' }
 const tentativeToday = new Date('2026-09-03T00:00:00Z')

@@ -349,6 +349,57 @@ const contextRecords = new Map([
 ])
 assert(contextFor(contextRecords, 'openai', 'clocked-model', 'azure-ai-foundry').announced === null, 'explicit distribution without announced date does not use publisher announcement')
 
+const captureEntry = {
+  id: 'capture-model',
+  shutdown: '2000-01-01',
+  distributions: [
+    { via: 'aws-bedrock', shutdown: '2999-10-14', date_precision: 'exact', status: 'extended-access' },
+    { via: 'vertex-ai', shutdown: '2999-11-14', date_precision: 'tentative' },
+    { via: 'azure-ai-foundry', shutdown: '2999-12-14', date_precision: 'earliest' },
+  ],
+}
+const captureNow = new Date('2026-08-01T00:00:00Z')
+const captureItem = { file: 'app.py', line: 1, shutdown: '2000-01-01', replacement: 'new-model', status: 'retired', reason: 'not-direct-api', threshold_days: 90 }
+const captureModelGroup = {
+  kind: 'model', id: 'capture-model', publisher: 'openai', via: null, feedDigest: 'capture-digest',
+  context: { announced: null, notes: [], entry: captureEntry }, items: [captureItem],
+}
+const captureIssueGroup = {
+  kind: 'issue', id: 'capture-model', subject: 'capture-model', publisher: 'openai', via: null,
+  shutdown: '2000-01-01', feedDigest: 'capture-digest', root: '.',
+  context: captureModelGroup.context, issues: [captureItem],
+}
+const captureEval = { status: 'pass', exit_code: 0, report: 'pass' }
+const captureBodies = group => group.kind === 'model'
+  ? buildPullBody({ group, headSha: 'capture-head', now: captureNow, evalResult: captureEval })
+  : buildIssueBody({ group: { ...group, evalResult: captureEval }, now: captureNow })
+for (const group of [captureModelGroup, captureIssueGroup]) {
+  const body = captureBodies(group)
+  assert(body.includes('## Capture window\n- The old model no longer answers on the publisher clock. No baseline can be captured from it there.'), `${group.kind} body reports the retired publisher capture clock`)
+  assert(body.includes('- It still answers via `aws-bedrock` until 2999-10-14.') && body.includes('- It still answers via `vertex-ai` at least until 2999-11-14.') && body.includes('- It still answers via `azure-ai-foundry` at least until 2999-12-14.'), `${group.kind} body renders live alternatives with exact, tentative, and earliest precision`)
+  assert(body.includes('- Capture a baseline from the old model before that date if your eval compares outputs. model-eol does not run captures.'), `${group.kind} body includes the required baseline guidance`)
+  assert(body.indexOf('## Capture window') > body.indexOf('## Feed notes') && body.indexOf('## Capture window') < body.indexOf('## Eval'), `${group.kind} capture section follows feed notes and precedes eval`)
+  const withoutEntry = captureBodies({ ...group, context: { ...group.context, entry: null } })
+  assert(!withoutEntry.includes('## Capture window'), `${group.kind} body omits capture when the entry is missing`)
+  assert(JSON.stringify(parseMetadata(body)) === JSON.stringify(parseMetadata(withoutEntry)) && parseMetadata(body)?.id === group.id, `${group.kind} capture prose preserves metadata identity`)
+  for (const entry of [{ id: group.id }, { id: group.id, announced: '2000-01-01' }]) {
+    assert(!captureBodies({ ...group, context: { ...group.context, entry } }).includes('## Capture window'), `${group.kind} body omits capture for an undated lifecycle`)
+  }
+  const distributorBody = captureBodies({ ...group, via: 'aws-bedrock' })
+  assert(distributorBody.includes('- The old model answers on the `aws-bedrock` clock until 2999-10-14.') && !distributorBody.includes('- It still answers via `aws-bedrock`'), `${group.kind} body uses the selected distributor date and excludes it from alternatives`)
+  if (group.kind === 'model') {
+    assert(distributorBody.indexOf('## Capture window') > distributorBody.indexOf('## Distributor clock') && distributorBody.indexOf('## Capture window') < distributorBody.indexOf('## Checklist'), 'PR capture section follows the distributor clock and precedes the checklist')
+  }
+  for (const via of ['vertex-ai', 'azure-ai-foundry']) {
+    assert(captureBodies({ ...group, via }).includes(`- The old model answers on the \`${via}\` clock at least until`), `${group.kind} body preserves ${via} capture floor wording`)
+  }
+  assert(captureBodies({ ...group, via: 'missing-channel' }).includes('no longer answers on the publisher clock.'), `${group.kind} body labels publisher fallback as the publisher clock`)
+  const livePublisher = captureBodies({ ...group, via: 'aws-bedrock', context: { ...group.context, entry: { ...captureEntry, shutdown: '2998-01-01' } } })
+  assert(livePublisher.includes('- It still answers via `publisher` until 2998-01-01.'), `${group.kind} body renders a publisher alternative with unknown precision`)
+  const escapedBody = captureBodies({ ...group, context: { ...group.context, entry: { ...captureEntry, distributions: [{ via: '<custom_channel>`', shutdown: '2999-01-01' }] } } })
+  assert(escapedBody.includes('`&lt;custom&#95;channel&gt;&#96;`') && !escapedBody.includes('<custom_channel>'), `${group.kind} body escapes capture clock values`)
+}
+
 const tentativeBotFeeds = path.join(tempRoot, 'tentative-floor-feeds')
 fs.mkdirSync(tentativeBotFeeds)
 write(path.join(tentativeBotFeeds, 'anthropic.json'), JSON.stringify({
@@ -1323,9 +1374,26 @@ const runEval = (command, overrides = {}) => runEvalHook({
   newId: 'new-model',
   planPath: evalPlan,
   reportPath: overrides.reportPath ?? path.join(evalDir, 'report.md'),
+  via: overrides.via,
+  mode: overrides.mode,
 })
 const passEval = runEval('node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "pass")\'')
 assert(passEval.status === 'pass' && passEval.exit_code === 0 && passEval.report === 'pass', 'passing eval command reports pass and exit code')
+const captureContractProbe = 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, JSON.stringify({via:process.env.MODEL_EOL_VIA,mode:process.env.MODEL_EOL_EVAL_MODE}))\''
+const defaultContract = runEval(captureContractProbe)
+assert(defaultContract.status === 'pass' && defaultContract.report === '{"via":"","mode":"evaluate"}', 'eval hook defaults to the publisher API and evaluate mode')
+const distributorContract = runEval(captureContractProbe, { via: 'aws-bedrock', mode: 'evaluate' })
+assert(distributorContract.status === 'pass' && distributorContract.report === '{"via":"aws-bedrock","mode":"evaluate"}', 'eval hook forwards the selected distributor and evaluate mode')
+for (const mode of ['capture', 'unknown', null]) {
+  let modeError = null
+  try {
+    runEval(captureContractProbe, { mode })
+  } catch (error) {
+    modeError = error
+  }
+  assert(modeError?.message === `unsupported eval mode: ${mode}`, `eval hook rejects unsupported mode ${mode}`)
+}
+assert(fs.readFileSync(path.join(evalDir, 'report.md'), 'utf8') === distributorContract.report, 'unsupported eval modes fail before removing the existing report')
 const failEval = runEval('node -e "process.exit(7)"')
 assert(failEval.status === 'fail' && failEval.exit_code === 7, 'failing eval command is recorded without throwing')
 const missingEval = runEval('node -e "process.exit(0)"')
