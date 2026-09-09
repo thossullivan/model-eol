@@ -147,6 +147,17 @@ It combines the [legacy table](https://docs.aws.amazon.com/bedrock/latest/usergu
 with [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
 The legacy table wins overlaps; card floors become tentative distribution dates without announcements.
 Refresh reports exact-date conflicts, unmatched publisher IDs, and cards without usable lifecycle dates.
+Legacy precedence also applies when different Bedrock IDs resolve to one publisher model through aliases.
+Conflicting card records still stop refresh after alias resolution.
+Each card must contain exactly one Model ID table.
+Card parsing removes comments before extraction and rejects lifecycle labels outside their expected paragraphs.
+A standalone non-N/A Model EOL date supplies lifecycle data.
+Index links resolve within the index directory after query and fragment removal.
+Invalid card links stop refresh.
+Distributor table expansion caps each span at 64 and each table at 10,000 cells.
+
+Mistral rejects lifecycle headers containing data cells or unexpected labels.
+Cohere resolves later section IDs through previously documented aliases before merging lifecycle data.
 
 Azure binds publisher feeds through the Azure OpenAI, Anthropic, Mistral AI, and Cohere section headings.
 OpenAI dates and four-digit versions require exact snapshot IDs or aliases.

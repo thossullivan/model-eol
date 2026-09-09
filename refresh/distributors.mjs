@@ -77,13 +77,17 @@ function tableRows(table) {
 function span(cell, name) {
   const match = cell.attrs.match(new RegExp(`\\b${name}\\s*=\\s*["']?(\\d+)`, 'i'))
   const value = match ? Number(match[1]) : 1
+  if (value > 64) throw new Error(`table ${name} exceeds 64: ${match[1]}`)
   return Number.isInteger(value) && value > 0 ? value : 1
 }
 
-// The AWS page uses rowspan for regions. Expanding it here makes the parser
-// operate on logical rows and keeps the model/date columns aligned.
+// Bound logical cells, including carried rowspans, before allocation.
 function expandRows(rows) {
   const active = []
+  let expandedCells = 0
+  const countCell = () => {
+    if (++expandedCells > 10000) throw new Error('table exceeds 10000 expanded cells')
+  }
   return rows.map(row => {
     const cells = []
     let column = 0
@@ -92,6 +96,7 @@ function expandRows(rows) {
     const fillActive = () => {
       while (active[column]?.remaining > 0) {
         const slot = active[column]
+        countCell()
         cells[column] = slot.cell
         slot.remaining--
         if (slot.remaining === 0) active[column] = undefined
@@ -105,6 +110,7 @@ function expandRows(rows) {
       const columns = span(cell, 'colspan')
       const rowsRemaining = span(cell, 'rowspan') - 1
       for (let offset = 0; offset < columns; offset++) {
+        countCell()
         cells[column] = cell
         if (rowsRemaining > 0) active[column] = { cell, remaining: rowsRemaining }
         column++
@@ -290,10 +296,28 @@ export const parseAWSBedrockLifecycle = parseBedrockLifecycleHtml
 
 export function parseBedrockModelCardsIndexHtml(html) {
   const urls = new Set()
+  const directory = new URL('.', BEDROCK_MODEL_CARDS_URL).href
   for (const anchor of String(html).replace(/<!--[\s\S]*?-->/g, '').matchAll(/<a\b[^>]*>/gi)) {
-    const href = anchor[0].match(/\shref\s*=\s*(["'])(.*?)\1/i)?.[2]
-    if (!href || !/^\.\/model-card-[a-z0-9_.-]+\.html$/i.test(href)) continue
-    urls.add(new URL(href, BEDROCK_MODEL_CARDS_URL).href)
+    const attribute = anchor[0].match(/\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i)
+    const href = attribute?.[1] ?? attribute?.[2] ?? attribute?.[3]
+    if (!href) continue
+    const decoded = decodeEntities(href)
+    let url
+    try {
+      url = new URL(decoded, BEDROCK_MODEL_CARDS_URL)
+    } catch {
+      if (/model-card-/i.test(decoded.split(/[?#]/)[0])) {
+        throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} has invalid model card href: ${href}`)
+      }
+      continue
+    }
+    url.search = ''
+    url.hash = ''
+    if (!/model-card-/i.test(url.pathname)) continue
+    if (url.protocol !== 'https:' || new URL('.', url).href !== directory || !/^model-card-[a-z0-9_.-]+\.html$/i.test(path.posix.basename(url.pathname))) {
+      throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} has invalid model card href: ${href}`)
+    }
+    urls.add(url.href)
     if (urls.size > MAX_BEDROCK_MODEL_CARDS) {
       throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} exceeds ${MAX_BEDROCK_MODEL_CARDS} model cards`)
     }
@@ -318,6 +342,11 @@ function bedrockCardFields(html) {
     if (!value) throw new Error(`empty ${label} field`)
     fields.set(label, value)
   }
+  const text = plainText(html)
+  for (const label of BEDROCK_CARD_LABELS) {
+    const count = [...text.matchAll(new RegExp(`\\b${label}\\s*:`, 'g'))].length
+    if (count !== Number(fields.has(label))) throw new Error(`unaccounted ${label} field outside its paragraph`)
+  }
   return fields
 }
 
@@ -330,6 +359,7 @@ function bedrockCardDate(value, label, allowMonth = false) {
 export function parseBedrockModelCardHtml(html, source) {
   try {
     if (typeof html !== 'string' || !html.trim()) throw new Error('empty page')
+    html = html.replace(/<!--[\s\S]*?-->/g, '')
     const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].map(table => expandRows(tableRows(table[1])))
     const ids = new Set()
     let recognisedTables = 0
@@ -337,6 +367,7 @@ export function parseBedrockModelCardHtml(html, source) {
       const header = rows.findIndex(row => row.cells.some(cell => cell.kind === 'th' && cell.text === 'Model ID'))
       if (header < 0) continue
       recognisedTables++
+      if (recognisedTables > 1) throw new Error('more than one Model ID table')
       const columns = rows[header].cells.flatMap((cell, index) => cell.text === 'Model ID' ? [index] : [])
       if (columns.length !== 1) throw new Error('ambiguous Model ID columns')
       let tableIds = 0
@@ -351,7 +382,8 @@ export function parseBedrockModelCardHtml(html, source) {
     if (!recognisedTables) throw new Error('no Model ID table')
     const fields = bedrockCardFields(html)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
-    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label))) return skip('no lifecycle fields')
+    const eol = fields.get('Model EOL date')
+    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || eol === 'N/A')) return skip('no lifecycle fields')
 
     const launch = fields.get('Model launch date')
     if (launch !== undefined) bedrockCardDate(launch, 'Model launch date', true)
@@ -363,7 +395,6 @@ export function parseBedrockModelCardHtml(html, source) {
       const date = bedrockCardDate(floor, 'EOL no sooner than', true)
       if (date) candidates.push(date)
     }
-    const eol = fields.get('Model EOL date')
     let exact
     let legacyField = false
     if (eol !== undefined && eol !== 'N/A') {
@@ -453,7 +484,7 @@ export function parseVertexModelVersionsHtml(html) {
   const records = []
   let recognisedTables = 0
   for (const table of tables) {
-    const rows = tableRows(table[1])
+    const rows = expandRows(tableRows(table[1]))
     const headers = vertexHeaderIndexes(rows)
     if (!headers) continue
     recognisedTables++
@@ -547,7 +578,7 @@ export function parseAzureModelRetirementScheduleHtml(html) {
       }
       continue
     }
-    const rows = tableRows(block[2])
+    const rows = expandRows(tableRows(block[2]))
     const headers = azureHeaderIndexes(rows)
     if (!headers) continue
     recognisedTables++
@@ -606,7 +637,7 @@ export function parseAzureModelRetirementScheduleHtml(html) {
 
 export function sourceConflictSummary(conflict) {
   if (conflict.via === 'aws-bedrock') {
-    return `${conflict.via} ${conflict.id}: kept ${conflict.kept.eol} (${conflict.kept.source}); discarded ${conflict.discarded.shutdown} (${conflict.discarded.source}); legacy table wins`
+    return `${conflict.via} ${conflict.id}: kept ${conflict.kept.eol ?? conflict.kept.shutdown} (${conflict.kept.source}); discarded ${conflict.discarded.shutdown} (${conflict.discarded.source}); legacy table wins`
   }
   const row = item => `${item.shutdown} (${item.lifecycle}, version ${item.version})`
   return `${conflict.via} ${conflict.section}/${conflict.id}: kept ${row(conflict.kept)}; discarded ${row(conflict.discarded)}; earliest retirement wins`
@@ -760,7 +791,7 @@ function assertDistributorPreserved(before, after, via) {
   }
 }
 
-/** Upsert one distributor clock across loaded publisher feeds. */
+// Upsert one distributor clock across loaded publisher feeds.
 export function mergeDistributions(feeds, {
   records = [],
   sourceUrl,
@@ -803,6 +834,7 @@ export function mergeDistributions(feeds, {
   const unconfirmedDistributions = []
   const confirmed = new Set()
   const matchedRecords = new Map()
+  const conflicts = []
   for (const raw of records) {
     const record = recordForMerge(raw, via)
     const unmatchedItem = { normalizedId: record.normalizedId, [record.idField]: record.sourceId }
@@ -832,25 +864,38 @@ export function mergeDistributions(feeds, {
     }
 
     const targetKey = `${target.feedIndex}:${target.model.id}`
-    const priorRecord = matchedRecords.get(targetKey)
+    const recordSource = raw.source ?? source
+    try {
+      new URL(recordSource)
+    } catch {
+      throw new Error(`${via} record ${record.sourceId} source is not a URL: ${recordSource}`)
+    }
+    const matched = matchedRecords.get(targetKey) ?? { target, legacy: [], other: [] }
+    const group = via === 'aws-bedrock' && recordSource === BEDROCK_LIFECYCLE_URL ? matched.legacy : matched.other
+    const priorRecord = group[0]
     if (priorRecord && !sameLifecycle(priorRecord, record)) {
       throw new Error(`${via} records ${priorRecord.sourceId} and ${record.sourceId} map to ${target.model.id} with conflicting lifecycle data`)
     }
-    if (priorRecord) continue
-    matchedRecords.set(targetKey, record)
+    group.push({ ...record, source: recordSource, raw })
+    matchedRecords.set(targetKey, matched)
+  }
 
+  for (const [targetKey, { target, legacy, other }] of matchedRecords) {
+    const record = legacy[0] ?? other[0]
+    if (legacy.length) {
+      for (const card of other) {
+        if ([record, card].every(item => item.shutdown && (!item.date_precision || item.date_precision === 'exact')) && record.shutdown !== card.shutdown) {
+          conflicts.push({ via, id: record.sourceId, kept: { ...record.raw, source: record.source }, discarded: { ...card.raw, source: card.source } })
+        }
+      }
+    }
     const existing = distributionFor(target.model, via)
     const distribution = { via }
     if (record.announced !== undefined) distribution.announced = record.announced
     if (record.shutdown !== undefined) distribution.shutdown = record.shutdown
     if (record.date_precision !== undefined) distribution.date_precision = record.date_precision
     if (record.status !== undefined) distribution.status = record.status
-    distribution.source = raw.source ?? source
-    try {
-      new URL(distribution.source)
-    } catch {
-      throw new Error(`${via} record ${record.sourceId} source is not a URL: ${distribution.source}`)
-    }
+    distribution.source = record.source
     if (existing) {
       target.model.distributions[existing.index] = distribution
     } else {
@@ -883,6 +928,7 @@ export function mergeDistributions(feeds, {
     noPublisherFeed: unmatched,
     noPublisherFeeds: unmatched,
     unconfirmedDistributions,
+    conflicts,
   }
 }
 

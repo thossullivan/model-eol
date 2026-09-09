@@ -9,6 +9,7 @@ import {
   DISTRIBUTORS,
   loadDistributorSource,
   mergeDistributions,
+  sourceConflictSummary,
 } from './distributors.mjs'
 import {
   PROVIDERS,
@@ -196,7 +197,8 @@ export async function run(options) {
       for (const [index, item] of generated.entries()) item.feed = state.feeds[index]
       distributorState.unconfirmedDistributions.push(...state.unconfirmedDistributions)
       distributorState.noPublisherFeed.push(...state.noPublisherFeed)
-      distributorState.sourceConflicts.push(...source.conflicts ?? [])
+      distributorState.sourceConflicts.push(...source.conflicts ?? [], ...state.conflicts)
+      for (const conflict of state.conflicts) console.error(`notice: ${sourceConflictSummary(conflict)}`)
       distributorState.skippedModelCards.push(...source.skipped ?? [])
     }
   }

@@ -423,6 +423,23 @@ reviewTest('Review F7b: Cohere refuses an unaccounted shutdown paragraph, even f
   strictAssert.match(cohereRefusal(page), /2025-09-15: Various older command.*unrecognised code ids/)
 })
 const cohereLaterShutdown = cohereReviewSection(cohereReviewRow('<code>command-a-03-2025</code>'))
+const cohereAliasShutdown = cohereLaterShutdown.replace('command-r-03-2024', 'command-r')
+reviewTest('Second pass F9: Cohere merges a later command-r shutdown into its documented canonical ID', () => {
+  const records = parseCohereDeprecations(coherePage(cohereEarlierDeprecation + cohereAliasShutdown))
+  strictAssert.deepEqual(records.find(record => record.id === 'command-r-03-2024'), {
+    id: 'command-r-03-2024', announced: '2025-09-15', shutdown: '2026-10-01',
+    source: PROVIDERS.cohere.deprecationsUrl, aliases: ['command-r'], replacement: 'command-a-03-2025',
+  })
+  strictAssert.ok(!records.some(record => record.id === 'command-r'))
+})
+reviewTest('Second pass F9: Cohere refuses conflicting shutdown dates through a documented alias', () => {
+  const conflict = cohereAliasShutdown.replace('2026-09-01:', '2026-09-02:').replace('2026-10-01', '2026-11-01')
+  strictAssert.match(cohereRefusal(coherePage(cohereEarlierDeprecation + cohereLaterShutdown + conflict)), /conflicting rows for command-r-03-2024/)
+})
+reviewTest('Second pass F9: Cohere refuses an alias claimed by two canonical records', () => {
+  const ambiguous = '<h3>2025-09-15: Shared alias</h3><p>Deprecated Models:</p><ul><li><code>command-r-03-2024</code> (and the alias <code>command-r</code>)</li><li><code>command-r-08-2024</code> (and the alias <code>command-r</code>)</li></ul>'
+  strictAssert.match(cohereRefusal(coherePage(ambiguous + cohereAliasShutdown)), /ambiguous id or alias: command-r/)
+})
 for (const sections of [[cohereLaterShutdown, cohereEarlierDeprecation], [cohereEarlierDeprecation, cohereLaterShutdown]]) {
   reviewTest(`Review F10: Cohere combines deprecation and later shutdown in ${sections[0] === cohereLaterShutdown ? 'reverse' : 'chronological'} order`, () => {
     const model = parseCohereDeprecations(coherePage(sections.join(''))).find(record => record.id === 'command-r-03-2024')
@@ -469,6 +486,17 @@ reviewTest('Review F8: Mistral requires the immediately next table to contain bo
   }
 })
 const mistralDriftedTable = `<table><tr><th>Model</th><th>Version</th><th>API</th><th>Deprecation date / Retirement date</th><th>Alternative</th></tr>${mistralSampleTable.slice(7, -8)}</table>`
+for (const kind of ['mixed', 'td']) {
+  for (const dateLabel of ['Deprecation Retirement', 'Deprecation date / Retirement date']) {
+    reviewTest(`Second pass F6: Mistral rejects a second lifecycle header using ${kind} cells and ${dateLabel}`, () => {
+      let table = mistralDriftedTable.replace('Deprecation date / Retirement date', dateLabel).replace('<th>API</th>', '<td>API</td>')
+      if (kind === 'td') table = table.replace(/<th>/g, '<td>').replace(/<\/th>/g, '</td>')
+      const reason = mistralRefusal(mistralHtml + table)
+      strictAssert.match(reason, /header/)
+      strictAssert.ok(reason.includes(`Model | Version | API | ${dateLabel} | Alternative`))
+    })
+  }
+}
 reviewTest('Review F9: Mistral refuses drifted lifecycle headers alongside valid tables', () => {
   const reason = mistralRefusal(mistralHtml + mistralDriftedTable)
   strictAssert.match(reason, /header/i)
@@ -832,6 +860,89 @@ assert(haikuCards.every(record => cardCollisionReason.includes(record.bedrockId)
 const fableHtml = cardHtml.get(fableCard.source)
 const canvasHtml = cardHtml.get(canvasCard.source)
 const eolField = value => fableHtml.replace('<b>Model EOL date:</b> N/A', `<b>Model EOL date:</b> ${value}`)
+const reviewCardSource = new URL('model-card-example.html', BEDROCK_MODEL_CARDS_URL).href
+const reviewIdTable = '<table><tr><th>Model ID</th></tr><tr><td>anthropic.example-v1:0</td></tr></table>'
+const reviewFloor = '<p>EOL no sooner than: September 1, 2027</p>'
+const reviewCard = reviewIdTable + reviewFloor
+for (const [shape, html] of [
+  ['zero', reviewFloor],
+  ['related models', reviewCard + '<h2>Related models</h2><table><tr><th>Model ID</th></tr><tr><td>anthropic.other-v1:0</td></tr></table>'],
+  ['duplicate', reviewCard + reviewIdTable],
+]) {
+  reviewTest(`Second pass F1: Bedrock rejects ${shape} Model ID tables`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), error =>
+      error.message.includes(reviewCardSource) && error.message.includes('Model ID table'))
+  })
+}
+for (const [shape, comment] of [
+  ['EOL paragraph', '<p>Model EOL date: December 1, 2026</p>'],
+  ['ID table', reviewIdTable.replace('anthropic.example-v1:0', 'anthropic.other-v1:0')],
+  ['regional status', '<table><tr><td>Legacy (EOL: 2026-12-01)</td></tr></table>'],
+]) {
+  reviewTest(`Second pass F2: Bedrock ignores a commented ${shape} before extraction`, () => {
+    const visible = reviewCard + '<p>Model EOL date: December 1, 2027</p>'
+    strictAssert.deepEqual(parseBedrockModelCardHtml(`${visible}<!-- ${comment} -->`, reviewCardSource), parseBedrockModelCardHtml(visible, reviewCardSource))
+  })
+}
+reviewTest('Second pass F2: A commented exact EOL cannot replace a visible floor', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<!-- <p>Model EOL date: December 1, 2026</p> -->`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+})
+for (const [eol, payload] of [
+  ['December 1, 2026', { shutdown: '2026-12-01', status: 'active' }],
+  ['Legacy: December 1, 2026', { shutdown: '2026-12-01', status: 'legacy' }],
+  ['No sooner than 12/1/2026', { shutdown: '2026-12-01', date_precision: 'tentative', status: 'active' }],
+]) {
+  reviewTest(`Second pass F3: Bedrock parses a standalone Model EOL date: ${eol}`, () => {
+    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: ${eol}</p>`, reviewCardSource), {
+      records: [{ bedrockId: 'anthropic.example-v1:0', ...payload, source: reviewCardSource }], skipped: [],
+    })
+  })
+}
+reviewTest('Second pass F3: Bedrock validates a standalone EOL and skips only absent or N/A lifecycle fields', () => {
+  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: February 30, 2026</p>`, reviewCardSource), /invalid date.*February 30, 2026/)
+  for (const field of ['', '<p>Model EOL date: N/A</p>', '<p>Model lifecycle policy: Standard</p>']) {
+    strictAssert.equal(parseBedrockModelCardHtml(reviewIdTable + field, reviewCardSource).skipped[0]?.reason, 'no lifecycle fields')
+  }
+})
+for (const [label, value] of [
+  ['Model launch date', 'December 1, 2025'], ['EOL no sooner than', 'December 1, 2027'],
+  ['Legacy period', 'at least 6 months'], ['Model lifecycle policy', 'Standard'], ['Model EOL date', 'December 1, 2027'],
+]) {
+  for (const fragment of [`<div>${label}: ${value}</div>`, `<p>Details: ${label}: ${value}</p>`, `<p>Model launch date: December 1, 2025; ${label}: ${value}</p>`]) {
+    reviewTest(`Second pass F5: Bedrock accounts for ${label} outside its field paragraph: ${fragment}`, () => {
+      strictAssert.throws(() => parseBedrockModelCardHtml(reviewCard + fragment, reviewCardSource), error =>
+        error.message.includes(reviewCardSource) && error.message.includes(label))
+    })
+  }
+}
+const reviewLegacy = { bedrockId: 'anthropic.example-20260101-v1:0', legacy: '2026-08-01', eol: '2026-12-01', status: 'legacy', source: BEDROCK_LIFECYCLE_URL }
+const reviewAliasFeed = { publisher: 'anthropic', models: [{ id: 'example-20260101', aliases: ['example'], distributions: [{ via: 'vertex-ai', shutdown: '2028-01-01' }] }] }
+for (const [kind, dates, conflictCount] of [
+  ['different exact dates', { shutdown: '2027-12-01' }, 1],
+  ['explicit exact precision', { shutdown: '2027-12-01', date_precision: 'exact' }, 1],
+  ['same exact dates', { shutdown: '2026-12-01' }, 0],
+  ['tentative date', { shutdown: '2027-12-01', date_precision: 'tentative' }, 0],
+  ['earliest date', { shutdown: '2027-12-01', date_precision: 'earliest' }, 0],
+  ['no date', {}, 0],
+]) {
+  const cardRecord = { bedrockId: 'anthropic.example-v1:0', status: 'active', source: reviewCardSource, ...dates }
+  for (const records of [[reviewLegacy, cardRecord], [cardRecord, reviewLegacy]]) {
+    reviewTest(`Second pass F8: Bedrock legacy wins alias binding with ${kind}, ${records[0] === reviewLegacy ? 'legacy' : 'card'} first`, () => {
+      const merged = mergeDistributions([reviewAliasFeed], { via: 'aws-bedrock', records })
+      strictAssert.deepEqual(merged.feeds[0].models[0].distributions, [reviewAliasFeed.models[0].distributions[0], {
+        via: 'aws-bedrock', announced: '2026-08-01', shutdown: '2026-12-01', status: 'legacy', source: BEDROCK_LIFECYCLE_URL,
+      }])
+      strictAssert.equal(merged.conflicts.length, conflictCount)
+      if (conflictCount) {
+        strictAssert.deepEqual(merged.conflicts[0], { via: 'aws-bedrock', id: reviewLegacy.bedrockId, kept: reviewLegacy, discarded: cardRecord })
+        const options = { sourceConflicts: merged.conflicts }
+        strictAssert.ok(renderSemanticDiff(merged.feeds[0], merged.feeds[0], options).includes('legacy table wins'))
+        strictAssert.equal(compareFeeds(merged.feeds[0], merged.feeds[0], options).changed, false)
+      }
+      strictAssert.equal(reviewAliasFeed.models[0].distributions.length, 1)
+    })
+  }
+}
 for (const [label, html] of [
   ['missing ID table', fableHtml.replace('<b>Model ID</b>', '<b>Other ID</b>')],
   ['invalid ID', fableHtml.replace('<code class="code">anthropic.claude-fable-5-1</code>', '<code>bad id</code>')],
@@ -859,7 +970,18 @@ assert(leapFloor.shutdown === '2028-02-29', 'Bedrock accepts valid US leap dates
 const monthWithUs = parseBedrockModelCardHtml(eolField('No sooner than 4/28/2026').replace('September 1, 2027', 'Aug 2025'), fableCard.source).records[0]
 assert(monthWithUs.shutdown === '2026-04-28', 'a month-only floor leaves the day-precision US floor operative')
 assert(parseBedrockModelCardsIndexHtml(cardIndexHtml + cardIndexHtml).length === 11, 'Bedrock index deduplicates card links')
-assert(parseBedrockModelCardsIndexHtml('<a href="./model-card-example_v1.2.html">card</a><a href="https://example.test/model-card-foreign.html">foreign</a><!-- <a href="./model-card-hidden.html">hidden</a> -->').length === 1, 'Bedrock index accepts safe slug punctuation and ignores foreign links and comments')
+assert(parseBedrockModelCardsIndexHtml('<a href="./model-card-example_v1.2.html">card</a><!-- <a href="./model-card-hidden.html">hidden</a> -->').length === 1, 'Bedrock index accepts safe slug punctuation and ignores comments')
+for (const href of ['model-card-x.html', './model-card-x.html#lifecycle', './model-card-x.html?view=1&amp;lang=en#lifecycle', new URL('model-card-x.html', BEDROCK_MODEL_CARDS_URL).href]) {
+  reviewTest(`Second pass F7: Bedrock resolves index href ${href}`, () => {
+    strictAssert.deepEqual(parseBedrockModelCardsIndexHtml(`<a href="${href}">card</a>`), [new URL('model-card-x.html', BEDROCK_MODEL_CARDS_URL).href])
+  })
+}
+for (const href of ['../model-card-x.html', './nested/model-card-x.html', './model-card-.html', './model-card-x.pdf', 'https://example.test/model-card-foreign.html', 'http://[bad/model-card-x.html', 'mailto:model-card-x.html']) {
+  reviewTest(`Second pass F7: Bedrock rejects an invalid card href alongside a valid link: ${href}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardsIndexHtml(`<a href="./model-card-valid.html">valid</a><a href="${href}">invalid</a>`), error =>
+      error.message.includes(BEDROCK_MODEL_CARDS_URL) && error.message.includes(href))
+  })
+}
 const boundedIndex = count => Array.from({ length: count }, (_, index) => `<a href="./model-card-example-${index}.html">card</a>`).join('')
 assert(parseBedrockModelCardsIndexHtml(boundedIndex(MAX_BEDROCK_MODEL_CARDS)).length === 400, 'Bedrock index accepts exactly 400 unique card links')
 for (const html of ['', '<a href="https://example.test/model-card-foreign.html">foreign</a>', boundedIndex(MAX_BEDROCK_MODEL_CARDS + 1)]) {
@@ -888,6 +1010,16 @@ try {
   }
   const conflictsRun = spawnSync(process.execPath, [refresh, '--distributor', 'aws-bedrock', '--check', '--fixtures', missingCardDir], { encoding: 'utf8' })
   assert([0, 3].includes(conflictsRun.status) && conflictsRun.stdout.includes('## Source conflicts') && conflictsRun.stderr.split('\n').filter(line => line.startsWith('notice:') && line.includes('legacy table wins')).length === 2, 'Bedrock exact conflicts reach CLI diff and notices without failing refresh')
+  reviewTest('Second pass F8: Bedrock alias source conflicts reach CLI diff and notices', () => {
+    const filename = path.basename(new URL(commandCard.source).pathname)
+    fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), `<a href="./${filename}">card</a>`)
+    const cardPath = path.join(missingCardDir, 'bedrock-model-cards', filename)
+    fs.writeFileSync(cardPath, fs.readFileSync(cardPath, 'utf8').replaceAll('cohere.command-r-v1:0', 'cohere.command-r-03-2024-v1:0'))
+    const result = spawnSync(process.execPath, [refresh, '--distributor', 'aws-bedrock', '--check', '--fixtures', missingCardDir], { encoding: 'utf8' })
+    strictAssert.ok([0, 3].includes(result.status), result.stderr)
+    strictAssert.ok(result.stdout.includes('## Source conflicts') && result.stdout.includes('legacy table wins'))
+    strictAssert.equal(result.stderr.split('\n').filter(line => line.startsWith('notice:') && line.includes('legacy table wins')).length, 1)
+  })
 } finally {
   fs.rmSync(missingCardDir, { recursive: true, force: true })
 }
@@ -1407,6 +1539,31 @@ assert(azureFineTuning.records.length === 1 && azureFineTuning.records[0].azureI
 assert(azureError(fineTuningTables).includes('no recognised lifecycle table'), 'fine-tuning tables alone cannot pass as an Azure lifecycle page')
 assert(azureError(azureTable('Azure OpenAI', [azureRow('changed-header')], ['Model', 'Version', 'Status', 'Retirement date', 'Replacement'])).includes('invalid header row'), 'Azure rejects lifecycle header drift instead of silently skipping it')
 const azureValidTable = azureTable('Azure OpenAI', [azureRow('valid-header')])
+const reviewSpanGrid = tail => `<table><tr><td colspan="64" rowspan="64">x</td></tr>${'<tr></tr>'.repeat(63)}${'<tr><td colspan="64">x</td></tr>'.repeat(92)}<tr><td colspan="${tail}">x</td></tr></table>`
+for (const [name, parse, html] of [
+  ['Bedrock card', value => parseBedrockModelCardHtml(value, reviewCardSource), reviewCard],
+  ['Bedrock legacy', parseBedrockLifecycleHtml, bedrockHtml],
+  ['Vertex', parseVertexModelVersionsHtml, vertexHtml],
+  ['Azure', parseAzureModelRetirementScheduleHtml, azureValidTable],
+]) {
+  for (const attr of ['colspan', 'rowspan']) {
+    reviewTest(`Second pass F4: ${name} rejects ${attr} above 64`, () => {
+      strictAssert.throws(() => parse(`${html}<table><tr><td ${attr}="65">x</td></tr></table>`), new RegExp(`${attr}.*64`))
+    })
+  }
+  reviewTest(`Second pass F4: ${name} accepts spans of 64 and exactly 10,000 expanded cells per table`, () => {
+    strictAssert.deepEqual(parse(html + reviewSpanGrid(16) + reviewSpanGrid(16)), parse(html))
+  })
+  reviewTest(`Second pass F4: ${name} rejects 10,001 expanded cells including carried rowspans`, () => {
+    strictAssert.throws(() => parse(html + reviewSpanGrid(17)), /10000.*expanded cells/)
+  })
+}
+reviewTest('Second pass F4: Bedrock refuses colspan="9007199254740992" within bounded memory and time', () => {
+  const html = `${reviewCard}<table><tr><td colspan="9007199254740992">x</td></tr></table>`
+  const script = `import assert from 'node:assert/strict'; import { parseBedrockModelCardHtml } from ${JSON.stringify(new URL('../distributors.mjs', import.meta.url).href)}; assert.throws(() => parseBedrockModelCardHtml(${JSON.stringify(html)}, ${JSON.stringify(reviewCardSource)}), /colspan.*64/);`
+  const result = spawnSync(process.execPath, ['--max-old-space-size=32', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000, maxBuffer: 64 * 1024 })
+  strictAssert.equal(result.status, 0, `bounded child failed: ${result.error?.code ?? result.signal ?? result.status}`)
+})
 for (const headers of [
   ['Model ID', 'Version', 'Status', 'Retirement date', 'Replacement'],
   ['Scheduled retirement', 'Details'],

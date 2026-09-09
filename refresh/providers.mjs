@@ -837,13 +837,12 @@ export const parseGoogleGeminiDeprecations = parseGoogleDeprecations
 
 function mistralHeaderIndexes(rows) {
   for (const [index, row] of rows.entries()) {
-    if (!row.cells.length || row.cells.some(cell => cell.kind !== 'th')) continue
     const labels = row.cells.map(cell => cell.text.trim().toLowerCase())
     const required = { model: 'model', version: 'version', api: 'api', dates: 'deprecation retirement', alternative: 'alternative' }
     const lifecycle = labels.some(label => /deprecation|retirement/.test(label)) ||
       labels.filter(label => ['model', 'version', 'api', 'alternative'].includes(label)).length >= 2
     if (!lifecycle) continue
-    if (labels.length !== Object.keys(required).length || Object.values(required).some(label => labels.filter(value => value === label).length !== 1)) {
+    if (row.cells.some(cell => cell.kind !== 'th') || labels.length !== Object.keys(required).length || Object.values(required).some(label => labels.filter(value => value === label).length !== 1)) {
       throw new Error(`mistral deprecations table has unrecognised or ambiguous header: ${row.cells.map(cell => cell.text).join(' | ')}`)
     }
     return { row: index, width: labels.length, ...Object.fromEntries(Object.entries(required).map(([key, label]) => [key, labels.indexOf(label)])) }
@@ -1120,8 +1119,10 @@ export function parseCohereDeprecations(html, sourceUrl = PROVIDERS.cohere.depre
       if (!date) throw new Error('heading must start with YYYY-MM-DD: title')
       const announced = assertIsoDate(date[1], 'announcement date')
       const content = body.slice(section.index + section[0].length, sections[index + 1]?.index ?? body.length)
+      const identity = identityIndex([...records.values()])
       for (const record of cohereSectionRecords(content, announced, sourceUrl)) {
         if (record.shutdown && record.shutdown < announced) throw new Error(`row ${record.id} has shutdown before announcement`)
+        record.id = identity.get(record.id)?.id ?? record.id
         const previous = records.get(record.id)
         if (!previous) {
           records.set(record.id, clone(record))
