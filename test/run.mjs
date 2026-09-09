@@ -1308,6 +1308,22 @@ const distributorTentativeFinding = findingFromRef({
 const distributorTentativeCheck = formatCheck({ findings: [distributorTentativeFinding], bad: [], scannedFiles: 1, days: 30, scope: 'all' })
 assert(distributorTentativeCheck.includes('scheduled - tentative, not announced: not sooner than 2026-09-01') && !distributorTentativeCheck.includes('policy'), 'a distributor tentative floor never cites publisher policy')
 const tentativeFeedBase = { spec: 'model-eol/0.1', publisher: 'anthropic', generated: '2026-09-03T00:00:00Z', source: 'https://example.invalid/anthropic' }
+const bedrockFloorDir = path.join(tempRoot, 'bedrock-tentative-floor')
+const bedrockFloorFeeds = path.join(bedrockFloorDir, 'feeds')
+fs.mkdirSync(bedrockFloorFeeds, { recursive: true })
+fs.writeFileSync(path.join(bedrockFloorDir, 'app.py'), 'MODEL = "bedrock-floor-model"\n')
+for (const shutdown of ['2026-08-01', '2026-09-29']) {
+  fs.writeFileSync(path.join(bedrockFloorFeeds, 'anthropic.json'), JSON.stringify({
+    ...tentativeFeedBase,
+    models: [{ id: 'bedrock-floor-model', distributions: [{ via: 'aws-bedrock', shutdown, date_precision: 'tentative', status: 'active', source: 'https://example.invalid/model-card.html' }] }],
+  }))
+  const args = ['check', bedrockFloorDir, '--feeds', bedrockFloorFeeds, '--via', 'aws-bedrock', '--days', '30']
+  const json = run([...args, '--json'])
+  const finding = JSON.parse(json.out).findings.find(item => item.id === 'bedrock-floor-model')
+  const human = run(args)
+  assert(json.code === 0 && finding?.status === 'scheduled' && finding.via === 'aws-bedrock' && finding.date_precision === 'tentative' && finding.shutdown === shutdown, `Bedrock tentative-only temp feed stays scheduled for floor ${shutdown}`)
+  assert(human.code === 0 && human.out.includes(`scheduled - tentative, not announced: not sooner than ${shutdown}`), 'Bedrock tentative consumer reports not sooner than wording')
+}
 assert(validateFeed({ ...tentativeFeedBase, models: [{ id: 'floorless', date_precision: 'tentative' }] }).some(error => error.path.endsWith('.shutdown')), 'tentative precision requires a shutdown date')
 assert(validateFeed({ ...tentativeFeedBase, models: [{ id: 'floorless', distributions: [{ via: 'aws-bedrock', date_precision: 'tentative', source: 'https://example.invalid/bedrock' }] }] }).some(error => error.path.endsWith('.shutdown')), 'tentative distribution precision requires a shutdown date')
 const optionsCheck = formatCheck({ findings: [{ ...earliestFinding, replacement: null, replacement_options: ['first-choice', 'second-choice'] }], bad: [earliestFinding], scannedFiles: 1, days: 30, scope: 'all' })

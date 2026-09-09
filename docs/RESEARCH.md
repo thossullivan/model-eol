@@ -34,8 +34,10 @@ the July 2026 shutoff wave.
   https://docs.x.ai/developers/migration/imagine-image-quality-nov-2) and the
   models API has no deprecation fields. Not ingested; Azure carries grok clocks
   for Foundry only.
-- Bedrock (12 mo on platform + 6 mo Legacy notice + paid Extended Access):
-  https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
+- Bedrock changed its lifecycle policy on 2026-09-07.
+  Models launched earlier retain the [legacy lifecycle table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html).
+  Newer models publish lifecycle dates on [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
+  Refresh reads both sources; the legacy table wins overlaps, and card not-before floors become tentative distribution dates.
 - Cross-provider calendars (community scrapers - the demand signal):
   https://benchr.org/deprecations and
   https://hidekazu-konishi.com/entry/ai_model_deprecation_and_lifecycle_calendar.html

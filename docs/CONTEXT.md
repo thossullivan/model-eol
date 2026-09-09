@@ -142,6 +142,12 @@ refresh covers OpenAI, Anthropic, Google, Mistral, and Cohere; distributor refre
 Vertex, and Azure Foundry. Weekly refresh, failure receipts, semantic PRs, trusted npm publishing,
 and exact-package consumer tests are live.
 
+Bedrock refresh follows the 2026-09-07 policy change.
+It combines the [legacy table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html)
+with [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
+The legacy table wins overlaps; card floors become tentative distribution dates without announcements.
+Refresh reports exact-date conflicts, unmatched publisher IDs, and cards without usable lifecycle dates.
+
 The staged public-contract milestone gives every public schema a canonical ID, exposes
 `model-eol validate`, and adds a Pages publisher for hosted feeds, Atom, and
 `last_checked` health. The host becomes authoritative only after Pages is enabled

@@ -185,7 +185,7 @@ export async function run(options) {
         provider: AMAZON_PROVIDER,
       }))
     }
-    distributorState = { unconfirmedDistributions: [], noPublisherFeed: [], sourceConflicts: [] }
+    distributorState = { unconfirmedDistributions: [], noPublisherFeed: [], sourceConflicts: [], skippedModelCards: [] }
     for (const distributor of distributorNames) {
       const source = await loadDistributorSource(distributor, { fixtures: options.fixtures })
       const state = mergeDistributions(generated, {
@@ -197,6 +197,7 @@ export async function run(options) {
       distributorState.unconfirmedDistributions.push(...state.unconfirmedDistributions)
       distributorState.noPublisherFeed.push(...state.noPublisherFeed)
       distributorState.sourceConflicts.push(...source.conflicts ?? [])
+      distributorState.skippedModelCards.push(...source.skipped ?? [])
     }
   }
 
@@ -211,6 +212,7 @@ export async function run(options) {
       unconfirmedDistributions,
       noPublisherFeed,
       sourceConflicts: index === 0 ? distributorState?.sourceConflicts ?? [] : [],
+      skippedModelCards: index === 0 ? distributorState?.skippedModelCards ?? [] : [],
       publisher: item.provider.publisher,
       skipped: item.skipped,
       undatedDeprecatedIds: item.undatedDeprecatedIds,

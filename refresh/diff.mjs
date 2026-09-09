@@ -1,7 +1,7 @@
 // Semantic feed diffing for the refresh job. Feed metadata such as generated
 // timestamps is intentionally excluded from the comparison.
 
-import { sourceConflictSummary } from './distributors.mjs'
+import { skippedModelCardSummary, sourceConflictSummary } from './distributors.mjs'
 
 const value = item => item === undefined || item === null || item === '' ? 'not set' : item
 
@@ -204,6 +204,7 @@ export function compareFeeds(committed, generated, options = {}) {
     noPublisherFeed,
     noPublisherFeeds: noPublisherFeed,
     sourceConflicts: options.sourceConflicts ?? [],
+    skippedModelCards: options.skippedModelCards ?? [],
     skipped: options.skipped ?? [],
     undatedDeprecatedIds: options.undatedDeprecatedIds ?? [],
     // Informational sections never alter the files, so they never trip exit 3.
@@ -312,6 +313,7 @@ function renderResult(result, publisher) {
   ))
   pushSection(section('Distribution changes', renderDistributionChanges(result)))
   pushSection(section('Source conflicts', (result.sourceConflicts ?? []).map(conflict => `- ${sourceConflictSummary(conflict)}`)))
+  pushSection(section('Model cards without lifecycle fields', (result.skippedModelCards ?? []).map(card => `- ${skippedModelCardSummary(card)}`)))
   pushSection(section(
     'Unconfirmed entries',
     result.unconfirmed.map(model => `- ${code(model.id)} - retained because neither source confirmed it`),

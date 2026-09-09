@@ -10,16 +10,22 @@ import { fileURLToPath } from 'node:url'
 import strictAssert from 'node:assert/strict'
 import {
   BEDROCK_LIFECYCLE_URL,
+  BEDROCK_MODEL_CARDS_URL,
+  MAX_BEDROCK_MODEL_CARDS,
+  MAX_DISTRIBUTOR_BODY_BYTES,
   AZURE_MODEL_RETIREMENT_SCHEDULE_URL,
   AZURE_PUBLISHER_BY_SECTION,
   VERTEX_MODEL_VERSIONS_URL,
   loadDistributorSource,
   mergeBedrockDistributions,
+  mergeBedrockSources,
   mergeDistributions,
   mergeVertexDistributions,
   normalizeBedrockId,
   normalizeVertexId,
   parseBedrockLifecycleHtml,
+  parseBedrockModelCardHtml,
+  parseBedrockModelCardsIndexHtml,
   parseAzureModelRetirementScheduleHtml,
   parseVertexModelVersionsHtml,
 } from '../distributors.mjs'
@@ -750,6 +756,176 @@ try {
   missingExtendedAccessColumnReason = error.message
 }
 assert(missingExtendedAccessColumnReason.includes('missing the Public extended access start date column'), 'Bedrock parser fails closed when the official table schema drops the Extended Access column')
+
+const cardIndexHtml = fs.readFileSync(path.join(fixtures, 'bedrock-model-cards.html'), 'utf8')
+const cardUrls = parseBedrockModelCardsIndexHtml(cardIndexHtml)
+const cardHtml = new Map(cardUrls.map(url => [url, fs.readFileSync(path.join(fixtures, 'bedrock-model-cards', path.basename(new URL(url).pathname)), 'utf8')]))
+const cards = new Map([...cardHtml].map(([url, html]) => [path.basename(new URL(url).pathname), parseBedrockModelCardHtml(html, url)]))
+const card = slug => cards.get(`model-card-${slug}.html`)
+const cardRecords = [...cards.values()].flatMap(result => result.records)
+const skippedCards = [...cards.values()].flatMap(result => result.skipped)
+assert(cardUrls.length === 11 && cardRecords.length === 10 && skippedCards.length === 2, 'eleven Bedrock cards yield ten records and two reported skips')
+const llamaCard = card('meta-llama-3-1-405b-instruct').records[0]
+assert(card('meta-llama-3-1-405b-instruct').records.length === 1 && llamaCard.bedrockId === 'meta.llama3-1-405b-instruct-v1:0' && llamaCard.shutdown === '2026-07-07' && llamaCard.status === 'legacy' && !Object.hasOwn(llamaCard, 'date_precision'), 'a "Legacy: <date>" Model EOL date is an exact legacy shutdown')
+const fableCard = card('anthropic-claude-fable-5-1').records[0]
+assert(card('anthropic-claude-fable-5-1').records.length === 1 && fableCard.shutdown === '2027-09-01' && fableCard.date_precision === 'tentative' && fableCard.status === 'active' && !Object.hasOwn(fableCard, 'announced'), 'Fable deduplicates endpoint IDs and keeps its unannounced N/A EOL floor')
+const canvasCard = card('amazon-nova-canvas').records[0]
+assert(canvasCard.shutdown === '2026-09-30' && canvasCard.status === 'legacy' && !Object.hasOwn(canvasCard, 'date_precision'), 'Nova Canvas uses its exact EOL and regional Legacy status')
+const liteCard = card('amazon-nova-lite').records[0]
+assert(liteCard.shutdown === '2025-12-05' && liteCard.date_precision === 'tentative', 'Nova Lite selects the later human floor over the US floor')
+const haikuCards = card('anthropic-claude-haiku-4-5').records
+assert(haikuCards.length === 2 && haikuCards.every(record => record.shutdown === '2026-10-16') && haikuCards.some(record => record.bedrockId === 'anthropic.claude-haiku-4-5'), 'Haiku preserves both Model IDs and selects the later floor')
+assert(card('amazon-titan-text-embeddings-v2-2').skipped[0]?.reason === 'no lifecycle fields' && card('amazon-titan-text-embeddings-v2-2').skipped[0]?.ids[0] === 'amazon.titan-embed-g1-text-02', 'Titan reports its URL and ID despite having only Model EOL date N/A')
+assert(card('mistral-ai-devstral-2-123b').skipped[0]?.reason === 'no day-precision date', 'Devstral reports its month-only floor without inventing a day')
+const mistralCard = card('mistral-ai-mistral-7b-instruct').records[0]
+assert(mistralCard.shutdown === '2025-03-01' && mistralCard.date_precision === 'tentative', 'Mistral selects the later US not-before floor')
+const jambaCard = card('ai21-labs-jamba-1-5-large').records[0]
+assert(jambaCard.shutdown === '2026-11-26' && jambaCard.status === 'active' && !Object.hasOwn(jambaCard, 'date_precision'), 'Jamba parses an exact EOL without regional Legacy status')
+const cardOnlyJamba = mergeBedrockSources(bedrockEntries.filter(record => record.bedrockId !== jambaCard.bedrockId), [jambaCard])
+assert(JSON.stringify(cardOnlyJamba.records.find(record => record.bedrockId === jambaCard.bedrockId)) === JSON.stringify(jambaCard), 'Jamba contributes a card-only exact record when the legacy table lacks its ID')
+const commandCard = card('cohere-command-r').records[0]
+assert(commandCard.shutdown === '2026-08-19' && !Object.hasOwn(commandCard, 'date_precision'), 'Command R retains its exact EOL despite its month-only floor')
+const embedCard = card('cohere-embed-v4').records[0]
+assert(embedCard.shutdown === '2026-04-15' && embedCard.date_precision === 'tentative', 'Embed v4 parses a floor without a publisher feed entry')
+assert(cardRecords.every(record => cardUrls.includes(record.source) && !Object.hasOwn(record, 'announced') && !Object.hasOwn(record, 'legacy')), 'all card records retain their own source and omit announcements')
+
+const bedrockSourceNotices = []
+const loadedBedrock = await loadDistributorSource('aws-bedrock', { fixtures, notice: value => bedrockSourceNotices.push(value) })
+assert(loadedBedrock.records.length === 24 && loadedBedrock.conflicts.length === 0 && loadedBedrock.skipped.length === 2, 'Bedrock combines legacy and card sources without reporting floor disagreements')
+assert(bedrockSourceNotices.filter(value => value.startsWith('notice:') && value.includes(': skipped ')).length === 2, 'Bedrock prints one notice per skipped card')
+for (const record of [canvasCard, commandCard]) {
+  const kept = loadedBedrock.records.find(item => item.bedrockId === record.bedrockId)
+  assert(JSON.stringify(kept) === JSON.stringify({ ...bedrockById.get(record.bedrockId), source: BEDROCK_LIFECYCLE_URL }), `legacy table wins over card for ${record.bedrockId}`)
+}
+const conflictingCards = [canvasCard, commandCard].map(record => ({ ...record, shutdown: '2028-01-01' }))
+const bedrockConflicts = mergeBedrockSources(bedrockEntries, conflictingCards)
+assert(bedrockConflicts.conflicts.length === 2 && bedrockConflicts.conflicts.every(conflict => conflict.kept.eol === bedrockById.get(conflict.id).eol), 'exact EOL conflicts preserve both sources and keep the legacy table')
+const emptyBedrockFeed = { publisher: 'amazon', models: [] }
+const bedrockInfoOptions = { sourceConflicts: bedrockConflicts.conflicts, skippedModelCards: skippedCards }
+const bedrockInfoDiff = renderSemanticDiff(emptyBedrockFeed, emptyBedrockFeed, bedrockInfoOptions)
+assert(!compareFeeds(emptyBedrockFeed, emptyBedrockFeed, bedrockInfoOptions).changed && bedrockInfoDiff.includes('## Source conflicts') && bedrockInfoDiff.includes('legacy table wins') && bedrockInfoDiff.includes('## Model cards without lifecycle fields') && bedrockInfoDiff.includes('no day-precision date'), 'Bedrock conflicts and skips render informational sections without semantic changes')
+
+const realBedrockFeeds = ['amazon', 'anthropic', 'cohere', 'mistral'].map(publisher => JSON.parse(fs.readFileSync(path.join(root, 'feeds', `${publisher}.json`), 'utf8')))
+const realBedrockMerge = mergeBedrockDistributions(realBedrockFeeds, { records: loadedBedrock.records })
+const bedrockDistribution = (publisher, id) => realBedrockMerge.feeds.find(feed => feed.publisher === publisher).models.find(model => model.id === id)?.distributions?.find(distribution => distribution.via === 'aws-bedrock')
+assert(normalizeBedrockId(commandCard.bedrockId) === 'command-r' && bedrockDistribution('cohere', 'command-r-03-2024')?.shutdown === '2026-08-19', 'Cohere namespace binds Command R through its committed alias')
+assert(normalizeBedrockId(mistralCard.bedrockId) === 'mistral-7b-instruct' && realBedrockMerge.noPublisherFeed.some(item => item.bedrockId === mistralCard.bedrockId), 'Mistral namespace leaves the absent 7B publisher ID unmatched')
+for (const record of [embedCard, jambaCard, liteCard, haikuCards[1]]) {
+  assert(realBedrockMerge.noPublisherFeed.some(item => item.bedrockId === record.bedrockId), `absent publisher ID remains unmatched: ${record.bedrockId}`)
+}
+assert(bedrockDistribution('anthropic', 'claude-fable-5-1')?.source === fableCard.source && bedrockDistribution('anthropic', 'claude-haiku-4-5-20251001')?.date_precision === 'tentative', 'Fable and dated Haiku bind tentative distributions with card sources')
+assert(bedrockDistribution('amazon', 'nova-canvas')?.source === BEDROCK_LIFECYCLE_URL && bedrockDistribution('cohere', 'command-r-03-2024')?.source === BEDROCK_LIFECYCLE_URL, 'legacy-bound distributions use the legacy page source')
+assert(realBedrockMerge.feeds.every(feed => validateFeed(feed).length === 0), 'combined Bedrock fixture feeds pass semantic validation')
+
+const haikuFeed = { publisher: 'anthropic', models: [{ id: 'claude-haiku-4-5-20251001', aliases: ['claude-haiku-4-5'] }] }
+for (const records of [haikuCards, [haikuCards[0], { ...haikuCards[1], source: fableCard.source }]]) {
+  const merged = mergeBedrockDistributions([haikuFeed], { records })
+  assert(merged.feeds[0].models[0].distributions.length === 1 && merged.feeds[0].models[0].distributions[0].source === haikuCards[0].source, 'identical card lifecycle payloads collapse across IDs and retain the first source')
+}
+let cardCollisionReason = ''
+try {
+  mergeBedrockDistributions([haikuFeed], { records: [haikuCards[0], { ...haikuCards[1], shutdown: '2028-01-01' }] })
+} catch (error) { cardCollisionReason = error.message }
+assert(haikuCards.every(record => cardCollisionReason.includes(record.bedrockId)), 'different card payloads bound to one model throw naming both IDs')
+
+const fableHtml = cardHtml.get(fableCard.source)
+const canvasHtml = cardHtml.get(canvasCard.source)
+const eolField = value => fableHtml.replace('<b>Model EOL date:</b> N/A', `<b>Model EOL date:</b> ${value}`)
+for (const [label, html] of [
+  ['missing ID table', fableHtml.replace('<b>Model ID</b>', '<b>Other ID</b>')],
+  ['invalid ID', fableHtml.replace('<code class="code">anthropic.claude-fable-5-1</code>', '<code>bad id</code>')],
+  ['invalid second ID', cardHtml.get(haikuCards[0].source).replace('<code class="code">anthropic.claude-haiku-4-5</code>', '<code>bad id</code>')],
+  ['empty field', eolField('')],
+  ['duplicate field', `${fableHtml}<p>Model EOL date: N/A</p>`],
+  ['invalid human date', eolField('February 30, 2026')],
+  ['unlisted ISO date', eolField('2026-09-30')],
+  ['unlisted date text', eolField('Around September 30, 2026')],
+  ['trailing date text', eolField('September 30, 2026 or later')],
+  ['invalid floor', fableHtml.replace('September 1, 2027', 'September 31, 2027')],
+  ['unknown month floor', fableHtml.replace('September 1, 2027', 'Smarch 2027')],
+  ['invalid legacy period', fableHtml.replace('at least 6 months', 'about a year')],
+  ...['13/1/2026', '0/1/2026', '1/0/2026', '2/29/2025', '4/31/2026', '1/1/26', '1/1/2026 extra'].map(value => [`invalid US ${value}`, eolField(`No sooner than ${value}`)]),
+]) {
+  let reason = ''
+  try { parseBedrockModelCardHtml(html, fableCard.source) } catch (error) { reason = error.message }
+  assert(reason.includes(fableCard.source), `Bedrock fails closed and names the card for ${label}`)
+}
+let regionConflictReason = ''
+try { parseBedrockModelCardHtml(canvasHtml.replace('Legacy (EOL: 2026-09-30)', 'Legacy (EOL: 2026-10-01)'), canvasCard.source) } catch (error) { regionConflictReason = error.message }
+assert(regionConflictReason.includes(canvasCard.source) && regionConflictReason.includes('differs from Model EOL date'), 'regional EOL disagreement throws naming the card')
+const leapFloor = parseBedrockModelCardHtml(eolField('No sooner than 2/29/2028'), fableCard.source).records[0]
+assert(leapFloor.shutdown === '2028-02-29', 'Bedrock accepts valid US leap dates and chooses the later floor')
+const monthWithUs = parseBedrockModelCardHtml(eolField('No sooner than 4/28/2026').replace('September 1, 2027', 'Aug 2025'), fableCard.source).records[0]
+assert(monthWithUs.shutdown === '2026-04-28', 'a month-only floor leaves the day-precision US floor operative')
+assert(parseBedrockModelCardsIndexHtml(cardIndexHtml + cardIndexHtml).length === 11, 'Bedrock index deduplicates card links')
+assert(parseBedrockModelCardsIndexHtml('<a href="./model-card-example_v1.2.html">card</a><a href="https://example.test/model-card-foreign.html">foreign</a><!-- <a href="./model-card-hidden.html">hidden</a> -->').length === 1, 'Bedrock index accepts safe slug punctuation and ignores foreign links and comments')
+const boundedIndex = count => Array.from({ length: count }, (_, index) => `<a href="./model-card-example-${index}.html">card</a>`).join('')
+assert(parseBedrockModelCardsIndexHtml(boundedIndex(MAX_BEDROCK_MODEL_CARDS)).length === 400, 'Bedrock index accepts exactly 400 unique card links')
+for (const html of ['', '<a href="https://example.test/model-card-foreign.html">foreign</a>', boundedIndex(MAX_BEDROCK_MODEL_CARDS + 1)]) {
+  let reason = ''
+  try { parseBedrockModelCardsIndexHtml(html) } catch (error) { reason = error.message }
+  assert(reason.includes(BEDROCK_MODEL_CARDS_URL), 'empty or oversized Bedrock index fails closed with its URL')
+}
+
+const missingCardDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bedrock-cards-'))
+try {
+  fs.writeFileSync(path.join(missingCardDir, 'bedrock-lifecycle.html'), bedrockHtml)
+  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), '<a href="./model-card-missing.html">missing</a>')
+  let reason = ''
+  try { await loadDistributorSource('aws-bedrock', { fixtures: missingCardDir, notice: () => {} }) } catch (error) { reason = error.message }
+  assert(reason.includes('bedrock-model-cards/model-card-missing.html') && reason.includes('https://docs.aws.amazon.com/'), 'missing card fixture throws with its path and URL')
+  const missingCardRun = run(['--distributor', 'aws-bedrock', '--fixtures', missingCardDir, '--out', path.join(missingCardDir, 'out')])
+  assert(missingCardRun.code === 1 && !fs.existsSync(path.join(missingCardDir, 'out')), 'missing card fixture stops refresh before writing feeds')
+  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), '<html>No cards</html>')
+  const noCardsRun = run(['--distributor', 'aws-bedrock', '--fixtures', missingCardDir, '--out', path.join(missingCardDir, 'out')])
+  assert(noCardsRun.code === 1 && !fs.existsSync(path.join(missingCardDir, 'out')), 'zero-link index stops refresh before writing feeds')
+  fs.mkdirSync(path.join(missingCardDir, 'bedrock-model-cards'))
+  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), [canvasCard, commandCard].map(record => `<a href="./${path.basename(new URL(record.source).pathname)}">card</a>`).join(''))
+  for (const record of [canvasCard, commandCard]) {
+    const html = cardHtml.get(record.source).replace(/September 30, 2026|August 19, 2026/g, 'January 1, 2028').replace(/Legacy \(EOL: 2026-09-30\)/g, 'Legacy (EOL: 2028-01-01)')
+    fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards', path.basename(new URL(record.source).pathname)), html)
+  }
+  const conflictsRun = spawnSync(process.execPath, [refresh, '--distributor', 'aws-bedrock', '--check', '--fixtures', missingCardDir], { encoding: 'utf8' })
+  assert([0, 3].includes(conflictsRun.status) && conflictsRun.stdout.includes('## Source conflicts') && conflictsRun.stderr.split('\n').filter(line => line.startsWith('notice:') && line.includes('legacy table wins')).length === 2, 'Bedrock exact conflicts reach CLI diff and notices without failing refresh')
+} finally {
+  fs.rmSync(missingCardDir, { recursive: true, force: true })
+}
+
+const crawlRequests = []
+const crawlNotices = []
+let activeCardRequests = 0
+let maximumCardRequests = 0
+const crawledBedrock = await loadDistributorSource('aws-bedrock', {
+  notice: value => crawlNotices.push(value),
+  fetchImpl: async (url, options) => {
+    crawlRequests.push({ url, options })
+    activeCardRequests++
+    maximumCardRequests = Math.max(maximumCardRequests, activeCardRequests)
+    await new Promise(resolve => setImmediate(resolve))
+    activeCardRequests--
+    const html = url === BEDROCK_LIFECYCLE_URL ? bedrockHtml : url === BEDROCK_MODEL_CARDS_URL ? cardIndexHtml : cardHtml.get(url)
+    if (html === undefined) throw new Error(`unexpected request ${url}`)
+    return new Response(html)
+  },
+})
+assert(crawlRequests.length === 13 && maximumCardRequests === 1 && JSON.stringify(crawledBedrock.records) === JSON.stringify(loadedBedrock.records), 'mocked live crawl fetches legacy, index, and eleven cards sequentially')
+assert(crawlRequests.every(request => request.options.headers['accept-language'] === 'en' && request.options.signal instanceof AbortSignal), 'all distributor requests use English and an abort deadline')
+assert(crawlNotices.length === 2, 'live crawl reports both skips without floor disagreement notices')
+for (const [label, response] of [
+  ['HTTP failure', () => new Response('unavailable', { status: 503 })],
+  ['empty response', () => new Response('')],
+  ['advertised oversized body', () => new Response('small', { headers: { 'content-length': String(MAX_DISTRIBUTOR_BODY_BYTES + 1) } })],
+  ['streamed oversized body', () => ({ ok: true, body: (async function* () { yield Buffer.alloc(MAX_DISTRIBUTOR_BODY_BYTES); yield Buffer.from('x') })() })],
+]) {
+  let reason = ''
+  try {
+    await loadDistributorSource('aws-bedrock', {
+      notice: () => {},
+      fetchImpl: async url => url === BEDROCK_LIFECYCLE_URL ? new Response(bedrockHtml) : url === BEDROCK_MODEL_CARDS_URL ? new Response(`<a href="./${path.basename(new URL(fableCard.source).pathname)}">card</a>`) : response(),
+    })
+  } catch (error) { reason = error.message }
+  assert(reason.includes(fableCard.source), `Bedrock ${label} fails closed and names the card URL`)
+}
 assert(openaiEntries.length === 43, 'OpenAI real-structure fixture parses all selected model entries')
 assert(openaiEntries.filter(entry => entry.announced === '2026-04-22').length >= 20, 'OpenAI announcement date is inherited across a section')
 assert(openaiById.get('o3-deep-research-2025-06-26')?.announced === '2026-04-22', 'OpenAI July wave inherits its April announcement date')
@@ -1747,7 +1923,9 @@ const bedrockCheck = run(['--distributor', 'aws-bedrock', '--check', '--fixtures
 assert(bedrockCheck.code === 0 || bedrockCheck.code === 3, 'Bedrock --check exits 0 or 3 depending on committed feed state, never a failure')
 assert(bedrockCheck.out.includes('## Distribution changes'), 'Bedrock --check renders the Distribution changes section')
 assert(bedrockCheck.out.includes('no publisher feed'), 'Bedrock --check reports unmatched models (moved-EOL rendering is covered by the merge unit tests)')
-assert(!bedrockCheck.out.includes('normalized id `nova-'), 'Bedrock --check no longer reports Nova as feedless')
+assert(['canvas', 'reel', 'premier', 'sonic'].every(name => !bedrockCheck.out.includes(`normalized id \`nova-${name}\``)), 'Bedrock --check keeps the existing Nova models bound')
+assert(bedrockCheck.out.includes('normalized id `nova-lite`'), 'Bedrock --check reports card-only Nova Lite as unmatched')
+assert(bedrockCheck.out.includes('## Model cards without lifecycle fields') && bedrockCheck.out.includes('no day-precision date'), 'Bedrock --check renders skipped model cards in stdout')
 
 const vertexCheck = run(['--distributor', 'vertex-ai', '--check', '--fixtures', fixtures])
 assert([0, 3].includes(vertexCheck.code), 'Vertex --check exits 0 or 3 depending on committed feed state, never a failure')
@@ -1779,7 +1957,8 @@ const mixedCommitted = Object.fromEntries(['amazon', 'anthropic', 'cohere', 'goo
   JSON.parse(fs.readFileSync(path.join(root, 'feeds', `${publisher}.json`), 'utf8')),
 ]))
 assert(mixedOutputs.anthropic.generated === mixedGenerated && mixedOutputs.anthropic.generated !== mixedCommitted.anthropic.generated, 'mixed distributor write advances generated for the publisher with material distribution changes')
-assert(['amazon', 'cohere', 'google', 'mistral', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
+assert(mixedOutputs.cohere.generated === mixedGenerated, 'mixed distributor write advances generated for newly bound Cohere distributions')
+assert(['amazon', 'google', 'mistral', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
 
 const refreshWorkflow = fs.readFileSync(path.join(root, '.github/workflows/feed-refresh.yml'), 'utf8')
 assert(refreshWorkflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && refreshWorkflow.includes('exit code $providers'), 'workflow fails explicitly on unexpected provider refresh exit codes')

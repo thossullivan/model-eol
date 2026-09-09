@@ -308,6 +308,10 @@ until January 8, 2027.
 `distributions` in the spec carries these per-channel dates. `--via <distributor>`
 judges your repo by the channel you call. The distributor refresh keeps the
 Bedrock, Vertex, and Azure Foundry dates current from their lifecycle pages.
+Bedrock combines its [legacy table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html)
+with [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
+Card floors become tentative distribution dates without announcements.
+Under `--via aws-bedrock`, these floors remain `scheduled` and display "not sooner than".
 A distributor's later date gives you more time for the same migration. It is not a reason to
 skip it.
 
@@ -511,6 +515,16 @@ node scripts/feed-changelog.mjs                       # local rendering of the h
 ```
 
 A parse failure stops the run. The refresh never writes a guessed feed.
+
+AWS changed its Bedrock lifecycle policy on 2026-09-07.
+The legacy table covers models launched before that date; newer models publish lifecycle dates on individual cards.
+The Bedrock refresh reads both sources and keeps legacy-table records when IDs overlap.
+Conflicting exact dates appear under "Source conflicts"; the legacy table wins.
+When two card floors differ, the later day-precision date applies.
+Cards without lifecycle fields or day-precision dates appear under "Model cards without lifecycle fields" and emit notices.
+The crawl reads at most 400 unique cards sequentially, with 30-second deadlines and 8 MiB response limits.
+Offline checks use `bedrock-lifecycle.html`, `bedrock-model-cards.html`, and `bedrock-model-cards/<basename>` fixtures.
+Missing card fixtures stop the refresh.
 
 This runs automatically. A weekly workflow
 (`.github/workflows/feed-refresh.yml`, Mondays 05:23 UTC) checks the live
