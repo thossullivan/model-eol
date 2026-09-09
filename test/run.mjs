@@ -15,6 +15,8 @@ import { assertIsoDate, buildModelPattern, findingFromRef, lifecycleFor, loadFee
 import { buildPlan } from '../lib/plan.mjs'
 import { formatCheck, formatSchedule } from '../lib/reports.mjs'
 import { parseDiffPath } from '../lib/scanner.mjs'
+import { PROVIDERS, loadProviderSources, mergeFeed } from '../refresh/providers.mjs'
+import { mergeDistributions, parseAzureModelRetirementScheduleHtml } from '../refresh/distributors.mjs'
 
 const root = path.join(import.meta.dirname, '..')
 const run = (args, options = {}) => {
@@ -239,6 +241,36 @@ assert(!cyclonedx.components.some(item => item.name === 'gpt-9-ultra-20990101'),
 assert(cyclonedx.metadata?.properties?.some(item => item.name === 'model-eol:generator' && item.value === 'model-eol/inventory-cyclonedx@0.1'), 'CycloneDX records explicit model-eol generator provenance')
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
+
+const anthropicAliasConsumerDir = path.join(tempRoot, 'anthropic-alias-consumer')
+const anthropicAliasConsumerFeeds = path.join(tempRoot, 'anthropic-alias-feeds')
+fs.mkdirSync(anthropicAliasConsumerDir)
+fs.mkdirSync(anthropicAliasConsumerFeeds)
+fs.writeFileSync(path.join(anthropicAliasConsumerDir, 'model.py'), '"claude-sonnet-4-5"')
+const anthropicAliasFixtures = path.join(root, 'refresh/test/fixture')
+const anthropicAliasSources = await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicAliasFixtures, notice: () => {} })
+const anthropicAliasConsumerFeed = mergeFeed({ spec: 'model-eol/0.1', publisher: 'anthropic', models: [] }, {
+  ...anthropicAliasSources, provider: PROVIDERS.anthropic, generated: '2026-09-09T00:00:00Z', notice: () => {},
+}).feed
+fs.writeFileSync(path.join(anthropicAliasConsumerFeeds, 'anthropic.json'), JSON.stringify(anthropicAliasConsumerFeed))
+const anthropicAliasConsumer = run(['check', anthropicAliasConsumerDir, '--feeds', anthropicAliasConsumerFeeds, '--json'])
+const anthropicAliasFindings = JSON.parse(anthropicAliasConsumer.out).findings
+assert(anthropicAliasConsumer.code === 0 && anthropicAliasFindings.length === 1 && anthropicAliasFindings[0].id === 'claude-sonnet-4-5-20250929' && anthropicAliasFindings[0].matched === 'claude-sonnet-4-5', 'generated Anthropic temp feed resolves a file containing only the Sonnet alias to one canonical finding')
+const anthropicAliasInventory = run(['inventory', anthropicAliasConsumerDir, '--feeds', anthropicAliasConsumerFeeds, '--json'])
+const anthropicAliasReferences = JSON.parse(anthropicAliasInventory.out).model_references
+assert(anthropicAliasInventory.code === 0 && anthropicAliasReferences.length === 1 && anthropicAliasReferences[0].id === 'claude-sonnet-4-5-20250929' && anthropicAliasReferences[0].matched === 'claude-sonnet-4-5', 'inventory lists the bare Anthropic alias from the generated temp feed')
+const anthropicAzureRecords = parseAzureModelRetirementScheduleHtml(fs.readFileSync(path.join(anthropicAliasFixtures, 'azure-model-retirement-schedule.html'), 'utf8')).records
+const anthropicWithoutAliases = { ...anthropicAliasConsumerFeed, models: anthropicAliasConsumerFeed.models.map(({ aliases, ...model }) => model) }
+const anthropicAzureBefore = mergeDistributions([anthropicWithoutAliases], { via: 'azure-ai-foundry', records: anthropicAzureRecords })
+const anthropicAzureAfter = mergeDistributions([anthropicAliasConsumerFeed], { via: 'azure-ai-foundry', records: anthropicAzureRecords })
+for (const [alias, id] of [
+  ['claude-sonnet-4-5', 'claude-sonnet-4-5-20250929'],
+  ['claude-opus-4-5', 'claude-opus-4-5-20251101'],
+  ['claude-haiku-4-5', 'claude-haiku-4-5-20251001'],
+]) {
+  const model = anthropicAzureAfter.feeds[0].models.find(model => model.id === id)
+  assert(anthropicAzureBefore.unconfirmedDistributions.some(row => row.id === alias) && !anthropicAzureAfter.unconfirmedDistributions.some(row => row.id === alias || row.id === id) && model?.distributions?.some(distribution => distribution.via === 'azure-ai-foundry'), `Azure fixture row ${alias} binds and leaves the unconfirmed list after alias generation`)
+}
 
 const cohereConsumerDir = path.join(tempRoot, 'cohere-consumer')
 fs.mkdirSync(cohereConsumerDir)

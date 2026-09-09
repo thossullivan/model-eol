@@ -163,8 +163,17 @@ Mistral checks rows containing `th` cells for header drift.
 Without `th` cells or a pending header, it checks only the first row.
 Cohere collects identities and aliases from every section before merging records in ascending heading-date order.
 
+Anthropic reads model identities from overview pages listed in `https://platform.claude.com/docs/llms.txt`.
+It imports only `Claude API` and `Claude API alias` rows.
+The index allows at most 100 unique pages; missing fixtures stop refresh.
+Model pages supply no dates; the deprecations page remains the only Anthropic date source.
+Refresh reports each attached or moved alias through notices and semantic diffs.
+
 Azure binds publisher feeds through the Azure OpenAI, Anthropic, Mistral AI, and Cohere section headings.
-OpenAI dates and four-digit versions require exact snapshot IDs or aliases.
+OpenAI dates first resolve exact snapshot IDs or aliases.
+Azure OpenAI uses a resolving bare identity for single-row models only when a dated snapshot candidate is absent.
+Azure counts Model cells before deduplication and ignores Replacement cells.
+Four-digit versions always require exact snapshot IDs or aliases.
 OpenAI versions `1`, `2`, `001`, and dashes use bare IDs.
 Mistral and Cohere integer versions and dashes use bare IDs.
 Cohere binding strips one leading `Cohere-` or `cohere-` prefix.

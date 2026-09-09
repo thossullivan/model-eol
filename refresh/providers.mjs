@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { fetchBoundedBody } from './fetch.mjs'
 
 export const PROVIDERS = {
   openai: {
@@ -15,6 +16,7 @@ export const PROVIDERS = {
     feedFile: 'anthropic.json',
     modelsUrl: 'https://api.anthropic.com/v1/models',
     deprecationsUrl: 'https://platform.claude.com/docs/en/about-claude/model-deprecations',
+    aliasesUrl: 'https://platform.claude.com/docs/llms.txt',
     keyEnv: 'ANTHROPIC_API_KEY',
     headers: {
       'anthropic-version': '2023-06-01',
@@ -55,6 +57,8 @@ const MONTHS = new Map([
   ['jul', 7], ['aug', 8], ['sep', 9], ['sept', 9], ['oct', 10], ['nov', 11], ['dec', 12],
 ])
 export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+export const MAX_ANTHROPIC_MODEL_PAGES = 100
+const ANTHROPIC_MODEL_PAGE_PATTERN = /^https:\/\/platform\.claude\.com\/docs\/en\/models\/[a-z0-9-]+\/overview\.md$/
 const REPLACEMENT_TOKEN_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]*(?:\*)?/g
 
 function pad(number) {
@@ -749,6 +753,59 @@ export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic
   const records = [...announcements, ...status.records]
   if (!records.length) throw new Error('anthropic deprecations page has no model entries')
   return records
+}
+
+export function parseAnthropicModelsIndex(markdown, url = PROVIDERS.anthropic.aliasesUrl) {
+  const urls = new Set()
+  for (const match of String(markdown).matchAll(/https?:\/\/[^\s<>()[\]"'`]+/g)) {
+    if (!ANTHROPIC_MODEL_PAGE_PATTERN.test(match[0])) continue
+    urls.add(match[0])
+    if (urls.size > MAX_ANTHROPIC_MODEL_PAGES) {
+      throw new Error(`anthropic model index ${url} exceeds cap of ${MAX_ANTHROPIC_MODEL_PAGES} pages`)
+    }
+  }
+  if (!urls.size) throw new Error(`anthropic model index ${url} has no model pages`)
+  return [...urls]
+}
+
+export function parseAnthropicModelPage(markdown, url) {
+  const values = new Map()
+  for (const line of String(markdown).split(/\r?\n/)) {
+    const row = line.match(/^\s*\|([^|]*)\|(.*)\|\s*$/)
+    if (!row) continue
+    const label = row[1].trim()
+    if (!['Claude API', 'Claude API alias'].includes(label)) continue
+    if (values.has(label)) throw new Error(`anthropic model page ${url} has duplicate ${label} rows`)
+    const code = row[2].trim().match(/^`([^`]+)`$/)
+    if (!code || !MODEL_ID_PATTERN.test(code[1])) {
+      throw new Error(`anthropic model page ${url} has invalid ${label}: expected one model ID code span`)
+    }
+    values.set(label, code[1])
+  }
+  const id = values.get('Claude API')
+  if (!id) throw new Error(`anthropic model page ${url} has no Claude API row`)
+  const alias = values.get('Claude API alias')
+  return { id, aliases: alias && alias !== id ? [alias] : [] }
+}
+
+async function loadAnthropicModelPages(config, { fixtures, fetchImpl }) {
+  const read = async (filename, url) => {
+    if (!fixtures) return fetchBoundedBody(url, config.publisher, fetchImpl)
+    try {
+      return fs.readFileSync(path.join(fixtures, filename), 'utf8')
+    } catch (error) {
+      throw new Error(`anthropic missing or unreadable fixture ${filename} for ${url}: ${error.message}`)
+    }
+  }
+  const index = await read('anthropic-llms.txt', config.aliasesUrl)
+  const models = []
+  for (const url of parseAnthropicModelsIndex(index, config.aliasesUrl)) {
+    const slug = new URL(url).pathname.split('/').at(-2)
+    const markdown = await read(path.join('anthropic-model-pages', `${slug}.md`), url)
+    models.push(parseAnthropicModelPage(markdown, url))
+  }
+  identityIndex(models)
+  return models
 }
 
 function googleModelId(fragment) {
@@ -1458,10 +1515,11 @@ function routeReplacementFields(models) {
  * entry. The endpoint argument is null when credentials were unavailable and
  * an empty array when the endpoint explicitly returned no models.
  */
-export function mergeFeed(committed, { deprecations = [], currentIds = null, currentModels = [], generated, provider }) {
+export function mergeFeed(committed, { deprecations = [], currentIds = null, currentModels = [], generated, provider, notice = console.error }) {
   if (!committed || !Array.isArray(committed.models)) throw new Error('committed feed has no models array')
   const models = committed.models.map(clone)
   const committedEntries = committed.models.map((old, index) => ({ id: old.id, model: models[index] }))
+  const committedIds = new Set(committed.models.map(model => model.id))
   const confirmed = new Set()
   const deprecationConfirmed = new Set()
   let index = identityIndex(models)
@@ -1541,12 +1599,17 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     if (!target) target = add({ id: model.id })
     const aliases = new Set(target.aliases ?? [])
     for (const alias of model.aliases ?? []) {
-      if (alias === target.id) continue
+      if (alias === model.id) continue
       const owner = locate(alias)
+      if (committedIds.has(alias) || (owner && owner !== target && owner.id === alias)) {
+        throw new Error(`${provider.publisher === 'anthropic' ? 'model page' : 'endpoint'} alias ${alias} for ${model.id} conflicts with a canonical model id`)
+      }
       if (owner && owner !== target) {
-        if (owner.id === alias) throw new Error(`endpoint alias ${alias} for ${model.id} conflicts with a canonical model id`)
         owner.aliases = owner.aliases.filter(value => value !== alias)
         if (!owner.aliases.length) delete owner.aliases
+      }
+      if (owner !== target) {
+        notice(`notice: ${provider.publisher} alias ${alias} ${owner ? `moved from ${owner.id} to` : 'attached to'} ${target.id}`)
       }
       aliases.add(alias)
     }
@@ -1731,5 +1794,6 @@ export async function loadProviderSources(config, options = {}) {
   for (const id of undatedDeprecatedIds) {
     notice(`notice: ${config.publisher} models endpoint flags ${id} as deprecated without a dated announcement`)
   }
+  if (config.publisher === 'anthropic') currentModels = await loadAnthropicModelPages(config, { fixtures, fetchImpl })
   return { currentIds, currentModels, endpointAvailable, deprecations, skipped, undatedDeprecatedIds }
 }

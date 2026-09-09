@@ -516,6 +516,12 @@ node scripts/feed-changelog.mjs                       # local rendering of the h
 
 A parse failure stops the run. The refresh never writes a guessed feed.
 
+Anthropic reads model IDs and aliases from overview pages listed in `https://platform.claude.com/docs/llms.txt`.
+It reads at most 100 unique pages with 30-second deadlines and 8 MiB response limits.
+Only the deprecations page supplies Anthropic dates.
+Offline checks use `anthropic-llms.txt` and `anthropic-model-pages/<slug>.md`; missing pages stop refresh.
+Alias attachments and moves emit notices and appear in semantic diffs.
+
 AWS changed its Bedrock lifecycle policy on 2026-09-07.
 The legacy table covers models launched before that date; newer models publish lifecycle dates on individual cards.
 The Bedrock refresh reads both sources and keeps legacy-table records when IDs overlap.
