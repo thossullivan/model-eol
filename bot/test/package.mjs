@@ -6,6 +6,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 import { verifyPackageIntegrity } from '../../scripts/package-integrity.mjs'
+import { probeTarball, registryWaitSchedule } from '../../scripts/published-consumer-uat.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-package-test-'))
@@ -90,6 +91,16 @@ try {
   const setupNodeCount = repositoryWorkflows.match(/actions\/setup-node@v7/g)?.length ?? 0
   assert(setupNodeCount > 0 && repositoryWorkflows.match(/package-manager-cache: false/g)?.length === setupNodeCount, 'repository workflows disable automatic package-manager caching in every Node job')
   assert(repositoryWorkflows.includes('node scripts/published-consumer-uat.mjs'), 'release automation smoke-tests the exact published package')
+  const registryDelays = registryWaitSchedule()
+  assert(registryDelays.reduce((sum, delay) => sum + delay, 0) === 600_000 && registryDelays.length === 24 && registryDelays[0] === 5000 && Math.max(...registryDelays) === 30_000, 'smoke test waits up to ten minutes for registry propagation with 5 to 30 second backoff')
+  assert(JSON.stringify(registryWaitSchedule(20)) === JSON.stringify([5000, 5000, 10000]), 'registry wait window is configurable and never overshoots')
+  assert(registryWaitSchedule(0).length === 0, 'a zero wait window yields a single attempt')
+  let registryWaitReason = ''
+  try { registryWaitSchedule(-1) } catch (error) { registryWaitReason = error.message }
+  assert(registryWaitReason.includes('non-negative'), 'a negative wait window is refused')
+  const foreignTarball = probeTarball('https://example.com/model-eol-0.7.0.tgz')
+  assert(!foreignTarball.ok && foreignTarball.detail.includes('unexpected tarball URL'), 'tarball probe accepts only the npm registry model-eol tarball path without contacting the network')
+  assert(!probeTarball(undefined).ok, 'tarball probe fails closed on a missing dist.tarball')
   assert(repositoryWorkflows.includes('uses: thossullivan/model-eol@v0'), 'hosted consumer UAT exercises the moving v0 Action')
   assert(repositoryWorkflows.includes('name: npm-release-result') && repositoryWorkflows.includes('run-id: ${{ github.event.workflow_run.id }}'), 'hosted consumer UAT receives the exact release version artifact')
   assert(repositoryWorkflows.includes('Moving v0 Action validate round-trip UAT'), 'hosted moving v0 Action validates its emitted inventory')

@@ -42,10 +42,44 @@ const parseJson = (text, label) => {
   }
 }
 
-const waitForPublishedVersion = ({ version, expectedIntegrity, cache }) => {
+const REGISTRY_WAIT_SECONDS_DEFAULT = 600
+const REGISTRY_WAIT_STEP_CAP_MS = 30_000
+
+// Registry propagation after publish can lag for minutes; back off and keep polling up to the window.
+export function registryWaitSchedule(totalSeconds = Number(process.env.MODEL_EOL_REGISTRY_WAIT_SECONDS ?? REGISTRY_WAIT_SECONDS_DEFAULT)) {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) throw new Error('registry wait window must be a non-negative number of seconds')
+  const delays = []
+  let elapsed = 0
+  let step = 5000
+  while (elapsed < totalSeconds * 1000) {
+    const delay = Math.min(step, REGISTRY_WAIT_STEP_CAP_MS, totalSeconds * 1000 - elapsed)
+    delays.push(delay)
+    elapsed += delay
+    if (delays.length % 2 === 0) step = Math.min(step * 2, REGISTRY_WAIT_STEP_CAP_MS)
+  }
+  return delays
+}
+
+const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+// A listed version whose tarball still 404s fails npm install later; require the tarball to answer first.
+export function probeTarball(url) {
+  if (typeof url !== 'string' || !/^https:\/\/registry\.npmjs\.org\/model-eol\/-\/model-eol-[0-9A-Za-z.+-]+\.tgz$/.test(url)) {
+    return { ok: false, detail: `unexpected tarball URL: ${url ?? '(missing)'}` }
+  }
+  const script = 'const r = await fetch(process.argv[1], { method: "GET", headers: { range: "bytes=0-0" } }); await r.body?.cancel(); process.stdout.write(String(r.status)); process.exit(r.ok ? 0 : 2)'
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, url], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 })
+  if (result.error || result.status !== 0) {
+    return { ok: false, detail: result.error?.message || `tarball HTTP ${result.stdout?.trim() || 'error'}` }
+  }
+  return { ok: true, detail: `tarball HTTP ${result.stdout.trim()}` }
+}
+
+const waitForPublishedVersion = ({ version, expectedIntegrity, cache, delays = registryWaitSchedule() }) => {
   let detail = ''
-  for (let attempt = 1; attempt <= 12; attempt++) {
-    const result = spawnSync(npm, ['view', `model-eol@${version}`, 'version', 'dist.integrity', '--json', '--cache', cache, '--prefer-online'], {
+  const attempts = delays.length + 1
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = spawnSync(npm, ['view', `model-eol@${version}`, 'version', 'dist.integrity', 'dist.tarball', '--json', '--cache', cache, '--prefer-online'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -60,13 +94,22 @@ const waitForPublishedVersion = ({ version, expectedIntegrity, cache }) => {
         if (registryIntegrity !== expectedIntegrity) {
           throw new Error(`model-eol@${version} registry integrity ${registryIntegrity} does not match release integrity ${expectedIntegrity}`)
         }
-        return registryIntegrity
+        const tarball = probeTarball(metadata['dist.tarball'])
+        if (tarball.ok) return registryIntegrity
+        detail = tarball.detail
+      } else {
+        detail = `registry lists ${metadata?.version ?? 'no version'}`
       }
+    } else {
+      detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `exit ${result.status}`
     }
-    detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `exit ${result.status}`
-    if (attempt < 12) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000)
+    if (attempt <= delays.length) {
+      console.error(`waiting for model-eol@${version} on the registry (attempt ${attempt}/${attempts}): ${detail}`)
+      sleep(delays[attempt - 1])
+    }
   }
-  throw new Error(`npm did not expose model-eol@${version} after 60 seconds: ${detail}`)
+  const total = Math.round(delays.reduce((sum, delay) => sum + delay, 0) / 1000)
+  throw new Error(`npm did not expose model-eol@${version} with a reachable tarball after ${total} seconds: ${detail}`)
 }
 
 export function runPublishedConsumerUat({ packageSpec, expectedVersion, expectedIntegrity, expectedEngine = null }) {
