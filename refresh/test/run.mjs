@@ -232,6 +232,8 @@ for (const [label, markdown] of [
   assert(true, `Anthropic model pages reject ${label} and name the URL`)
 }
 assert(parseAnthropicModelPage(anthropicTestTable(`${anthropicTestRow}\n| Claude API alias | \`claude-test\` |`), anthropicTestUrl).aliases.length === 0, 'Anthropic ignores a self alias')
+strictAssert.throws(() => parseAnthropicModelPage(`<!--\n${anthropicTestTable(`${anthropicTestRow}\n| Claude API alias | \`claude-other\` |`)}`, anthropicTestUrl), /unbalanced comment marker/)
+assert(true, 'Anthropic model pages fail closed on an unterminated comment instead of reading the hidden table')
 const anthropicIgnoredRows = anthropicTestTable(`${anthropicTestRow}\n| Status | Retired |\n| Released | invalid date |\n| Retirement | 2000-01-01 |\n| Amazon Bedrock (InvokeModel) | \`anthropic.claude-test-v1:0\` |\n| Google Cloud | \`claude-test@20260101\` |\n| Microsoft Foundry | \`other-model\` |\n| Claude Platform on AWS | \`other-model\` |`)
 assert(JSON.stringify(parseAnthropicModelPage(anthropicIgnoredRows, anthropicTestUrl)) === JSON.stringify({ id: 'claude-test', aliases: [] }), 'Anthropic ignores platform, status, release, and retirement rows')
 const anthropicCapUrls = Array.from({ length: MAX_ANTHROPIC_MODEL_PAGES }, (_, index) => `https://platform.claude.com/docs/en/models/test-${index}/overview.md`)
@@ -1849,6 +1851,9 @@ assert(!azureSingleBinding.feeds[0].models[1].distributions && azureSingleBindin
 assert(azureSingleBinding.unconfirmedDistributions.some(row => row.id === 'absent-bare-model-2026-04-24'), 'Azure single dated row stays unconfirmed when its bare ID is absent')
 const azureWrongBare = mergeDistributions([{ publisher: 'anthropic', models: [{ id: 'gpt-5.5' }] }], { via: 'azure-ai-foundry', records: azureSingleSource.records })
 assert(!azureWrongBare.feeds[0].models[0].distributions && azureWrongBare.unconfirmedDistributions.some(row => row.id === 'gpt-5.5-2026-04-24'), 'Azure single dated fallback resolves only within the OpenAI feed')
+const azureFourDigitSource = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [['gpt-4-32k', '2023-06-13', 'GA', '2027-01-01', '-']]))
+const azureFourDigit = mergeDistributions([{ publisher: 'openai', models: [{ id: 'gpt-4-32k' }, { id: 'gpt-4-32k-0613' }, { id: 'gpt-4-32k-0314' }] }], { via: 'azure-ai-foundry', records: azureFourDigitSource.records })
+assert(azureFourDigit.feeds[0].models.every(model => !model.distributions) && azureFourDigit.unconfirmedDistributions.some(row => row.id === 'gpt-4-32k-2023-06-13'), 'Azure single dated fallback stays unconfirmed when four-digit snapshots exist')
 for (const duplicateRetirement of ['2027-10-26', '2027-09-26']) {
   const parsed = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [azureRow('gpt-5.5', '2026-04-24', 'GA', '2027-10-26')]) + azureTable('Azure OpenAI', [azureRow('gpt-5.5', '2026-04-24', 'GA', duplicateRetirement)]))
   const merged = mergeDistributions([azureSingleFeed], { via: 'azure-ai-foundry', records: parsed.records })

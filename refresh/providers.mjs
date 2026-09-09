@@ -785,7 +785,9 @@ function stripFencedCodeBlocks(markdown) {
 
 export function parseAnthropicModelPage(markdown, url) {
   const values = new Map()
-  const lines = stripFencedCodeBlocks(stripComments(markdown)).split('\n')
+  const uncommented = stripComments(markdown)
+  if (/<!--|--!?>/.test(uncommented)) throw new Error(`anthropic model page ${url} has an unbalanced comment marker`)
+  const lines = stripFencedCodeBlocks(uncommented).split('\n')
   const identityRow = line => /^\s*\|\s*Claude API(?: alias)?\s*\|/.test(line)
   for (let offset = 0; offset < lines.length;) {
     if (!lines[offset].startsWith('|')) {

@@ -856,7 +856,7 @@ export function mergeDistributions(feeds, {
       if (bare?.publisher === 'openai' && bare.model.id === raw.modelId) {
         const prefix = `${raw.modelId}-`
         const hasSnapshot = working[bare.feedIndex].feed.models.some(model =>
-          [model.id, ...(model.aliases ?? [])].some(id => id.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(id.slice(prefix.length))))
+          [model.id, ...(model.aliases ?? [])].some(id => id.startsWith(prefix) && /^(?:\d{4}-\d{2}-\d{2}|\d{4})$/.test(id.slice(prefix.length))))
         if (!hasSnapshot) target = bare
       }
     }
