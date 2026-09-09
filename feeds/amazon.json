@@ -15,7 +15,7 @@
           "announced": "2026-03-30",
           "shutdown": "2026-09-30",
           "status": "legacy",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         }
       ]
     },
@@ -30,7 +30,7 @@
           "announced": "2026-03-30",
           "shutdown": "2026-09-30",
           "status": "legacy",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         }
       ]
     },
@@ -45,7 +45,7 @@
           "announced": "2026-03-13",
           "shutdown": "2026-09-14",
           "status": "legacy",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         }
       ]
     },
@@ -60,7 +60,7 @@
           "announced": "2026-03-13",
           "shutdown": "2026-09-14",
           "status": "legacy",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         }
       ]
     }

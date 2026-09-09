@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "cohere",
-  "generated": "2026-09-08T23:15:57.517Z",
+  "generated": "2026-09-09T00:22:25.924Z",
   "source": "https://docs.cohere.com/docs/deprecations",
   "models": [
     {
@@ -50,6 +50,15 @@
         "command-r-08-2024",
         "command-r-plus-08-2024",
         "command-a-03-2025"
+      ],
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-02-19",
+          "shutdown": "2026-08-19",
+          "status": "extended-access",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        }
       ]
     },
     {
@@ -63,6 +72,15 @@
         "command-r-08-2024",
         "command-r-plus-08-2024",
         "command-a-03-2025"
+      ],
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "announced": "2026-02-19",
+          "shutdown": "2026-08-19",
+          "status": "extended-access",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
+        }
       ]
     },
     {

@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-09-08T22:24:35.710Z",
+  "generated": "2026-09-09T00:22:25.921Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -157,13 +157,40 @@
       ]
     },
     {
-      "id": "gpt-5.6-sol"
+      "id": "gpt-5.6-sol",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-07-13",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-sol.html"
+        }
+      ]
     },
     {
-      "id": "gpt-5.6-terra"
+      "id": "gpt-5.6-terra",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-07-13",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-terra.html"
+        }
+      ]
     },
     {
-      "id": "gpt-5.6-luna"
+      "id": "gpt-5.6-luna",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-07-13",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html"
+        }
+      ]
     },
     {
       "id": "gpt-realtime",
@@ -1404,7 +1431,16 @@
       ]
     },
     {
-      "id": "gpt-5.4"
+      "id": "gpt-5.4",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-06-01",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html"
+        }
+      ]
     },
     {
       "id": "gpt-5.4-nano-2026-03-17",
@@ -1449,7 +1485,16 @@
       ]
     },
     {
-      "id": "gpt-5.5"
+      "id": "gpt-5.5",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-06-01",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html"
+        }
+      ]
     },
     {
       "id": "gpt-5.5-2026-04-23"

@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "mistral",
-  "generated": "2026-09-08T22:24:22.546Z",
+  "generated": "2026-09-09T00:22:25.923Z",
   "source": "https://docs.mistral.ai/models",
   "models": [
     {
@@ -261,14 +261,32 @@
       "announced": "2024-11-30",
       "shutdown": "2025-06-16",
       "source": "https://docs.mistral.ai/models",
-      "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+      "replacement_note": "Mistral lists Mistral Small 4 as the alternative",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2026-12-16",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-small.html"
+        }
+      ]
     },
     {
       "id": "mistral-large-2402",
       "announced": "2024-11-30",
       "shutdown": "2025-06-16",
       "source": "https://docs.mistral.ai/models",
-      "replacement_note": "Mistral lists Mistral Large 3 as the alternative"
+      "replacement_note": "Mistral lists Mistral Large 3 as the alternative",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2025-04-03",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large.html"
+        }
+      ]
     },
     {
       "id": "mistral-medium-2312",
