@@ -25,6 +25,7 @@ import {
   stableJson,
 } from './lib/common.mjs'
 import { assertValidPlanDocument } from '../lib/validate-document.mjs'
+import { captureWindowFor, lifecycleFor } from '../lib/feeds.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
 import { loadConfig } from './lib/config.mjs'
 import { downloadFeeds } from './lib/feeds.mjs'
@@ -363,10 +364,20 @@ const buildModelGroups = (plan, config, root, records) => {
   }
   for (const group of groups.values()) {
     group.items.sort((a, b) => `${a.file}:${a.line}:${a.occurrence}`.localeCompare(`${b.file}:${b.line}:${b.occurrence}`))
-    group.feedDigest = itemDigest(group.items)
+    group.feedDigest = groupDigest(group.items, group.context?.entry)
   }
   return [...groups.values()].sort((a, b) => `${a.publisher}/${a.id}`.localeCompare(`${b.publisher}/${b.id}`))
 }
+
+// the capture section reads clocks outside the plan items, so they join the digest that gates body updates
+const clockRows = entry => entry
+  ? {
+      shutdown: entry.shutdown ?? null,
+      date_precision: entry.date_precision ?? null,
+      distributions: itemDigest((entry.distributions ?? []).map(row => ({ via: row.via, shutdown: row.shutdown ?? null, status: row.status ?? null, date_precision: row.date_precision ?? null }))),
+    }
+  : null
+const groupDigest = (items, entry) => sha256(stableJson({ items: itemDigest(items), clocks: clockRows(entry) }))
 
 const buildIssueGroups = (plan, config, root, records) => {
   const ignoredIds = ignoredModelIds(plan, config)
@@ -398,7 +409,7 @@ const buildIssueGroups = (plan, config, root, records) => {
   }
   for (const group of groups.values()) {
     group.issues.sort((a, b) => `${a.file}:${a.line}:${a.reason}`.localeCompare(`${b.file}:${b.line}:${b.reason}`))
-    group.feedDigest = itemDigest(group.issues)
+    group.feedDigest = groupDigest(group.issues, group.context?.entry)
   }
   return [...groups.values()].sort((a, b) => `${a.publisher}/${a.subject}/${a.shutdown ?? ''}`.localeCompare(`${b.publisher}/${b.subject}/${b.shutdown ?? ''}`))
 }
@@ -484,6 +495,43 @@ const replacementSection = (item, now) => [
     : []),
 ]
 
+const captureWindow = (group, now) => {
+  const entry = group.context?.entry
+  if (!entry) return null
+  const lifecycle = lifecycleFor(entry, {
+    days: group.items?.[0]?.threshold_days ?? group.issues?.[0]?.threshold_days ?? 0,
+    via: group.via ?? null,
+    today: now,
+  })
+  return captureWindowFor(entry, lifecycle, { today: now })
+}
+
+// the first date on which the capture section changes, so a body can be refreshed when the digest cannot see it
+const captureExpiry = capture => capture
+  ? [capture.until, ...capture.alternatives.map(alternative => alternative.until)].filter(Boolean).sort()[0] ?? null
+  : null
+
+const captureExpired = (metadata, now) => typeof metadata.capture_expires === 'string' && metadata.capture_expires <= now.toISOString().slice(0, 10)
+
+const captureSection = (group, now) => {
+  const capture = captureWindow(group, now)
+  if (!capture) return ''
+  const clock = capture.via === 'publisher' || capture.via === 'publisher-fallback'
+    ? markdownText('publisher')
+    : markdownCode(capture.via)
+  const untilText = window => `${['tentative', 'earliest'].includes(window.date_precision) ? 'at least until' : 'until'} ${markdownText(window.until)}`
+  return [
+    '## Capture window',
+    capture.until !== null
+      ? `- The old model answers on the ${clock} clock ${untilText(capture)}.`
+      : `- The old model no longer answers on the ${clock} clock. No baseline can be captured from it there.`,
+    ...capture.alternatives.map(alternative => `- It still answers via ${markdownCode(alternative.via)} ${untilText(alternative)}.`),
+    capture.until === null && capture.alternatives.length === 0
+      ? '- The feed lists no dated clock on which the old model still answers, so model-eol cannot state a capture window. model-eol does not run captures.'
+      : '- Capture a baseline from the old model before the window closes if your eval compares outputs. model-eol does not run captures.',
+  ].join('\n')
+}
+
 export const buildPullBody = ({ group, headSha, baseSha = null, now = new Date(), tokenKind = null, evalResult = null, evalConfigHash = null }) => {
   const item = group.items[0]
   const announced = markdownText(group.context?.announced ?? 'not specified')
@@ -500,6 +548,7 @@ export const buildPullBody = ({ group, headSha, baseSha = null, now = new Date()
     base_sha: baseSha,
     head_sha: headSha,
     feed_digest: group.feedDigest,
+    capture_expires: captureExpiry(captureWindow(group, now)),
     ...(evalConfigHash ? { eval_config_digest: evalConfigHash } : {}),
   }
   const sections = [
@@ -522,6 +571,8 @@ export const buildPullBody = ({ group, headSha, baseSha = null, now = new Date()
   if (group.via) {
     sections.push('', '## Distributor clock', `This migration uses the ${markdownCode(group.via)} distributor clock; the shutdown date above is the date for that channel.`)
   }
+  const capture = captureSection(group, now)
+  if (capture) sections.push('', capture)
   const evaluation = evalSection(evalResult)
   if (evaluation) sections.push('', evaluation)
   sections.push(
@@ -547,6 +598,7 @@ export const buildIssueBody = ({ group, now = new Date() }) => {
     replacement_note: issue.replacement_note,
     head_sha: null,
     feed_digest: group.feedDigest,
+    capture_expires: captureExpiry(captureWindow(group, now)),
     ...(group.channel ? { channel: group.channel } : {}),
   }
   const evidence = group.issues
@@ -580,6 +632,8 @@ export const buildIssueBody = ({ group, now = new Date() }) => {
     '## Feed notes',
     notesSection(group),
   ]
+  const capture = captureSection(group, now)
+  if (capture) sections.push('', capture)
   const evaluation = evalSection(group.evalResult)
   if (evaluation) sections.push('', evaluation)
   return sections.join('\n')
@@ -841,6 +895,8 @@ export const evaluatePlan = async ({
               cwd: clone,
               oldId: group.id,
               newId: group.items[0].replacement,
+              via: group.via ?? null,
+              mode: 'evaluate',
               planPath: selectedPlanPath,
               reportPath,
             })
@@ -1090,7 +1146,7 @@ const processModel = async ({ api, pulls, issueRecords, group, source, base, bas
     if (externalEval && externalEval.status !== 'pass') {
       return processEvalFailure({ api, issueRecords, group, evalResult: externalEval, root, now, issuesEnabled: config.issues.enabled, open })
     }
-    if (open.metadata.feed_digest === currentDigest && open.metadata.base_sha === baseHead && (!evalConfigHash || open.metadata.eval_config_digest === evalConfigHash)) {
+    if (open.metadata.feed_digest === currentDigest && open.metadata.base_sha === baseHead && (!evalConfigHash || open.metadata.eval_config_digest === evalConfigHash) && !captureExpired(open.metadata, now)) {
       return decision(group, 'skip-unchanged', { number: open.item.number })
     }
     let patch
@@ -1250,7 +1306,7 @@ const processIssue = async ({ api, issues, group, now }) => {
   const open = matches.find(record => isOpen(record.item))
   const body = buildIssueBody({ group, now })
   if (open) {
-    if (open.metadata.feed_digest === group.feedDigest) return decision(group, 'skip-unchanged', { number: open.item.number, body })
+    if (open.metadata.feed_digest === group.feedDigest && !captureExpired(open.metadata, now)) return decision(group, 'skip-unchanged', { number: open.item.number, body })
     await api.updateIssue(open.item.number, { title: issueTitle(group), body })
     return decision(group, 'update', { number: open.item.number, body })
   }

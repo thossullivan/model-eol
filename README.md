@@ -315,6 +315,17 @@ Under `--via aws-bedrock`, these floors remain `scheduled` and display "not soon
 A distributor's later date gives you more time for the same migration. It is not a reason to
 skip it.
 
+The later date is also the last day you can still call the old model, when the
+feed gives it as an exact date. A tentative or earliest floor is "at least until",
+and the old model may answer past it. When a retired or retiring model still
+answers on another channel, `check` appends
+`[still answers via aws-bedrock until 2026-10-14]` to the line, and the bot adds
+a `## Capture window` section to its PRs and issues. If your eval compares the
+replacement's outputs against the old model's, capture that baseline before the
+window closes. model-eol reports the window from the feeds and never runs the
+capture; see [docs/DESIGN_EVAL_BOUNDARY.md](docs/DESIGN_EVAL_BOUNDARY.md) for
+where that line sits and why.
+
 ## Policy floors
 
 A feed entry with no `announced` and no `shutdown` means "nothing scheduled as
@@ -445,6 +456,8 @@ receives:
 - `MODEL_EOL_OLD_ID` and `MODEL_EOL_NEW_ID` for the current migration.
 - `MODEL_EOL_PLAN`, a one-model plan containing the exact changed references.
 - `MODEL_EOL_REPORT`, the required path for a bounded, publishable Markdown receipt.
+- `MODEL_EOL_VIA`, the distributor channel the plan was built for, or empty for the publisher's direct API. Use it to map the publisher's replacement ID to your client's ID on that channel.
+- `MODEL_EOL_EVAL_MODE`, always `evaluate` today. The value `capture` is reserved for a future run on the unpatched checkout against the old ID. The bot does not run it, and the hook refuses any other value.
 
 Exit zero plus a regular report file means pass. Any other exit, a timeout, a
 missing report, a tracked workspace change, or checkout drift fails that

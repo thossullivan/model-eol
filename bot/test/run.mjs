@@ -16,7 +16,7 @@ import {
   runBot,
   runPlan,
 } from '../bot.mjs'
-import { branchFor, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
+import { branchFor, itemDigest, markdownCode, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
@@ -349,6 +349,59 @@ const contextRecords = new Map([
 ])
 assert(contextFor(contextRecords, 'openai', 'clocked-model', 'azure-ai-foundry').announced === null, 'explicit distribution without announced date does not use publisher announcement')
 
+const captureEntry = {
+  id: 'capture-model',
+  shutdown: '2000-01-01',
+  distributions: [
+    { via: 'aws-bedrock', shutdown: '2999-10-14', date_precision: 'exact', status: 'extended-access' },
+    { via: 'vertex-ai', shutdown: '2999-11-14', date_precision: 'tentative' },
+    { via: 'azure-ai-foundry', shutdown: '2999-12-14', date_precision: 'earliest' },
+  ],
+}
+const captureNow = new Date('2026-08-01T00:00:00Z')
+const captureItem = { file: 'app.py', line: 1, shutdown: '2000-01-01', replacement: 'new-model', status: 'retired', reason: 'not-direct-api', threshold_days: 90 }
+const captureModelGroup = {
+  kind: 'model', id: 'capture-model', publisher: 'openai', via: null, feedDigest: 'capture-digest',
+  context: { announced: null, notes: [], entry: captureEntry }, items: [captureItem],
+}
+const captureIssueGroup = {
+  kind: 'issue', id: 'capture-model', subject: 'capture-model', publisher: 'openai', via: null,
+  shutdown: '2000-01-01', feedDigest: 'capture-digest', root: '.',
+  context: captureModelGroup.context, issues: [captureItem],
+}
+const captureEval = { status: 'pass', exit_code: 0, report: 'pass' }
+const captureBodies = group => group.kind === 'model'
+  ? buildPullBody({ group, headSha: 'capture-head', now: captureNow, evalResult: captureEval })
+  : buildIssueBody({ group: { ...group, evalResult: captureEval }, now: captureNow })
+for (const group of [captureModelGroup, captureIssueGroup]) {
+  const body = captureBodies(group)
+  assert(body.includes('## Capture window\n- The old model no longer answers on the publisher clock. No baseline can be captured from it there.'), `${group.kind} body reports the retired publisher capture clock`)
+  assert(body.includes('- It still answers via `aws-bedrock` until 2999-10-14.') && body.includes('- It still answers via `vertex-ai` at least until 2999-11-14.') && body.includes('- It still answers via `azure-ai-foundry` at least until 2999-12-14.'), `${group.kind} body renders live alternatives with exact, tentative, and earliest precision`)
+  assert(body.includes('- Capture a baseline from the old model before the window closes if your eval compares outputs. model-eol does not run captures.'), `${group.kind} body includes the required baseline guidance`)
+  assert(body.indexOf('## Capture window') > body.indexOf('## Feed notes') && body.indexOf('## Capture window') < body.indexOf('## Eval'), `${group.kind} capture section follows feed notes and precedes eval`)
+  const withoutEntry = captureBodies({ ...group, context: { ...group.context, entry: null } })
+  assert(!withoutEntry.includes('## Capture window'), `${group.kind} body omits capture when the entry is missing`)
+  const identityOf = text => { const { capture_expires, ...rest } = parseMetadata(text); return JSON.stringify(rest) }
+  assert(identityOf(body) === identityOf(withoutEntry) && parseMetadata(body)?.id === group.id && parseMetadata(withoutEntry)?.capture_expires === null, `${group.kind} capture prose preserves metadata identity`)
+  for (const entry of [{ id: group.id }, { id: group.id, announced: '2000-01-01' }]) {
+    assert(!captureBodies({ ...group, context: { ...group.context, entry } }).includes('## Capture window'), `${group.kind} body omits capture for an undated lifecycle`)
+  }
+  const distributorBody = captureBodies({ ...group, via: 'aws-bedrock' })
+  assert(distributorBody.includes('- The old model answers on the `aws-bedrock` clock until 2999-10-14.') && !distributorBody.includes('- It still answers via `aws-bedrock`'), `${group.kind} body uses the selected distributor date and excludes it from alternatives`)
+  if (group.kind === 'model') {
+    assert(distributorBody.indexOf('## Capture window') > distributorBody.indexOf('## Distributor clock') && distributorBody.indexOf('## Capture window') < distributorBody.indexOf('## Checklist'), 'PR capture section follows the distributor clock and precedes the checklist')
+  }
+  for (const via of ['vertex-ai', 'azure-ai-foundry']) {
+    assert(captureBodies({ ...group, via }).includes(`- The old model answers on the \`${via}\` clock at least until`), `${group.kind} body preserves ${via} capture floor wording`)
+  }
+  assert(captureBodies({ ...group, via: 'missing-channel' }).includes('no longer answers on the publisher clock.'), `${group.kind} body labels publisher fallback as the publisher clock`)
+  const livePublisher = captureBodies({ ...group, via: 'aws-bedrock', context: { ...group.context, entry: { ...captureEntry, shutdown: '2998-01-01' } } })
+  assert(livePublisher.includes('- It still answers via `publisher` until 2998-01-01.'), `${group.kind} body renders a publisher alternative with unknown precision`)
+  const escapedBody = captureBodies({ ...group, context: { ...group.context, entry: { ...captureEntry, distributions: [{ via: '<custom_channel>`', shutdown: '2999-01-01' }] } } })
+  const escapedLine = escapedBody.split('\n').find(line => line.startsWith('- It still answers via '))
+  assert(escapedLine === '- It still answers via `<custom_channel>` until 2999-01-01.', `${group.kind} body renders capture clock values literally inside one code span`)
+}
+
 const tentativeBotFeeds = path.join(tempRoot, 'tentative-floor-feeds')
 fs.mkdirSync(tentativeBotFeeds)
 write(path.join(tentativeBotFeeds, 'anthropic.json'), JSON.stringify({
@@ -370,6 +423,81 @@ const tentativeBotResult = await runBot({
   now: new Date('2026-09-03T00:00:00Z'),
 })
 assert(tentativeBotResult.plan.items.length === 0 && tentativeBotResult.decisions.length === 0, 'tentative-floor models produce no migration item or bot work')
+
+assert(markdownCode('custom_hub') === '`custom_hub`' && markdownCode('a`b``c') === '`abc`' && markdownCode('x\r\ny') === '`x y`' && markdownCode('') === '` `' && markdownCode(null) === '` `', 'code spans keep underscores literal and never contain backticks or line breaks')
+const clockDigestFeeds = path.join(tempRoot, 'clock-digest-feeds')
+fs.mkdirSync(clockDigestFeeds)
+const clockDigestRows = status => [
+  { via: 'aws-bedrock', shutdown: '2999-10-14', status },
+  { via: 'vertex-ai', shutdown: '2999-11-14', date_precision: 'tentative' },
+]
+const writeClockDigestFeed = distributions => write(path.join(clockDigestFeeds, 'openai.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'openai',
+  generated: '2026-07-01T00:00:00Z',
+  source: 'https://example.invalid/openai',
+  models: [
+    { id: 'clock-digest-model', shutdown: '2000-01-01', replacement: 'clock-digest-next', distributions },
+    { id: 'clock-digest-next' },
+  ],
+}))
+writeClockDigestFeed(clockDigestRows('active'))
+const clockDigestRepo = makeRepo({ name: 'clock-digest', files: { 'app.py': 'from openai import OpenAI\n\nclient = OpenAI()\nMODEL = "clock-digest-model"\n' }, config })
+const clockDigestGithub = new FakeGitHub()
+const clockDigestRun = (now = '2026-08-01T00:00:00Z') => runBot({
+  repo: 'example/clock-digest',
+  targetDir: clockDigestRepo.work,
+  token: 'test-token',
+  transport: clockDigestGithub.transport.bind(clockDigestGithub),
+  vendoredFeeds: clockDigestFeeds,
+  now: new Date(now),
+})
+const clockDigestCreate = (await clockDigestRun()).decisions.find(item => item.group.kind === 'model')
+const clockDigestPull = clockDigestGithub.pulls.find(item => item.number === clockDigestCreate?.number)
+if (clockDigestPull) clockDigestPull.head.sha = parseMetadata(clockDigestCreate?.body)?.head_sha
+assert(clockDigestCreate?.action === 'create' && clockDigestCreate.body.includes('- It still answers via `aws-bedrock` until 2999-10-14.'), 'capture window PR body lists the live distributor clock')
+assert((await clockDigestRun()).decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'unchanged clocks keep the PR untouched')
+writeClockDigestFeed(clockDigestRows('active').reverse())
+assert((await clockDigestRun()).decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'reordered distribution rows keep the same digest')
+writeClockDigestFeed([{ via: 'aws-bedrock', shutdown: '2999-10-14', status: 'retired' }])
+const clockDigestUpdate = (await clockDigestRun()).decisions.find(item => item.group.kind === 'model')
+assert(clockDigestUpdate?.action === 'update' && !clockDigestUpdate.body.includes('It still answers via') && clockDigestUpdate.body.includes('lists no dated clock on which the old model still answers'), 'a distribution row change outside the plan items refreshes the PR body')
+const clockDigestUndated = buildPullBody({ group: { kind: 'model', id: 'clock-digest-model', publisher: 'openai', via: null, feedDigest: 'x', context: { announced: null, notes: [], entry: { id: 'clock-digest-model', shutdown: '2000-01-01', distributions: [{ via: 'aws-bedrock', status: 'active' }] } }, items: [{ file: 'app.py', line: 1, shutdown: '2000-01-01', replacement: 'clock-digest-next', status: 'retired', threshold_days: 90 }] }, headSha: 'h', now: new Date('2026-08-01T00:00:00Z') })
+assert(clockDigestUndated.includes('lists no dated clock on which the old model still answers') && !clockDigestUndated.includes('It still answers via'), 'an undated active clock is reported as unknown, not as closed')
+assert(parseMetadata(clockDigestCreate.body)?.capture_expires === '2999-10-14' && parseMetadata(clockDigestUndated)?.capture_expires === null, 'bot metadata records the first date on which the capture section changes')
+writeClockDigestFeed([{ via: 'aws-bedrock', shutdown: '2026-08-02', status: 'active' }])
+const clockExpiryUpdate = (await clockDigestRun()).decisions.find(item => item.group.kind === 'model')
+assert(clockExpiryUpdate?.action === 'update' && parseMetadata(clockExpiryUpdate.body)?.capture_expires === '2026-08-02', 'a near-term alternative is recorded as the capture expiry')
+clockDigestPull.head.sha = parseMetadata(clockExpiryUpdate.body)?.head_sha
+assert((await clockDigestRun()).decisions.find(item => item.group.kind === 'model')?.action === 'skip-unchanged', 'the PR stays untouched before the capture expiry')
+const clockExpired = (await clockDigestRun('2026-08-02T00:00:00Z')).decisions.find(item => item.group.kind === 'model')
+assert(clockExpired?.action === 'update' && !clockExpired.body.includes('It still answers via') && parseMetadata(clockExpired.body)?.capture_expires === null, 'an expired alternative refreshes the PR body on the expiry date even though the digest is unchanged')
+const clockIssueRepo = makeRepo({ name: 'clock-issue', files: { 'app.py': 'from openai import OpenAI\n\nclient = OpenAI()\nMODEL = "clock-issue-model"\n' }, config: { issues: { enabled: true } } })
+const clockIssueFeeds = path.join(tempRoot, 'clock-issue-feeds')
+fs.mkdirSync(clockIssueFeeds)
+write(path.join(clockIssueFeeds, 'openai.json'), JSON.stringify({
+  spec: 'model-eol/0.1',
+  publisher: 'openai',
+  generated: '2026-07-01T00:00:00Z',
+  source: 'https://example.invalid/openai',
+  models: [{ id: 'clock-issue-model', shutdown: '2000-01-01', distributions: [{ via: 'aws-bedrock', shutdown: '2026-08-02', status: 'active' }] }],
+}))
+const clockIssueGithub = new FakeGitHub()
+const clockIssueRun = now => runBot({
+  repo: 'example/clock-issue',
+  targetDir: clockIssueRepo.work,
+  token: 'test-token',
+  transport: clockIssueGithub.transport.bind(clockIssueGithub),
+  vendoredFeeds: clockIssueFeeds,
+  now: new Date(now),
+})
+const clockIssueCreate = (await clockIssueRun('2026-08-01T00:00:00Z')).decisions.find(item => item.group.kind === 'issue')
+assert(clockIssueCreate?.action === 'create' && clockIssueCreate.body.includes('- It still answers via `aws-bedrock` until 2026-08-02.'), 'issue body lists the live alternative before expiry')
+assert((await clockIssueRun('2026-08-01T12:00:00Z')).decisions.find(item => item.group.kind === 'issue')?.action === 'skip-unchanged', 'issue stays untouched before the capture expiry')
+const clockIssueExpired = (await clockIssueRun('2026-08-02T00:00:00Z')).decisions.find(item => item.group.kind === 'issue')
+assert(clockIssueExpired?.action === 'update' && !clockIssueExpired.body.includes('It still answers via'), 'an expired alternative refreshes the issue body on the expiry date')
+const digestOrder = [{ via: 'caf\u00e9', shutdown: '2026-10-14' }, { via: 'cafe\u0301', shutdown: '2026-10-14' }]
+assert(itemDigest(digestOrder) === itemDigest(digestOrder.slice().reverse()) && itemDigest([{ via: 'B' }, { via: 'a' }]) === itemDigest([{ via: 'a' }, { via: 'B' }]), 'sorted digests are order-independent for locale-equal and case-different strings')
 
 const httpsAuth = gitAuthentication('https://github.com/example/private.git', 'private-token')
 assert(httpsAuth?.key === 'http.https://github.com/.extraheader', 'GitHub HTTPS authentication is scoped to the remote host')
@@ -1191,7 +1319,7 @@ const structuredIssueBody = buildIssueBody({
   },
   now: new Date('2026-08-01T00:00:00Z'),
 })
-assert(structuredIssueBody.includes('Replacement options') && structuredIssueBody.includes('first&#95;choice') && structuredIssueBody.includes('second-choice'), 'issue body renders escaped replacement options')
+assert(structuredIssueBody.includes('Replacement options') && structuredIssueBody.includes('`first_choice`') && !structuredIssueBody.includes('&#95;choice') && structuredIssueBody.includes('second-choice'), 'issue body renders escaped replacement options')
 const structuredNoteLine = structuredIssueBody.split('\n').find(line => line.startsWith('- Replacement note:'))
 assert(structuredNoteLine?.includes('reasoning.mode: pro') && structuredNoteLine.includes('&lt;when needed&gt;') && structuredNoteLine.includes('&#96;'), 'issue body renders escaped replacement notes')
 
@@ -1323,9 +1451,26 @@ const runEval = (command, overrides = {}) => runEvalHook({
   newId: 'new-model',
   planPath: evalPlan,
   reportPath: overrides.reportPath ?? path.join(evalDir, 'report.md'),
+  via: overrides.via,
+  mode: overrides.mode,
 })
 const passEval = runEval('node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "pass")\'')
 assert(passEval.status === 'pass' && passEval.exit_code === 0 && passEval.report === 'pass', 'passing eval command reports pass and exit code')
+const captureContractProbe = 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, JSON.stringify({via:process.env.MODEL_EOL_VIA,mode:process.env.MODEL_EOL_EVAL_MODE}))\''
+const defaultContract = runEval(captureContractProbe)
+assert(defaultContract.status === 'pass' && defaultContract.report === '{"via":"","mode":"evaluate"}', 'eval hook defaults to the publisher API and evaluate mode')
+const distributorContract = runEval(captureContractProbe, { via: 'aws-bedrock', mode: 'evaluate' })
+assert(distributorContract.status === 'pass' && distributorContract.report === '{"via":"aws-bedrock","mode":"evaluate"}', 'eval hook forwards the selected distributor and evaluate mode')
+for (const mode of ['capture', 'unknown', null]) {
+  let modeError = null
+  try {
+    runEval(captureContractProbe, { mode })
+  } catch (error) {
+    modeError = error
+  }
+  assert(modeError?.message === `unsupported eval mode: ${mode}`, `eval hook rejects unsupported mode ${mode}`)
+}
+assert(fs.readFileSync(path.join(evalDir, 'report.md'), 'utf8') === distributorContract.report, 'unsupported eval modes fail before removing the existing report')
 const failEval = runEval('node -e "process.exit(7)"')
 assert(failEval.status === 'fail' && failEval.exit_code === 7, 'failing eval command is recorded without throwing')
 const missingEval = runEval('node -e "process.exit(0)"')
