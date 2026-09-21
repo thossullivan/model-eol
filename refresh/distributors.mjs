@@ -374,13 +374,13 @@ export function parseBedrockModelCardHtml(html, source) {
     const ids = new Set()
     for (const [offset, row] of rows.slice(1).entries()) {
       const id = row.cells[columns[0]]?.text ?? ''
-      if (id === 'N/A') continue
+      if (/^n\/a$/i.test(id)) continue
       if (!isBedrockModelId(id)) throw new Error(`invalid Model ID in row ${offset + 2}: ${id || '(empty)'}`)
       ids.add(id)
     }
-    if (!ids.size) throw new Error('Model ID table has no model ids')
     const fields = bedrockCardFields(html)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
+    if (!ids.size) return skip('no model ids')
     const eol = fields.get('Model EOL date')
     if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || eol === 'N/A')) return skip('no lifecycle fields')
 
@@ -390,7 +390,7 @@ export function parseBedrockModelCardHtml(html, source) {
     if (period !== undefined && !/^at least \d+ (?:months?|days)$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
     const floor = fields.get('EOL no sooner than')
     const candidates = []
-    if (floor !== undefined && !/^Not Applicable\b/i.test(floor)) {
+    if (floor !== undefined && !/^(?:n\/a|not applicable)\b/i.test(floor)) {
       const date = bedrockCardDate(floor, 'EOL no sooner than', true)
       if (date) candidates.push(date)
     }

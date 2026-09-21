@@ -351,6 +351,8 @@ function announcementDate(html, tableStart, provider) {
 }
 
 /** Parse an HTML deprecations page into lifecycle records. */
+const ANTHROPIC_NO_RETIREMENT_PATTERN = /^(?:n\/a|to be announced)$/i
+
 export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
   if (typeof html !== 'string' || !html.trim()) throw new Error(`${provider} deprecations page is empty`)
   try {
@@ -387,7 +389,7 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
       }
       const shutdownCell = row.cells[headers.date]
       const shutdownText = plainText(shutdownCell?.text)
-      const noShutdown = provider === 'anthropic' && /^n\/a$/i.test(shutdownText)
+      const noShutdown = provider === 'anthropic' && ANTHROPIC_NO_RETIREMENT_PATTERN.test(shutdownText)
       const shutdown = noShutdown ? undefined : dateFromText(shutdownText)
       if (!shutdown && !noShutdown) throw new Error(`${provider} deprecations entry ${id} has no valid shutdown date`)
       const replacementCell = headers.recommended >= 0 ? row.cells[headers.recommended] : undefined
@@ -628,8 +630,6 @@ function anthropicStatusDate(text, id, field, cellText = text) {
   }
   return date
 }
-
-const ANTHROPIC_NO_RETIREMENT_PATTERN = /^(?:n\/a|to be announced)$/i
 
 function anthropicTentativeShutdown(text, id) {
   const value = plainText(text)
