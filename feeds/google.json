@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-09-07T05:31:03.696Z",
+  "generated": "2026-09-21T15:02:11.423Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -165,7 +165,7 @@
       "distributions": [
         {
           "via": "vertex-ai",
-          "shutdown": "2026-10-02",
+          "shutdown": "2027-03-15",
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
@@ -284,23 +284,24 @@
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
       "shutdown": "2025-12-09",
       "date_precision": "earliest",
-      "replacement": "gemini-3.1-flash-live-preview"
+      "replacement": "gemini-3.8-live"
     },
     {
       "id": "gemini-3.1-flash-live-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "replacement": "gemini-3.8-live"
     },
     {
       "id": "gemini-2.5-flash-native-audio-preview-12-2025",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "replacement": "gemini-3.1-flash-live-preview"
+      "replacement": "gemini-3.8-live"
     },
     {
       "id": "gemini-live-2.5-flash-preview",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
       "shutdown": "2025-12-09",
       "date_precision": "earliest",
-      "replacement": "gemini-3.1-flash-live-preview"
+      "replacement": "gemini-3.8-live"
     },
     {
       "id": "gemini-3.1-flash-tts-preview",
@@ -570,6 +571,8 @@
       "distributions": [
         {
           "via": "vertex-ai",
+          "shutdown": "2027-06-28",
+          "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
       ]
@@ -651,6 +654,17 @@
     {
       "id": "lyria-3.5",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.8-live",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.8-live-extended-thinking",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "antigravity-preview-09-2026"
     }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-09-09T15:04:52.531Z",
+  "generated": "2026-09-21T15:02:11.423Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "policy": {
     "min_notice_days": 60,
@@ -400,11 +400,11 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
-      "shutdown": "2026-11-24",
-      "date_precision": "tentative",
       "aliases": [
         "claude-opus-4-5"
-      ]
+      ],
+      "shutdown": "2026-11-24",
+      "date_precision": "tentative"
     },
     {
       "id": "claude-haiku-4-5-20251001",
@@ -424,11 +424,11 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
-      "shutdown": "2026-10-15",
-      "date_precision": "tentative",
       "aliases": [
         "claude-haiku-4-5"
-      ]
+      ],
+      "shutdown": "2026-10-15",
+      "date_precision": "tentative"
     },
     {
       "id": "claude-sonnet-4-5-20250929",
@@ -448,11 +448,11 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
-      "shutdown": "2026-09-29",
-      "date_precision": "tentative",
       "aliases": [
         "claude-sonnet-4-5"
-      ]
+      ],
+      "shutdown": "2026-09-29",
+      "date_precision": "tentative"
     },
     {
       "id": "claude-fable-5-1",
@@ -485,7 +485,10 @@
           "status": "active",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5.html"
         }
-      ]
+      ],
+      "shutdown": "2027-06-09",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
     },
     {
       "id": "claude-mythos-5-1",
@@ -499,6 +502,22 @@
         },
         {
           "via": "azure-ai-foundry",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ],
+      "shutdown": "2027-09-01",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+      "id": "claude-mythos-preview",
+      "announced": "2026-06-09",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-04-02",
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
