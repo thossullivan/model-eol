@@ -819,6 +819,19 @@ const retiredWithoutShutdownReason = anthropicStatusError(anthropicStatusTable('
 assert(retiredWithoutShutdownReason.includes('claude-retired-without-shutdown') && retiredWithoutShutdownReason.includes('N/A'), 'Anthropic rejects a retired status row without a shutdown date')
 const matchedRetiredWithoutShutdownReason = anthropicStatusError(`${anthropicAnnouncementTable('claude-matched-retired', 'June 1, 2026', 'N/A')}${anthropicStatusTable('claude-matched-retired', 'Retired', 'June 1, 2026', 'N/A')}`)
 assert(matchedRetiredWithoutShutdownReason.includes('retired without a shutdown date'), 'a matched Retired row without a shutdown date still fails closed')
+const tbaDeprecated = parseAnthropicDeprecations(anthropicStatusTable('claude-tba-deprecated', 'Deprecated', 'June 9, 2026', 'To be announced'))[0]
+assert(tbaDeprecated.announced === '2026-06-09' && tbaDeprecated.shutdown === undefined && tbaDeprecated.date_precision === undefined, 'Anthropic converts a deprecated To-be-announced status row into an announced-only record')
+const tbaRetiredReason = anthropicStatusError(anthropicStatusTable('claude-tba-retired', 'Retired', 'June 9, 2026', 'To be announced'))
+assert(tbaRetiredReason.includes('retired without a shutdown date'), 'Anthropic rejects a retired To-be-announced status row without a shutdown date')
+const tbaActive = parseAnthropicDeprecations(anthropicStatusTable('claude-tba-active', 'Active', 'N/A', 'To be announced'))[0]
+assert(tbaActive.announced === undefined && tbaActive.shutdown === undefined && tbaActive.date_precision === undefined, 'Anthropic treats an active To-be-announced tentative retirement as no date')
+const tbaSoonReason = anthropicStatusError(anthropicStatusTable('claude-tba-soon', 'Deprecated', 'June 9, 2026', 'To be announced soon'))
+assert(tbaSoonReason.includes('unrecognised retirement date'), 'Anthropic only accepts the exact To-be-announced retirement cell')
+const tbaUpper = parseAnthropicDeprecations(anthropicStatusTable('claude-tba-upper', 'Deprecated', 'June 9, 2026', 'TO BE ANNOUNCED'))[0]
+assert(tbaUpper.announced === '2026-06-09' && tbaUpper.shutdown === undefined, 'Anthropic matches the To-be-announced retirement cell case-insensitively')
+const tbaConflictId = 'claude-tba-announcement-conflict'
+const tbaConflictReason = anthropicStatusError(`${anthropicAnnouncementTable(tbaConflictId, '2026-01-01', '2027-01-01')}${anthropicStatusTable(tbaConflictId, 'Deprecated', '2026-01-01', 'To be announced')}`)
+assert(tbaConflictReason.includes(tbaConflictId) && tbaConflictReason.includes('2027-01-01'), 'Anthropic rejects a To-be-announced status retirement against a dated announcement')
 const populatedRowWithoutIdReason = anthropicStatusError(`<table>${anthropicStatusHeader}<tr><td><code>claude-kept-row</code></td><td>Active</td><td>N/A</td><td>Not sooner than June 9, 2027</td></tr><tr><td></td><td>Active</td><td>N/A</td><td>Not sooner than July 1, 2027</td></tr></table>`)
 assert(populatedRowWithoutIdReason.includes('populated row without a model id'), 'a populated status row with an empty model cell fails closed')
 const spacerRowRecords = parseAnthropicDeprecations(`<table>${anthropicStatusHeader}<tr><td><code>claude-kept-row</code></td><td>Active</td><td>N/A</td><td>Not sooner than June 9, 2027</td></tr><tr><td></td><td></td><td></td><td></td></tr></table>`)
@@ -1006,6 +1019,52 @@ for (const [shape, html] of [
       error.message.includes(reviewCardSource) && error.message.includes('Model ID table'))
   })
 }
+const reviewEndpointTable = ids => `<table><tr><th>Endpoint</th><th>Model ID</th><th>Geo inference ID</th><th>Global inference ID</th></tr>${ids.map((id, index) =>
+  `<tr><td>endpoint-${index}</td><td>${id}</td><td>us.anthropic.example-v1:0 eu.anthropic.example-v1:0</td><td>global.anthropic.example-v1:0</td></tr>`).join('')}</table>`
+reviewTest('Endpoint table: Bedrock skips an N/A Model ID cell and records only the base id', () => {
+  const html = reviewEndpointTable(['N/A', 'anthropic.example-v1:0']) + reviewFloor
+  strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+})
+reviewTest('Endpoint table: Bedrock rejects a Model ID table whose every id is N/A', () => {
+  strictAssert.throws(() => parseBedrockModelCardHtml(reviewEndpointTable(['N/A', 'N/A']) + reviewFloor, reviewCardSource), error =>
+    error.message.includes(reviewCardSource) && error.message.includes('Model ID table'))
+})
+for (const id of ['n/a', 'N/A (see profiles)', 'not available', '']) {
+  reviewTest(`Endpoint table: Bedrock still rejects a non-N/A invalid Model ID: ${JSON.stringify(id)}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(reviewEndpointTable([id, 'anthropic.example-v1:0']) + reviewFloor, reviewCardSource), error =>
+      error.message.includes(reviewCardSource) && error.message.includes('invalid Model ID in row 2'))
+  })
+}
+const reviewKimiFields = '<p>Model launch date: 18th Sept 2026</p><p>EOL no sooner than: Not Applicable, at least 45 day EOL Notice will be provided</p><p>Legacy period: at least 45 days</p>'
+reviewTest('Free-text lifecycle: Bedrock skips a Kimi-style card without a day-precision date', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(reviewIdTable + reviewKimiFields, reviewCardSource), {
+    records: [], skipped: [{ source: reviewCardSource, ids: ['anthropic.example-v1:0'], reason: 'no day-precision date' }],
+  })
+})
+reviewTest('Free-text lifecycle: Bedrock treats a bare Not Applicable floor as no floor', () => {
+  strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: Not Applicable</p>`, reviewCardSource).skipped[0]?.reason, 'no day-precision date')
+  strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: not applicable</p>`, reviewCardSource).skipped[0]?.reason, 'no day-precision date')
+})
+for (const floor of ['TBD', 'Currently Not Applicable', 'Not Applicabled', 'N/A']) {
+  reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised floor: ${floor}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: ${floor}</p>`, reviewCardSource), /unrecognised EOL no sooner than date/)
+  })
+}
+reviewTest('Free-text lifecycle: Bedrock accepts an ordinal launch date alongside a valid floor', () => {
+  const expected = parseBedrockModelCardHtml(`${reviewCard}<p>Model launch date: September 18, 2026</p>`, reviewCardSource)
+  strictAssert.deepEqual(expected, parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  for (const launch of ['18th Sept 2026', '18 September 2026', '1st Sep 2026', '2nd Jan 2026', '3rd March 2026', '4TH SEPT 2026']) {
+    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Model launch date: ${launch}</p>`, reviewCardSource), expected)
+  }
+})
+for (const launch of ['Sometime 2026', '18th Smarch 2026', '18th Sept 26', '18th of Sept 2026', 'Sept 2026 18th']) {
+  reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised launch date: ${launch}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Model launch date: ${launch}</p>`, reviewCardSource), /unrecognised Model launch date/)
+  })
+}
+reviewTest('Free-text lifecycle: Bedrock rejects an ordinal launch date that is not a calendar date', () => {
+  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Model launch date: 30th Feb 2026</p>`, reviewCardSource), /invalid date/)
+})
 for (const [shape, comment] of [
   ['EOL paragraph', '<p>Model EOL date: December 1, 2026</p>'],
   ['ID table', reviewIdTable.replace('anthropic.example-v1:0', 'anthropic.other-v1:0')],

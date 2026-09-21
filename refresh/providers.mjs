@@ -629,9 +629,11 @@ function anthropicStatusDate(text, id, field, cellText = text) {
   return date
 }
 
+const ANTHROPIC_NO_RETIREMENT_PATTERN = /^(?:n\/a|to be announced)$/i
+
 function anthropicTentativeShutdown(text, id) {
   const value = plainText(text)
-  if (!value || /^n\/a$/i.test(value)) return undefined
+  if (!value || ANTHROPIC_NO_RETIREMENT_PATTERN.test(value)) return undefined
   const match = value.match(/^not sooner than\s+(.+)$/i)
   if (!match) throw new Error(`anthropic model status row ${id} has an unrecognised tentative retirement date: ${value}`)
   return anthropicStatusDate(match[1], id, 'tentative retirement date', value)
@@ -701,7 +703,7 @@ function parseAnthropicStatusTables(html, sourceUrl, announcements) {
         if (shutdown) Object.assign(item, { shutdown, date_precision: 'tentative' })
       } else {
         item.announced = anthropicStatusDate(deprecatedText, id, 'deprecated date')
-        if (!/^n\/a$/i.test(retirementText)) {
+        if (!ANTHROPIC_NO_RETIREMENT_PATTERN.test(retirementText)) {
           item.shutdown = anthropicStatusDate(retirementText, id, 'retirement date')
           if (item.shutdown < item.announced) {
             throw new Error(`anthropic model status row ${id} has retirement before deprecated date: ${retirementText}`)
