@@ -125,13 +125,16 @@ const directScopeJson = JSON.parse(directScope.out)
 assert(directScope.code === 1, 'direct scope still fails on direct/generic retired refs')
 assert(directScopeJson.findings.every(f => f.usage === 'direct-api' || f.usage === 'model-reference'), 'direct scope excludes cloud/gateway refs')
 
-// Distributor clock: on Azure, o3-deep-research is scheduled (Dec 2026), not retired,
-// until that date passes; assert it is never MORE severe than the publisher clock.
+// Distributor clock: the Azure row for o3-deep-research outlives the publisher
+// clock, so the expected dates come from the committed feed, not a pinned literal.
+const deepResearchEntry = JSON.parse(fs.readFileSync(path.join(root, 'feeds/openai.json'), 'utf8')).models.find(model => model.id === 'o3-deep-research-2025-06-26')
+const deepResearchAzure = deepResearchEntry?.distributions?.find(distribution => distribution.via === 'azure-ai-foundry')
+assert(assertIsoDate(deepResearchEntry?.shutdown) < assertIsoDate(deepResearchAzure?.shutdown), 'the committed Azure clock for o3-deep-research is later than the publisher clock')
 const b = run([path.join(root, 'test/fixture'), '--days', '30', '--via', 'azure-ai-foundry', '--json'])
 const bj = JSON.parse(b.out)
 const azure = bj.findings.find(f => f.id === 'o3-deep-research-2025-06-26')
 assert(azure?.via === 'azure-ai-foundry', 'azure distribution clock applied')
-assert(azure?.shutdown === '2026-12-26', 'azure shutdown date used')
+assert(azure?.shutdown === deepResearchAzure.shutdown, 'azure shutdown date used')
 
 {
   const azureProofDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-azure-proof-'))
@@ -141,8 +144,8 @@ assert(azure?.shutdown === '2026-12-26', 'azure shutdown date used')
     const publisherProof = run([azureProofDir, '--days', '90', '--json'])
     const azureFindings = JSON.parse(azureProof.out).findings
     const publisherFindings = JSON.parse(publisherProof.out).findings
-    assert([0, 1].includes(azureProof.code) && azureFindings.length === 1 && azureFindings[0].via === 'azure-ai-foundry' && azureFindings[0].shutdown === '2026-12-26', 'dated research consumer uses regenerated Azure shutdown with --via and --days 90')
-    assert(publisherProof.code === 1 && publisherFindings.length === 1 && publisherFindings[0].via === 'publisher' && publisherFindings[0].shutdown === '2026-07-23', 'the same dated research consumer uses OpenAI shutdown without --via')
+    assert([0, 1].includes(azureProof.code) && azureFindings.length === 1 && azureFindings[0].via === 'azure-ai-foundry' && azureFindings[0].shutdown === deepResearchAzure.shutdown, 'dated research consumer uses regenerated Azure shutdown with --via and --days 90')
+    assert(publisherProof.code === 1 && publisherFindings.length === 1 && publisherFindings[0].via === 'publisher' && publisherFindings[0].shutdown === deepResearchEntry.shutdown, 'the same dated research consumer uses OpenAI shutdown without --via')
   } finally {
     fs.rmSync(azureProofDir, { recursive: true, force: true })
   }
