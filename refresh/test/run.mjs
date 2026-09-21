@@ -2635,9 +2635,9 @@ const mixedCommitted = Object.fromEntries(['amazon', 'anthropic', 'cohere', 'goo
   JSON.parse(fs.readFileSync(path.join(root, 'feeds', `${publisher}.json`), 'utf8')),
 ]))
 assert(mixedOutputs.anthropic.generated === mixedGenerated && mixedOutputs.anthropic.generated !== mixedCommitted.anthropic.generated, 'mixed distributor write advances generated for the publisher with material distribution changes')
-const mixedCohereChanged = JSON.stringify({ ...mixedOutputs.cohere, generated: null }) !== JSON.stringify({ ...mixedCommitted.cohere, generated: null })
-assert(mixedCohereChanged ? mixedOutputs.cohere.generated === mixedGenerated : mixedOutputs.cohere.generated === mixedCommitted.cohere.generated, 'mixed distributor write advances generated for Cohere only when its distributions change')
-assert(['amazon', 'google', 'mistral', 'openai'].every(publisher => mixedOutputs[publisher].generated === mixedCommitted[publisher].generated), 'mixed distributor write preserves generated for every semantically unchanged publisher')
+const mixedChanged = publisher => JSON.stringify({ ...mixedOutputs[publisher], generated: null }) !== JSON.stringify({ ...mixedCommitted[publisher], generated: null })
+assert(Object.keys(mixedOutputs).every(publisher => mixedOutputs[publisher].generated === (mixedChanged(publisher) ? mixedGenerated : mixedCommitted[publisher].generated)), 'mixed distributor write advances generated exactly for the publishers whose feed changed')
+assert(Object.keys(mixedOutputs).some(publisher => !mixedChanged(publisher)), 'mixed distributor write leaves at least one publisher feed semantically unchanged')
 
 const refreshWorkflow = fs.readFileSync(path.join(root, '.github/workflows/feed-refresh.yml'), 'utf8')
 for (const [output, file] of [['providers', 'provider-diff.md'], ['distributors', 'distributor-diff.md']]) {
