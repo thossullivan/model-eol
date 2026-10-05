@@ -353,13 +353,24 @@ function bedrockCardFields(html) {
   return fields
 }
 
-const BEDROCK_LIFECYCLE_WORD = /(?<![a-z])(?:legacy|eol|e\.o\.l|retired|end[\s-]+of[\s-]+(?:life(?:cycle)?|support))(?![a-z])/i
+const BEDROCK_LIFECYCLE_WORD = /(?<![a-z0-9_])(?:legacy|eol|e\.o\.l|retired|end[\s-]+of[\s-]+(?:life(?:cycle)?|support))(?![a-z0-9_])/i
+
+function tagAttributes(tag) {
+  const values = new Map()
+  for (const match of tag.matchAll(/([^\s"'=<>\/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
+    values.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? '')
+  }
+  return values
+}
 
 function bedrockLifecycleCell(cell) {
-  if (cell.text.split(' ').every(isBedrockModelId)) return false
-  const labels = [...`${cell.attrs} ${cell.html}`.matchAll(/\b(?:alt|title|aria-label)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map(match => match[1] ?? match[2])
+  const words = text => text.split(/\s+/).filter(token => token && !(isBedrockModelId(token) && /^[a-z0-9_-]{2,}\./i.test(token)) && !/^https?:\/\//i.test(token)).join(' ')
+  const labels = [`<td ${cell.attrs}>`, ...[...stripComments(cell.html).matchAll(/<[a-z][^>]*>/gi)].map(match => match[0])].flatMap(tag => {
+    const attributes = tagAttributes(tag.replace(/^<[a-z0-9]+/i, '').replace(/\/?>$/, ''))
+    return ['alt', 'title', 'aria-label'].flatMap(name => attributes.has(name) ? [decodeEntities(attributes.get(name))] : [])
+  })
   const joined = decodeEntities(stripComments(cell.html).replace(/<[^>]*>/g, ''))
-  return [cell.text, joined, ...labels].some(text => BEDROCK_LIFECYCLE_WORD.test(decodeEntities(text)))
+  return [cell.text, joined, ...labels].some(text => BEDROCK_LIFECYCLE_WORD.test(words(text)))
 }
 
 function bedrockCardDate(value, label, allowMonth = false) {

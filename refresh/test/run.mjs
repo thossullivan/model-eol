@@ -1189,6 +1189,23 @@ reviewTest('PR 107 review: Bedrock does not read lifecycle words inside Model ID
     strictAssert.equal(parseBedrockModelCardHtml(`${table}<p>Model EOL date: January 1, 2028</p>`, reviewCardSource).records[0]?.status, 'active')
   }
 })
+reviewTest('PR 107 review pass 6: Bedrock does not read lifecycle words out of ids, URLs, digits, underscores, other attributes, or double-decoded entities', () => {
+  for (const cell of [
+    '<td>us.vendor.eol2-v1:0 N/A</td>', '<td>us.vendor.eol-v1:0 N/A</td>', '<td>us.vendor.legacy_model-v1:0 Not supported</td>',
+    '<th>EOL2 availability</th>', '<td>https://bedrock-mantle.{region}.api.aws/vendor/eol</td>', '<td>https://bedrock-mantle.{region}.api.aws/vendor/eol2</td>',
+    '<td><span data-title="Legacy status">Active</span></td>', `<td><img src='https://icons.example/x?alt="legacy"'>Supported</td>`,
+    '<td data-aria-label="EOL">Supported</td>', '<td>l&amp;#101;gacy</td>',
+    '<td><img src="icon-yes.png" alt="Green circle with check mark"></td>', '<td><img src="icon-no.png" alt="Red circle with X"></td>',
+  ]) {
+    const html = `${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr>${cell}</tr></table>`
+    strictAssert.equal(parseBedrockModelCardHtml(html, reviewCardSource).records[0]?.status, 'active', cell)
+  }
+})
+for (const cell of ['<td><img alt=Legacy></td>', '<td title=retired></td>', '<td><span aria-label=EOL></span></td>', "<td><img alt='Legacy (EOL: 2028-01-02)'></td>", '<td TITLE="Legacy">Supported</td>', '<td>E.O.L.: 2028-01-01</td>', '<td>e.o.l.: 2028-01-01</td>']) {
+  reviewTest(`PR 107 review pass 6: Bedrock detects a lifecycle word in an unquoted or differently cased attribute: ${cell}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr>${cell}</tr></table>`, reviewCardSource), /unrecognised region EOL/)
+  })
+}
 reviewTest('PR 107 review: Bedrock leaves the live regional status shapes that carry no EOL alone', () => {
   for (const cell of ['', 'Supported', 'Not supported', 'Active', 'us-east-1 (N. Virginia)', '<img src="icon-yes.png" alt="supported">']) {
     strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<table><tr><td>${cell}</td></tr></table>`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
