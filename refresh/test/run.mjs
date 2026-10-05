@@ -1157,7 +1157,8 @@ reviewTest('PR 107 review: Bedrock accepts a Model EOL date on or after the floo
 })
 for (const cell of ['legacy (EOL: 2028-01-01)', 'Legacy (EOL : 2028-01-01)', 'Legacy ( EOL: 2028-01-01)', 'LEGACY (eol: 2028-01-01)', 'Legacy(EOL: 2028-01-01)', 'Legacy (EOL: 2028-1-1)',
   'US East (N. Virginia): Legacy (EOL: 2028-01-01)', 'Legacy - EOL: 2028-01-01', 'Legacy (End of life: 2028-01-01)', 'EOL: 2028-01-01', 'End-of-life 2028-01-01',
-  'Legacy', 'Legacy model', 'Legacy (EOL)', 'Legacy (EOL policy)']) {
+  'Legacy', 'Legacy model', 'Legacy (EOL)', 'Legacy (EOL policy)',
+  'E.O.L.: 2028-01-01', 'End of lifecycle: 2028-01-01', 'End of support: 2028-01-01', 'Retired (2028-01-01)', 'Retired']) {
   reviewTest(`PR 107 review: Bedrock fails closed on any table cell that mentions legacy or EOL in another shape: ${cell}`, () => {
     const regional = `<table><tr><td>${cell}</td></tr></table>`
     for (const html of [`${reviewIdTable}<p>Model EOL date: January 1, 2028</p>${regional}`, reviewNoIdTable + regional]) {
@@ -1165,6 +1166,29 @@ for (const cell of ['legacy (EOL: 2028-01-01)', 'Legacy (EOL : 2028-01-01)', 'Le
     }
   })
 }
+for (const [shape, cell] of [
+  ['img alt text', '<td><img src="icon-legacy.png" alt="Legacy (EOL: 2028-01-02)"></td>'],
+  ['a td title', '<td title="Legacy (EOL: 2028-01-02)"></td>'],
+  ['an abbr title', '<td><abbr title="End of life: 2028-01-02">Retiring</abbr></td>'],
+  ['an aria-label', '<td><span aria-label="Legacy (EOL: 2028-01-02)"></span></td>'],
+  ['a row header', '<th scope="row">Legacy (EOL: 2028-01-02)</th>'],
+  ['split markup', '<td>Leg<span>acy</span> (E<em>OL</em>: 2028-01-02)</td>'],
+]) {
+  reviewTest(`PR 107 review: Bedrock does not let a regional EOL hide in ${shape}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr>${cell}</tr></table>`, reviewCardSource),
+      /unrecognised region EOL|region EOL 2028-01-02 differs/)
+  })
+}
+reviewTest('PR 107 review: Bedrock records a matching regional EOL from a row header as legacy', () => {
+  strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 2, 2028</p><table><tr><th scope="row">Legacy (EOL: 2028-01-02)</th></tr></table>`, reviewCardSource).records[0]?.status, 'legacy')
+})
+reviewTest('PR 107 review: Bedrock does not read lifecycle words inside Model ID and inference ID cells', () => {
+  for (const id of ['vendor.eol-model-v1:0', 'vendor.legacy-model-v1:0', 'vendor.retired-v1:0']) {
+    const table = `<table><tr><th>Model ID</th><th>Geo inference ID</th></tr><tr><td>${id}</td><td>us.${id} eu.${id}</td></tr></table>`
+    strictAssert.equal(parseBedrockModelCardHtml(table, reviewCardSource).skipped[0]?.reason, 'no lifecycle fields')
+    strictAssert.equal(parseBedrockModelCardHtml(`${table}<p>Model EOL date: January 1, 2028</p>`, reviewCardSource).records[0]?.status, 'active')
+  }
+})
 reviewTest('PR 107 review: Bedrock leaves the live regional status shapes that carry no EOL alone', () => {
   for (const cell of ['', 'Supported', 'Not supported', 'Active', 'us-east-1 (N. Virginia)', '<img src="icon-yes.png" alt="supported">']) {
     strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<table><tr><td>${cell}</td></tr></table>`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))

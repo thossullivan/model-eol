@@ -353,6 +353,15 @@ function bedrockCardFields(html) {
   return fields
 }
 
+const BEDROCK_LIFECYCLE_WORD = /(?<![a-z])(?:legacy|eol|e\.o\.l|retired|end[\s-]+of[\s-]+(?:life(?:cycle)?|support))(?![a-z])/i
+
+function bedrockLifecycleCell(cell) {
+  if (cell.text.split(' ').every(isBedrockModelId)) return false
+  const labels = [...`${cell.attrs} ${cell.html}`.matchAll(/\b(?:alt|title|aria-label)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map(match => match[1] ?? match[2])
+  const joined = decodeEntities(stripComments(cell.html).replace(/<[^>]*>/g, ''))
+  return [cell.text, joined, ...labels].some(text => BEDROCK_LIFECYCLE_WORD.test(decodeEntities(text)))
+}
+
 function bedrockCardDate(value, label, allowMonth = false) {
   if (allowMonth && BEDROCK_CARD_MONTH_ONLY.test(value)) return undefined
   if (!BEDROCK_CARD_DAY.test(value)) throw new Error(`unrecognised ${label} date: ${value}`)
@@ -383,7 +392,7 @@ export function parseBedrockModelCardHtml(html, source) {
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     const regionDates = []
     for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
-      if (cell.kind !== 'td' || !/\b(?:legacy|eol|end[\s-]+of[\s-]+life)\b/i.test(cell.text)) continue
+      if (!bedrockLifecycleCell(cell)) continue
       const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
       if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
       regionDates.push(assertIsoDate(match[1], 'region EOL'))
