@@ -1117,6 +1117,18 @@ reviewTest('Free-text lifecycle: Bedrock treats "Not announced." like N/A (GPT-6
     strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Model EOL date: ${eol}</p>`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
   }
 })
+const reviewRegionEol = '<table><tr><td>Legacy (EOL: 2028-01-01)</td></tr></table>'
+for (const eol of ['N/A', 'Not announced.', 'No sooner than 9/1/2027']) {
+  for (const [shape, extra] of [['alone', ''], ['with a launch date', '<p>Model launch date: September 29, 2026</p>'], ['with a floor', reviewFloor]]) {
+    reviewTest(`PR 107 review: Bedrock fails closed on a regional EOL without an exact Model EOL date (${eol}, ${shape})`, () => {
+      strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}${extra}<p>Model EOL date: ${eol}</p>${reviewRegionEol}`, reviewCardSource),
+        error => error.message.includes(reviewCardSource) && error.message.includes('region EOL 2028-01-01 without an exact Model EOL date'))
+    })
+  }
+}
+reviewTest('PR 107 review: Bedrock fails closed on a regional EOL with no Model EOL date field', () => {
+  strictAssert.throws(() => parseBedrockModelCardHtml(reviewIdTable + reviewRegionEol, reviewCardSource), /region EOL 2028-01-01 without an exact Model EOL date/)
+})
 for (const eol of ['Not yet announced', 'Not announced until 2027', 'TBA', 'Announced.']) {
   reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised Model EOL date: ${eol}`, () => {
     strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: ${eol}</p>`, reviewCardSource), /unrecognised Model EOL date/)

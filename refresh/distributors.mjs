@@ -383,7 +383,14 @@ export function parseBedrockModelCardHtml(html, source) {
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     if (!ids.size) return skip('no model ids')
     const eol = fields.get('Model EOL date')
-    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol))) return skip('no lifecycle fields')
+    const regionDates = []
+    for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
+      if (cell.kind !== 'td' || !cell.text.startsWith('Legacy (EOL:')) continue
+      const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
+      if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
+      regionDates.push(assertIsoDate(match[1], 'region EOL'))
+    }
+    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol)) && !regionDates.length) return skip('no lifecycle fields')
 
     const launch = fields.get('Model launch date')
     if (launch !== undefined) bedrockCardDate(launch.replace(BEDROCK_CARD_ORDINAL_DAY, '$2 $1, $3'), 'Model launch date', true)
@@ -406,15 +413,9 @@ export function parseBedrockModelCardHtml(html, source) {
         legacyField = true
       } else exact = bedrockCardDate(eol, 'Model EOL date')
     }
-    const regionDates = []
-    for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
-      if (cell.kind !== 'td' || !cell.text.startsWith('Legacy (EOL:')) continue
-      const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
-      if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
-      const date = assertIsoDate(match[1], 'region EOL')
-      if (exact && date !== exact) throw new Error(`region EOL ${date} differs from Model EOL date ${exact}`)
-      regionDates.push(date)
-    }
+    if (regionDates.length && !exact) throw new Error(`region EOL ${regionDates[0]} without an exact Model EOL date`)
+    const mismatch = regionDates.find(date => date !== exact)
+    if (mismatch) throw new Error(`region EOL ${mismatch} differs from Model EOL date ${exact}`)
     if (!exact && !candidates.length) return skip('no day-precision date')
     const payload = exact
       ? { shutdown: exact, status: regionDates.length || legacyField ? 'legacy' : 'active' }
