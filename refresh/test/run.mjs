@@ -1201,7 +1201,8 @@ reviewTest('PR 107 review pass 6: Bedrock does not read lifecycle words out of i
     strictAssert.equal(parseBedrockModelCardHtml(html, reviewCardSource).records[0]?.status, 'active', cell)
   }
 })
-for (const cell of ['<td><img alt=Legacy></td>', '<td title=retired></td>', '<td><span aria-label=EOL></span></td>', "<td><img alt='Legacy (EOL: 2028-01-02)'></td>", '<td TITLE="Legacy">Supported</td>', '<td>E.O.L.: 2028-01-01</td>', '<td>e.o.l.: 2028-01-01</td>']) {
+for (const cell of ['<td><img alt=Legacy></td>', '<td title=retired></td>', '<td><span aria-label=EOL></span></td>', "<td><img alt='Legacy (EOL: 2028-01-02)'></td>", '<td TITLE="Legacy">Supported</td>', '<td>E.O.L.: 2028-01-01</td>', '<td>e.o.l.: 2028-01-01</td>',
+  '<td><img alt="Legacy > Active"></td>', "<td><img title='Supported > EOL'></td>"]) {
   reviewTest(`PR 107 review pass 6: Bedrock detects a lifecycle word in an unquoted or differently cased attribute: ${cell}`, () => {
     strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr>${cell}</tr></table>`, reviewCardSource), /unrecognised region EOL/)
   })

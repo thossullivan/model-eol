@@ -365,7 +365,7 @@ function tagAttributes(tag) {
 
 function bedrockLifecycleCell(cell) {
   const words = text => text.split(/\s+/).filter(token => token && !(isBedrockModelId(token) && /^[a-z0-9_-]{2,}\./i.test(token)) && !/^https?:\/\//i.test(token)).join(' ')
-  const labels = [`<td ${cell.attrs}>`, ...[...stripComments(cell.html).matchAll(/<[a-z][^>]*>/gi)].map(match => match[0])].flatMap(tag => {
+  const labels = [`<td ${cell.attrs}>`, ...[...stripComments(cell.html).matchAll(/<[a-z](?:"[^"]*"|'[^']*'|[^"'>])*>/gi)].map(match => match[0])].flatMap(tag => {
     const attributes = tagAttributes(tag.replace(/^<[a-z0-9]+/i, '').replace(/\/?>$/, ''))
     return ['alt', 'title', 'aria-label'].flatMap(name => attributes.has(name) ? [decodeEntities(attributes.get(name))] : [])
   })
