@@ -369,7 +369,7 @@ function bedrockLifecycleCell(cell) {
     const attributes = tagAttributes(tag.replace(/^<[a-z0-9]+/i, '').replace(/\/?>$/, ''))
     return ['alt', 'title', 'aria-label'].flatMap(name => attributes.has(name) ? [decodeEntities(attributes.get(name))] : [])
   })
-  const joined = decodeEntities(stripComments(cell.html).replace(/<[^>]*>/g, ''))
+  const joined = decodeEntities(stripComments(cell.html).replace(/<[^>]*>/g, '').replace(/[<>]/g, ' '))
   return [cell.text, joined, ...labels].some(text => BEDROCK_LIFECYCLE_WORD.test(words(text)))
 }
 
