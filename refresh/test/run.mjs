@@ -1155,13 +1155,26 @@ reviewTest('PR 107 review: Bedrock accepts a Model EOL date on or after the floo
   }
   strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: Sep 2027</p><p>Model EOL date: August 31, 2027</p>`, reviewCardSource).records[0]?.shutdown, '2027-08-31')
 })
+for (const cell of ['legacy (EOL: 2028-01-01)', 'Legacy (EOL : 2028-01-01)', 'Legacy ( EOL: 2028-01-01)', 'LEGACY (eol: 2028-01-01)', 'Legacy(EOL: 2028-01-01)', 'Legacy (EOL: 2028-1-1)']) {
+  reviewTest(`PR 107 review: Bedrock rejects a regional EOL near-match: ${cell}`, () => {
+    const regional = `<table><tr><td>${cell}</td></tr></table>`
+    for (const html of [`${reviewIdTable}<p>Model EOL date: January 1, 2028</p>${regional}`, reviewNoIdTable + regional]) {
+      strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unrecognised region EOL/)
+    }
+  })
+}
+reviewTest('PR 107 review: Bedrock leaves table cells that are not regional EOLs alone', () => {
+  for (const cell of ['Legacy', 'Legacy model', 'Active']) {
+    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<table><tr><td>${cell}</td></tr></table>`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  }
+})
 reviewTest('PR 107 review: Bedrock accepts Legacy periods whose number and unit agree', () => {
   const expected = parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: at least 6 months</p>`, reviewCardSource)
-  for (const period of ['1 month', '1 day', 'at least 1 month', '2 days', '10 days', '12 months', 'at least 45 days']) {
+  for (const period of ['1 month', '1 day', 'at least 1 month', '2 days', '10 days', '12 months', 'at least 45 days', '999 days']) {
     strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: ${period}</p>`, reviewCardSource), expected)
   }
 })
-for (const period of ['1 days', '1 months', 'at least 1 days', '2 month', '6 day', '0 days', '0 months', 'at least 0 days', '01 months', '00 days']) {
+for (const period of ['1 days', '1 months', 'at least 1 days', '2 month', '6 day', '0 days', '0 months', 'at least 0 days', '01 months', '00 days', '1000 days', 'at least 9999 months']) {
   reviewTest(`PR 107 review: Bedrock rejects a Legacy period whose number and unit disagree or are zero: ${period}`, () => {
     strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: ${period}</p>`, reviewCardSource), /unrecognised Legacy period/)
   })

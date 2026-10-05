@@ -383,7 +383,7 @@ export function parseBedrockModelCardHtml(html, source) {
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     const regionDates = []
     for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
-      if (cell.kind !== 'td' || !cell.text.startsWith('Legacy (EOL:')) continue
+      if (cell.kind !== 'td' || !/^legacy\s*\(\s*eol\b/i.test(cell.text)) continue
       const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
       if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
       regionDates.push(assertIsoDate(match[1], 'region EOL'))
@@ -395,7 +395,7 @@ export function parseBedrockModelCardHtml(html, source) {
     const launch = fields.get('Model launch date')
     if (launch !== undefined) bedrockCardDate(launch.replace(BEDROCK_CARD_ORDINAL_DAY, '$2 $1, $3'), 'Model launch date', true)
     const period = fields.get('Legacy period')
-    if (period !== undefined && !/^(?:at least )?(?:1 (?:month|day)|(?:[2-9]|[1-9]\d+) (?:months|days))$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
+    if (period !== undefined && !/^(?:at least )?(?:1 (?:month|day)|(?:[2-9]|[1-9]\d{1,2}) (?:months|days))$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
     const floor = fields.get('EOL no sooner than')
     const candidates = []
     let floorDate
