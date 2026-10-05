@@ -331,6 +331,7 @@ const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy 
 const BEDROCK_CARD_MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
 const BEDROCK_CARD_DAY = new RegExp(`^${BEDROCK_CARD_MONTH} \\d{1,2}, (?:19|20)\\d{2}$`, 'i')
 const BEDROCK_CARD_MONTH_ONLY = new RegExp(`^${BEDROCK_CARD_MONTH} (?:19|20)\\d{2}$`, 'i')
+const BEDROCK_CARD_NO_EOL = /^(?:N\/A|Not announced\.?)$/
 const BEDROCK_CARD_ORDINAL_DAY = new RegExp(`^(\\d{1,2})(?:st|nd|rd|th)? (${BEDROCK_CARD_MONTH}) ((?:19|20)\\d{2})$`, 'i')
 
 function bedrockCardFields(html) {
@@ -350,6 +351,26 @@ function bedrockCardFields(html) {
     if (count !== Number(fields.has(label))) throw new Error(`unaccounted ${label} field outside its paragraph`)
   }
   return fields
+}
+
+const BEDROCK_LIFECYCLE_WORD = /(?<![a-z0-9_])(?:legacy|eol|e\.o\.l|retired|end[\s-]+of[\s-]+(?:life(?:cycle)?|support))(?![a-z0-9_])/i
+
+function tagAttributes(tag) {
+  const values = new Map()
+  for (const match of tag.matchAll(/([^\s"'=<>\/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
+    values.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? '')
+  }
+  return values
+}
+
+function bedrockLifecycleCell(cell) {
+  const words = text => text.split(/\s+/).filter(token => token && !(isBedrockModelId(token) && /^[a-z0-9_-]{2,}\./i.test(token)) && !/^https?:\/\//i.test(token)).join(' ')
+  const labels = [`<td ${cell.attrs}>`, ...[...stripComments(cell.html).matchAll(/<[a-z](?:"[^"]*"|'[^']*'|[^"'>])*>/gi)].map(match => match[0])].flatMap(tag => {
+    const attributes = tagAttributes(tag.replace(/^<[a-z0-9]+/i, '').replace(/\/?>$/, ''))
+    return ['alt', 'title', 'aria-label'].flatMap(name => attributes.has(name) ? [decodeEntities(attributes.get(name))] : [])
+  })
+  const joined = stripComments(cell.html).split(/<[^>]*>/).map(decodeEntities).join('')
+  return [cell.text, joined, ...labels].some(text => BEDROCK_LIFECYCLE_WORD.test(words(text)))
 }
 
 function bedrockCardDate(value, label, allowMonth = false) {
@@ -380,23 +401,31 @@ export function parseBedrockModelCardHtml(html, source) {
     }
     const fields = bedrockCardFields(html)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
+    const regionDates = []
+    for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
+      if (!bedrockLifecycleCell(cell)) continue
+      const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
+      if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
+      regionDates.push(assertIsoDate(match[1], 'region EOL'))
+    }
     if (!ids.size) return skip('no model ids')
     const eol = fields.get('Model EOL date')
-    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || eol === 'N/A')) return skip('no lifecycle fields')
+    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol)) && !regionDates.length) return skip('no lifecycle fields')
 
     const launch = fields.get('Model launch date')
     if (launch !== undefined) bedrockCardDate(launch.replace(BEDROCK_CARD_ORDINAL_DAY, '$2 $1, $3'), 'Model launch date', true)
     const period = fields.get('Legacy period')
-    if (period !== undefined && !/^at least \d+ (?:months?|days)$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
+    if (period !== undefined && !/^(?:at least )?(?:1 (?:month|day)|(?:[2-9]|[1-9]\d{1,2}) (?:months|days))$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
     const floor = fields.get('EOL no sooner than')
     const candidates = []
+    let floorDate
     if (floor !== undefined && !/^(?:n\/a|not applicable)\b/i.test(floor)) {
-      const date = bedrockCardDate(floor, 'EOL no sooner than', true)
-      if (date) candidates.push(date)
+      floorDate = bedrockCardDate(floor, 'EOL no sooner than', true)
+      if (floorDate) candidates.push(floorDate)
     }
     let exact
     let legacyField = false
-    if (eol !== undefined && eol !== 'N/A') {
+    if (eol !== undefined && !BEDROCK_CARD_NO_EOL.test(eol)) {
       const us = eol.match(/^No sooner than (\d{1,2})\/(\d{1,2})\/((?:19|20)\d{2})$/)
       const legacy = eol.match(/^Legacy: (.+)$/)
       if (us) candidates.push(assertIsoDate(`${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`, 'Model EOL date'))
@@ -405,15 +434,10 @@ export function parseBedrockModelCardHtml(html, source) {
         legacyField = true
       } else exact = bedrockCardDate(eol, 'Model EOL date')
     }
-    const regionDates = []
-    for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
-      if (cell.kind !== 'td' || !cell.text.startsWith('Legacy (EOL:')) continue
-      const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
-      if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
-      const date = assertIsoDate(match[1], 'region EOL')
-      if (exact && date !== exact) throw new Error(`region EOL ${date} differs from Model EOL date ${exact}`)
-      regionDates.push(date)
-    }
+    if (exact && floorDate && exact < floorDate) throw new Error(`Model EOL date ${exact} precedes EOL no sooner than ${floorDate}`)
+    if (regionDates.length && !exact) throw new Error(`region EOL ${regionDates[0]} without an exact Model EOL date`)
+    const mismatch = regionDates.find(date => date !== exact)
+    if (mismatch) throw new Error(`region EOL ${mismatch} differs from Model EOL date ${exact}`)
     if (!exact && !candidates.length) return skip('no day-precision date')
     const payload = exact
       ? { shutdown: exact, status: regionDates.length || legacyField ? 'legacy' : 'active' }
