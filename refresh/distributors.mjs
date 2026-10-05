@@ -381,8 +381,6 @@ export function parseBedrockModelCardHtml(html, source) {
     }
     const fields = bedrockCardFields(html)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
-    if (!ids.size) return skip('no model ids')
-    const eol = fields.get('Model EOL date')
     const regionDates = []
     for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
       if (cell.kind !== 'td' || !cell.text.startsWith('Legacy (EOL:')) continue
@@ -390,17 +388,20 @@ export function parseBedrockModelCardHtml(html, source) {
       if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
       regionDates.push(assertIsoDate(match[1], 'region EOL'))
     }
+    if (!ids.size) return skip('no model ids')
+    const eol = fields.get('Model EOL date')
     if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol)) && !regionDates.length) return skip('no lifecycle fields')
 
     const launch = fields.get('Model launch date')
     if (launch !== undefined) bedrockCardDate(launch.replace(BEDROCK_CARD_ORDINAL_DAY, '$2 $1, $3'), 'Model launch date', true)
     const period = fields.get('Legacy period')
-    if (period !== undefined && !/^(?:at least )?\d+ (?:months?|days)$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
+    if (period !== undefined && !/^(?:at least )?(?:1 (?:month|day)|(?:[2-9]|[1-9]\d+) (?:months|days))$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
     const floor = fields.get('EOL no sooner than')
     const candidates = []
+    let floorDate
     if (floor !== undefined && !/^(?:n\/a|not applicable)\b/i.test(floor)) {
-      const date = bedrockCardDate(floor, 'EOL no sooner than', true)
-      if (date) candidates.push(date)
+      floorDate = bedrockCardDate(floor, 'EOL no sooner than', true)
+      if (floorDate) candidates.push(floorDate)
     }
     let exact
     let legacyField = false
@@ -413,6 +414,7 @@ export function parseBedrockModelCardHtml(html, source) {
         legacyField = true
       } else exact = bedrockCardDate(eol, 'Model EOL date')
     }
+    if (exact && floorDate && exact < floorDate) throw new Error(`Model EOL date ${exact} precedes EOL no sooner than ${floorDate}`)
     if (regionDates.length && !exact) throw new Error(`region EOL ${regionDates[0]} without an exact Model EOL date`)
     const mismatch = regionDates.find(date => date !== exact)
     if (mismatch) throw new Error(`region EOL ${mismatch} differs from Model EOL date ${exact}`)
