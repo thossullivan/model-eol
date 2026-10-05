@@ -1155,16 +1155,18 @@ reviewTest('PR 107 review: Bedrock accepts a Model EOL date on or after the floo
   }
   strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: Sep 2027</p><p>Model EOL date: August 31, 2027</p>`, reviewCardSource).records[0]?.shutdown, '2027-08-31')
 })
-for (const cell of ['legacy (EOL: 2028-01-01)', 'Legacy (EOL : 2028-01-01)', 'Legacy ( EOL: 2028-01-01)', 'LEGACY (eol: 2028-01-01)', 'Legacy(EOL: 2028-01-01)', 'Legacy (EOL: 2028-1-1)']) {
-  reviewTest(`PR 107 review: Bedrock rejects a regional EOL near-match: ${cell}`, () => {
+for (const cell of ['legacy (EOL: 2028-01-01)', 'Legacy (EOL : 2028-01-01)', 'Legacy ( EOL: 2028-01-01)', 'LEGACY (eol: 2028-01-01)', 'Legacy(EOL: 2028-01-01)', 'Legacy (EOL: 2028-1-1)',
+  'US East (N. Virginia): Legacy (EOL: 2028-01-01)', 'Legacy - EOL: 2028-01-01', 'Legacy (End of life: 2028-01-01)', 'EOL: 2028-01-01', 'End-of-life 2028-01-01',
+  'Legacy', 'Legacy model', 'Legacy (EOL)', 'Legacy (EOL policy)']) {
+  reviewTest(`PR 107 review: Bedrock fails closed on any table cell that mentions legacy or EOL in another shape: ${cell}`, () => {
     const regional = `<table><tr><td>${cell}</td></tr></table>`
     for (const html of [`${reviewIdTable}<p>Model EOL date: January 1, 2028</p>${regional}`, reviewNoIdTable + regional]) {
       strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unrecognised region EOL/)
     }
   })
 }
-reviewTest('PR 107 review: Bedrock leaves table cells that are not regional EOLs alone', () => {
-  for (const cell of ['Legacy', 'Legacy model', 'Active']) {
+reviewTest('PR 107 review: Bedrock leaves the live regional status shapes that carry no EOL alone', () => {
+  for (const cell of ['', 'Supported', 'Not supported', 'Active', 'us-east-1 (N. Virginia)', '<img src="icon-yes.png" alt="supported">']) {
     strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<table><tr><td>${cell}</td></tr></table>`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
   }
 })

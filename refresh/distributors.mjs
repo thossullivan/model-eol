@@ -383,7 +383,7 @@ export function parseBedrockModelCardHtml(html, source) {
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     const regionDates = []
     for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
-      if (cell.kind !== 'td' || !/^legacy\s*\(\s*eol\b/i.test(cell.text)) continue
+      if (cell.kind !== 'td' || !/\b(?:legacy|eol|end[\s-]+of[\s-]+life)\b/i.test(cell.text)) continue
       const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
       if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
       regionDates.push(assertIsoDate(match[1], 'region EOL'))
