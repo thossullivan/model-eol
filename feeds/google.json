@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-09-21T15:02:11.423Z",
+  "generated": "2026-10-05T18:22:56.859Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -305,17 +305,27 @@
     },
     {
       "id": "gemini-3.1-flash-tts-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "replacement_options": [
+        "gemini-3.8-flash-tts",
+        "gemini-3.8-flash-lite-tts"
+      ]
     },
     {
       "id": "gemini-2.5-flash-preview-tts",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "replacement": "gemini-3.1-flash-tts-preview"
+      "replacement_options": [
+        "gemini-3.8-flash-tts",
+        "gemini-3.8-flash-lite-tts"
+      ]
     },
     {
       "id": "gemini-2.5-pro-preview-tts",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "replacement": "gemini-3.1-flash-tts-preview"
+      "replacement_options": [
+        "gemini-3.8-flash-tts",
+        "gemini-3.8-flash-lite-tts"
+      ]
     },
     {
       "id": "gemini-embedding-2",
@@ -484,15 +494,24 @@
     },
     {
       "id": "veo-3.1-lite-generate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-10-22",
+      "date_precision": "earliest",
+      "replacement": "gemini-omni-1.1-flash"
     },
     {
       "id": "veo-3.1-generate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-10-22",
+      "date_precision": "earliest",
+      "replacement": "gemini-omni-1.1-flash"
     },
     {
       "id": "veo-3.1-fast-generate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-10-22",
+      "date_precision": "earliest",
+      "replacement": "gemini-omni-1.1-flash"
     },
     {
       "id": "veo-3.0-generate-preview",
@@ -579,16 +598,17 @@
     },
     {
       "id": "gemini-omni-flash-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-09-30",
-      "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash"
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
     },
     {
       "id": "gemini-robotics-er-2-preview"
     },
     {
-      "id": "gemini-2.5-computer-use-preview-10-2025"
+      "id": "gemini-2.5-computer-use-preview-10-2025",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "shutdown": "2026-07-28",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.8-flash"
     },
     {
       "id": "antigravity-preview-05-2026"
@@ -665,6 +685,17 @@
     },
     {
       "id": "antigravity-preview-09-2026"
+    },
+    {
+      "id": "gemini-3.8-flash-tts",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "gemini-3.8-flash-lite-tts",
+      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+    },
+    {
+      "id": "antigravity-preview-latest"
     }
   ]
 }

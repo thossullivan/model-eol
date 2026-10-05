@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "mistral",
-  "generated": "2026-09-09T00:49:46.824Z",
+  "generated": "2026-10-05T18:22:56.995Z",
   "source": "https://docs.mistral.ai/models",
   "models": [
     {
@@ -315,6 +315,26 @@
       "announced": "2024-11-30",
       "shutdown": "2025-03-30",
       "replacement_note": "Mistral lists Mistral Small 4 as the alternative"
+    },
+    {
+      "id": "zai-glm-5-2",
+      "announced": "2026-09-29",
+      "shutdown": "2026-10-31",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Z.ai GLM 5.3 as the alternative"
+    },
+    {
+      "id": "labs-leanstral-1-5",
+      "announced": "2026-09-29",
+      "shutdown": "2026-09-30",
+      "source": "https://docs.mistral.ai/models"
+    },
+    {
+      "id": "mistral-ocr-4-0",
+      "announced": "2026-09-29",
+      "shutdown": "2026-09-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists OCR 4.1 as the alternative"
     }
   ]
 }
