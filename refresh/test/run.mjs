@@ -1053,6 +1053,17 @@ reviewTest('Free-text lifecycle: Bedrock treats a bare Not Applicable floor as n
   strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: not applicable</p>`, reviewCardSource).skipped[0]?.reason, 'no day-precision date')
   strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: N/A</p>`, reviewCardSource).skipped[0]?.reason, 'no day-precision date')
 })
+reviewTest('Free-text lifecycle: Bedrock accepts a Legacy period without "at least" (Claude 5.5 cards)', () => {
+  const expected = parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: at least 6 months</p>`, reviewCardSource)
+  for (const period of ['6 months', '1 month', '45 days']) {
+    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: ${period}</p>`, reviewCardSource), expected)
+  }
+})
+for (const period of ['TBD', 'six months', '6 weeks', 'at least', 'up to 6 months', '6 months minimum']) {
+  reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised Legacy period: ${period}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: ${period}</p>`, reviewCardSource), /unrecognised Legacy period/)
+  })
+}
 for (const floor of ['TBD', 'Currently Not Applicable', 'Not Applicabled', 'NA']) {
   reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised floor: ${floor}`, () => {
     strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: ${floor}</p>`, reviewCardSource), /unrecognised EOL no sooner than date/)
@@ -1095,6 +1106,20 @@ for (const [eol, payload] of [
     strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: ${eol}</p>`, reviewCardSource), {
       records: [{ bedrockId: 'anthropic.example-v1:0', ...payload, source: reviewCardSource }], skipped: [],
     })
+  })
+}
+reviewTest('Free-text lifecycle: Bedrock treats "Not announced." like N/A (GPT-6.1 Sol card)', () => {
+  for (const eol of ['Not announced.', 'Not announced']) {
+    strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: ${eol}</p>`, reviewCardSource).skipped[0]?.reason, 'no lifecycle fields')
+    strictAssert.deepEqual(
+      parseBedrockModelCardHtml(`${reviewIdTable}<p>Model launch date: September 29, 2026</p><p>Model EOL date: ${eol}</p>`, reviewCardSource),
+      parseBedrockModelCardHtml(`${reviewIdTable}<p>Model launch date: September 29, 2026</p><p>Model EOL date: N/A</p>`, reviewCardSource))
+    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Model EOL date: ${eol}</p>`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  }
+})
+for (const eol of ['Not yet announced', 'Not announced until 2027', 'TBA', 'Announced.']) {
+  reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised Model EOL date: ${eol}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: ${eol}</p>`, reviewCardSource), /unrecognised Model EOL date/)
   })
 }
 reviewTest('Second pass F3: Bedrock validates a standalone EOL and skips only absent or N/A lifecycle fields', () => {

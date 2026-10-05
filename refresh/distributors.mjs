@@ -331,6 +331,7 @@ const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy 
 const BEDROCK_CARD_MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
 const BEDROCK_CARD_DAY = new RegExp(`^${BEDROCK_CARD_MONTH} \\d{1,2}, (?:19|20)\\d{2}$`, 'i')
 const BEDROCK_CARD_MONTH_ONLY = new RegExp(`^${BEDROCK_CARD_MONTH} (?:19|20)\\d{2}$`, 'i')
+const BEDROCK_CARD_NO_EOL = /^(?:N\/A|Not announced\.?)$/
 const BEDROCK_CARD_ORDINAL_DAY = new RegExp(`^(\\d{1,2})(?:st|nd|rd|th)? (${BEDROCK_CARD_MONTH}) ((?:19|20)\\d{2})$`, 'i')
 
 function bedrockCardFields(html) {
@@ -382,12 +383,12 @@ export function parseBedrockModelCardHtml(html, source) {
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     if (!ids.size) return skip('no model ids')
     const eol = fields.get('Model EOL date')
-    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || eol === 'N/A')) return skip('no lifecycle fields')
+    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol))) return skip('no lifecycle fields')
 
     const launch = fields.get('Model launch date')
     if (launch !== undefined) bedrockCardDate(launch.replace(BEDROCK_CARD_ORDINAL_DAY, '$2 $1, $3'), 'Model launch date', true)
     const period = fields.get('Legacy period')
-    if (period !== undefined && !/^at least \d+ (?:months?|days)$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
+    if (period !== undefined && !/^(?:at least )?\d+ (?:months?|days)$/.test(period)) throw new Error(`unrecognised Legacy period: ${period}`)
     const floor = fields.get('EOL no sooner than')
     const candidates = []
     if (floor !== undefined && !/^(?:n\/a|not applicable)\b/i.test(floor)) {
@@ -396,7 +397,7 @@ export function parseBedrockModelCardHtml(html, source) {
     }
     let exact
     let legacyField = false
-    if (eol !== undefined && eol !== 'N/A') {
+    if (eol !== undefined && !BEDROCK_CARD_NO_EOL.test(eol)) {
       const us = eol.match(/^No sooner than (\d{1,2})\/(\d{1,2})\/((?:19|20)\d{2})$/)
       const legacy = eol.match(/^Legacy: (.+)$/)
       if (us) candidates.push(assertIsoDate(`${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`, 'Model EOL date'))
