@@ -3089,6 +3089,28 @@ reviewTest('2026-10-18 shapes: Bedrock lifecycle keeps the earliest deadline acr
   const noRegions = `<table><tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th></tr><tr><td>amazon.split-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>—</td></tr><tr><td>amazon.split-v1:0</td><td>April 1, 2026</td><td>October 1, 2026</td><td>—</td></tr></table>`
   strictAssert.throws(() => parseBedrockLifecycleHtml(noRegions), /conflicting rows for amazon.split-v1:0/)
 })
+reviewTest('2026-10-18 review: disjoint region groups merge each field to its earliest value and the furthest phase', () => {
+  const rows = [
+    ['Example', 'Model', 'a.m-v1:0', 'us-east-1', 'January 1, 2026', 'December 1, 2026', 'March 1, 2026'],
+    ['Example', 'Model', 'a.m-v1:0', 'eu-west-1', 'June 1, 2026', 'October 1, 2026', 'To be announced'],
+  ]
+  for (const order of [rows, [...rows].reverse()]) {
+    strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable(order)), [{ bedrockId: 'a.m-v1:0', status: 'extended-access', legacy: '2026-01-01', eol: '2026-10-01' }])
+  }
+})
+reviewTest('2026-10-18 review: region groups with non-region-code tokens never merge different dates', () => {
+  for (const regions of [['us-east-1', 'us-east-1*'], ['All Regions', 'us-gov-west-1']]) {
+    const rows = [
+      ['Example', 'Model', 'a.m-v1:0', regions[0], 'January 1, 2026', 'December 1, 2026', '—'],
+      ['Example', 'Model', 'a.m-v1:0', regions[1], 'June 1, 2026', 'October 1, 2026', '—'],
+    ]
+    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable(rows)), /conflicting rows for a.m-v1:0/)
+  }
+})
+reviewTest('2026-10-18 review: disjoint region groups with an explicit retired status still conflict', () => {
+  const table = `<table><tr><th>Model ID</th><th>Regions</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th><th>Status</th></tr><tr><td>a.m-v1:0</td><td>us-east-1</td><td>January 1, 2026</td><td>July 1, 2026</td><td>March 1, 2026</td><td>EOL</td></tr><tr><td>a.m-v1:0</td><td>eu-west-1</td><td>June 1, 2026</td><td>October 1, 2026</td><td>—</td><td>Legacy</td></tr></table>`
+  strictAssert.throws(() => parseBedrockLifecycleHtml(table), /conflicting rows for a.m-v1:0/)
+})
 const shapesOpenAIPage = cell => `<h2>2026-10-14: GPT-4 series model deprecations</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>January 14, 2027</td><td>${cell}</td><td><code>gpt-6-luna</code></td></tr></table>`
 reviewTest('2026-10-18 shapes: OpenAI splits a row that lists several dated snapshots into one record each', () => {
   strictAssert.deepEqual(parseOpenAIDeprecations(shapesOpenAIPage('GPT-4o ( <code>gpt-4o-2024-08-06</code> , <code>gpt-4o-2024-11-20</code> )')).map(record => [record.id, record.aliases, record.shutdown, record.replacement]),
@@ -3097,6 +3119,11 @@ reviewTest('2026-10-18 shapes: OpenAI splits a row that lists several dated snap
 })
 reviewTest('2026-10-18 shapes: OpenAI fails closed when several dated snapshots share an undated alias', () => {
   strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')), /ambiguous alias gpt-4o/)
+})
+reviewTest('2026-10-18 review: an OpenAI endpoint row with several dated snapshots is skipped, not fatal', () => {
+  const page = shapesOpenAIPage('<code>/v1/foo</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')
+    + '<h2>2026-10-15: Other</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>January 14, 2027</td><td><code>gpt-4.1-2025-04-14</code></td><td><code>gpt-6-luna</code></td></tr></table>'
+  strictAssert.deepEqual(parseOpenAIDeprecations(page).map(record => record.id), ['gpt-4.1-2025-04-14'])
 })
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')

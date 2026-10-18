@@ -475,9 +475,11 @@ function openAIModelIds(fragment) {
   if (!tokens.length) return undefined
   const dated = tokens.filter(token => /\b(?:19|20)\d{2}[-_]\d{2}[-_]\d{2}\b/.test(token))
   if (dated.length > 1) {
-    const undated = tokens.find(token => !dated.includes(token))
-    if (undated) throw new Error(`openai deprecations row lists snapshots ${dated.join(', ')} with ambiguous alias ${undated}`)
-    return dated.map(id => ({ id, aliases: [] }))
+    const undated = tokens.filter(token => !dated.includes(token))
+    const ambiguous = undated.find(token => MODEL_ID_PATTERN.test(token))
+    if (ambiguous) throw new Error(`openai deprecations row lists snapshots ${dated.join(', ')} with ambiguous alias ${ambiguous}`)
+    // Non-model tokens stay attached so the caller skips the row as an endpoint or product row.
+    return dated.map((id, index) => ({ id, aliases: index ? [] : undated }))
   }
   const canonical = dated[0] ?? tokens[0]
   return [{

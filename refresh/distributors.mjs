@@ -197,9 +197,14 @@ function mergeRegionalBedrockRecord(left, right) {
   }
   if (left.legacy !== right.legacy || left.eol !== right.eol) {
     if (!leftRegions || !rightRegions || !left.eol || !right.eol || leftRegions.some(region => rightRegions.includes(region))) return undefined
-    // Disjoint region groups: keep the earliest deadline so no region is warned late.
-    const earliest = [left, right].sort((a, b) => a.eol.localeCompare(b.eol) || (a.legacy ?? '').localeCompare(b.legacy ?? ''))[0]
-    return withRegions({ ...earliest })
+    const statuses = new Set([left.status, right.status])
+    if ([...statuses].some(status => status !== 'legacy' && status !== 'extended-access')) return undefined
+    // Disjoint region groups: take each field's earliest value and the furthest phase so no region is warned late.
+    const merged = { bedrockId: left.bedrockId, status: statuses.has('extended-access') ? 'extended-access' : 'legacy' }
+    const legacy = [left.legacy, right.legacy].filter(Boolean).sort()[0]
+    if (legacy !== undefined) merged.legacy = legacy
+    merged.eol = [left.eol, right.eol].sort()[0]
+    return withRegions(merged)
   }
   if (left.status === right.status) return withRegions({ ...left })
   const statuses = new Set([left.status, right.status])
@@ -290,7 +295,8 @@ export function parseBedrockLifecycleHtml(html) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} reports extended access without a start date`)
       }
       const regionsCell = headers.regions >= 0 ? row.cells[headers.regions + offset] : undefined
-      const regions = regionsCell?.text.split(',').map(region => region.trim()).filter(Boolean)
+      const regionCodes = regionsCell?.text.split(',').map(region => region.trim()).filter(Boolean)
+      const regions = regionCodes?.every(region => /^[a-z]{2}(?:-gov)?-[a-z]+-\d+$/.test(region)) ? regionCodes : undefined
       for (const id of model.ids) {
         const record = { bedrockId: id, status }
         if (legacy !== undefined) record.legacy = legacy
