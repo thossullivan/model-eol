@@ -1156,7 +1156,7 @@ reviewTest('PR 107 review: Bedrock accepts a Model EOL date on or after the floo
   strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: Sep 2027</p><p>Model EOL date: August 31, 2027</p>`, reviewCardSource).records[0]?.shutdown, '2027-08-31')
 })
 for (const cell of ['legacy (EOL: 2028-01-01)', 'Legacy (EOL : 2028-01-01)', 'Legacy ( EOL: 2028-01-01)', 'LEGACY (eol: 2028-01-01)', 'Legacy(EOL: 2028-01-01)', 'Legacy (EOL: 2028-1-1)',
-  'US East (N. Virginia): Legacy (EOL: 2028-01-01)', 'Legacy - EOL: 2028-01-01', 'Legacy (End of life: 2028-01-01)', 'EOL: 2028-01-01', 'End-of-life 2028-01-01',
+  'US East (N. Virginia): Legacy (EOL: 2028-01-01)', 'Legacy - EOL: 2028-01-01', 'Legacy (End of life: 2028-01-01)', 'End-of-life 2028-01-01',
   'Legacy', 'Legacy model', 'Legacy (EOL)', 'Legacy (EOL policy)',
   'E.O.L.: 2028-01-01', 'End of lifecycle: 2028-01-01', 'End of support: 2028-01-01', 'Retired (2028-01-01)', 'Retired']) {
   reviewTest(`PR 107 review: Bedrock fails closed on any table cell that mentions legacy or EOL in another shape: ${cell}`, () => {
@@ -3053,6 +3053,58 @@ const malformedStatusOut = path.join(malformedStatusDir, 'out')
 const malformedStatusRun = run(['--provider', 'anthropic', '--check', '--out', malformedStatusOut, '--fixtures', malformedStatusDir])
 assert(malformedStatusRun.code === 1 && malformedStatusRun.err.includes('claude-malformed-status-floor') && malformedStatusRun.err.includes('Not sooner than Q4 2027'), 'Anthropic refresh check fails loudly on an unparseable status floor')
 assert(!fs.existsSync(malformedStatusOut), 'an unparseable Anthropic status floor writes no feed output')
+
+const shapesBedrockTable = rows => `<table><tr><th>Provider</th><th>Model</th><th>Model ID</th><th>Regions</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th></tr>${rows.map(cells => `<tr>${cells.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</table>`
+reviewTest('2026-10-18 shapes: Bedrock card accepts bare regional EOL cells that match the Model EOL date', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr><td>EOL: 2028-01-01</td><td>EOL: 2028-01-01</td></tr></table>`, reviewCardSource).records,
+    [{ bedrockId: 'anthropic.example-v1:0', shutdown: '2028-01-01', status: 'legacy', source: reviewCardSource }])
+})
+reviewTest('2026-10-18 shapes: Bedrock card fails closed on a bare regional EOL that differs from the Model EOL date', () => {
+  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr><td>EOL: 2028-01-02</td></tr></table>`, reviewCardSource), /region EOL 2028-01-02 differs/)
+  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr><td>EOL: soon</td></tr></table>`, reviewCardSource), /unrecognised region EOL: EOL: soon/)
+})
+reviewTest('2026-10-18 shapes: Bedrock lifecycle treats a To be announced Extended Access start as unscheduled', () => {
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek-R1', 'deepseek.r1-v1:0', 'us-east-1', 'September 30, 2026', 'March 30, 2027', 'To be announced']])),
+    [{ bedrockId: 'deepseek.r1-v1:0', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
+  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek-R1', 'deepseek.r1-v1:0', 'us-east-1', 'September 30, 2026', 'To be announced', 'To be announced']])), /unrecognised EOL date: To be announced/)
+})
+reviewTest('2026-10-18 shapes: Bedrock lifecycle records every endpoint-qualified model ID in one cell', () => {
+  const records = parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', 'September 30, 2026', 'March 30, 2027', 'To be announced']]))
+  strictAssert.deepEqual(records.map(record => [record.bedrockId, record.eol]), [['deepseek.v3-v1:0', '2027-03-30'], ['deepseek.v3.1', '2027-03-30']])
+  for (const cell of ['deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-runtime)', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-other)', 'deepseek.v3-v1:0 (bedrock-runtime), DeepSeek V3 (bedrock-mantle)']) {
+    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek V3', cell, 'us-east-2', 'September 30, 2026', 'March 30, 2027', 'To be announced']])), /invalid model id/)
+  }
+})
+reviewTest('2026-10-18 shapes: Bedrock lifecycle keeps the earliest deadline across disjoint region groups', () => {
+  const groups = [
+    ['Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', 'ap-northeast-2, ap-south-1', 'October 10, 2026', 'November 13, 2026', 'October 10, 2026'],
+    ['Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', 'us-east-1, us-west-2', 'March 10, 2026', 'September 10, 2026', 'June 10, 2026'],
+  ]
+  for (const rows of [groups, [...groups].reverse()]) {
+    strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable(rows)),
+      [{ bedrockId: 'anthropic.claude-3-haiku-20240307-v1:0', status: 'extended-access', legacy: '2026-03-10', eol: '2026-09-10' }])
+  }
+  const overlapping = [groups[0], [...groups[1].slice(0, 3), 'us-east-1, ap-south-1', ...groups[1].slice(4)]]
+  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable(overlapping)), /conflicting rows for anthropic.claude-3-haiku-20240307-v1:0/)
+  const noRegions = `<table><tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th></tr><tr><td>amazon.split-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>—</td></tr><tr><td>amazon.split-v1:0</td><td>April 1, 2026</td><td>October 1, 2026</td><td>—</td></tr></table>`
+  strictAssert.throws(() => parseBedrockLifecycleHtml(noRegions), /conflicting rows for amazon.split-v1:0/)
+})
+const shapesOpenAIPage = cell => `<h2>2026-10-14: GPT-4 series model deprecations</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>January 14, 2027</td><td>${cell}</td><td><code>gpt-6-luna</code></td></tr></table>`
+reviewTest('2026-10-18 shapes: OpenAI splits a row that lists several dated snapshots into one record each', () => {
+  strictAssert.deepEqual(parseOpenAIDeprecations(shapesOpenAIPage('GPT-4o ( <code>gpt-4o-2024-08-06</code> , <code>gpt-4o-2024-11-20</code> )')).map(record => [record.id, record.aliases, record.shutdown, record.replacement]),
+    [['gpt-4o-2024-08-06', undefined, '2027-01-14', 'gpt-6-luna'], ['gpt-4o-2024-11-20', undefined, '2027-01-14', 'gpt-6-luna']])
+  strictAssert.deepEqual(parseOpenAIDeprecations(shapesOpenAIPage('<code>o1-2024-12-17</code> <code>o1</code>')).map(record => [record.id, record.aliases]), [['o1-2024-12-17', ['o1']]])
+})
+reviewTest('2026-10-18 shapes: OpenAI fails closed when several dated snapshots share an undated alias', () => {
+  strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')), /ambiguous alias gpt-4o/)
+})
+reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
+  const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
+  strictAssert.equal(record.id, 'gemini-3.7-flash')
+  strictAssert.equal(record.shutdown, undefined)
+  strictAssert.equal(record.replacement, 'gemini-3.8-flash')
+  strictAssert.throws(() => parseGoogleDeprecations('<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>N/A soon</td><td>---</td></tr></table>'), /unrecognised shutdown date: N\/A soon/)
+})
 
 fs.rmSync(outputDir, { recursive: true, force: true })
 fs.rmSync(mixedDistributorOut, { recursive: true, force: true })

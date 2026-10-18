@@ -140,7 +140,8 @@ function bedrockHeaderIndexes(rows) {
       throw new Error('aws-bedrock lifecycle table is missing the Public extended access start date column')
     }
     const status = labels.findIndex(label => /^(?:(?:model|lifecycle)\s+)*status$/i.test(label.trim()))
-    return { row, model, legacy, eol, extendedAccess, status }
+    const regions = labels.findIndex(label => /^regions?$/i.test(label.trim()))
+    return { row, model, legacy, eol, extendedAccess, status, regions }
   }
   return undefined
 }
@@ -149,8 +150,8 @@ function missingDate(text) {
   return !text || /^(?:-+|n\/?a|none|not\s+(?:available|applicable)|no\s+(?:shutdown|retirement)\s+date\s+announced)$/i.test(text)
 }
 
-function lifecycleDate(cell, field, bedrockId) {
-  if (!cell || missingDate(cell.text)) return undefined
+function lifecycleDate(cell, field, bedrockId, allowAnnouncement = false) {
+  if (!cell || missingDate(cell.text) || (allowAnnouncement && /^to be announced$/i.test(cell.text.trim()))) return undefined
   const parsed = dateFromText(cell.text)
   if (!parsed) throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has an unrecognised ${field} date: ${cell.text}`)
   return parsed
@@ -185,17 +186,37 @@ function vertexHeaderIndexes(rows) {
   return undefined
 }
 
+const bedrockRecordRegions = new WeakMap()
+
 function mergeRegionalBedrockRecord(left, right) {
-  if (left.legacy !== right.legacy || left.eol !== right.eol) return undefined
-  if (left.status === right.status) return left
+  const leftRegions = bedrockRecordRegions.get(left)
+  const rightRegions = bedrockRecordRegions.get(right)
+  const withRegions = record => {
+    if (leftRegions && rightRegions) bedrockRecordRegions.set(record, [...new Set([...leftRegions, ...rightRegions])])
+    return record
+  }
+  if (left.legacy !== right.legacy || left.eol !== right.eol) {
+    if (!leftRegions || !rightRegions || !left.eol || !right.eol || leftRegions.some(region => rightRegions.includes(region))) return undefined
+    // Disjoint region groups: keep the earliest deadline so no region is warned late.
+    const earliest = [left, right].sort((a, b) => a.eol.localeCompare(b.eol) || (a.legacy ?? '').localeCompare(b.legacy ?? ''))[0]
+    return withRegions({ ...earliest })
+  }
+  if (left.status === right.status) return withRegions({ ...left })
   const statuses = new Set([left.status, right.status])
   if (statuses.size === 2 && statuses.has('legacy') && statuses.has('extended-access')) {
-    return { ...left, status: 'extended-access' }
+    return withRegions({ ...left, status: 'extended-access' })
   }
   return undefined
 }
 
 const isBedrockModelId = value => /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9._:+-]*$/i.test(value)
+
+function bedrockEndpointIds(text) {
+  const parts = text.split(',').map(part => part.trim().match(/^(\S+) \((bedrock-runtime|bedrock-mantle)\)$/))
+  if (parts.length < 2 || parts.some(part => !part || !isBedrockModelId(part[1]))) return undefined
+  if (new Set(parts.map(part => part[2])).size !== parts.length) return undefined
+  return [...new Set(parts.map(part => part[1]))]
+}
 
 // AWS occasionally omits a provider cell without a compensating rowspan. In
 // that row every later cell shifts left, even though the table header does not.
@@ -203,10 +224,12 @@ const isBedrockModelId = value => /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9._:+-]*$
 function bedrockModelCell(row, expectedIndex) {
   const expected = row.cells[expectedIndex]
   if (expected && isBedrockModelId(expected.text.trim())) {
-    return { cell: expected, index: expectedIndex }
+    return { cell: expected, index: expectedIndex, ids: [expected.text.trim()] }
   }
+  const endpointIds = expected && bedrockEndpointIds(expected.text)
+  if (endpointIds) return { cell: expected, index: expectedIndex, ids: endpointIds }
   const candidates = row.cells
-    .map((cell, index) => ({ cell, index }))
+    .map((cell, index) => ({ cell, index, ids: [cell.text.trim()] }))
     .filter(candidate => isBedrockModelId(candidate.cell.text.trim()))
   if (candidates.length === 1) return candidates[0]
   if (candidates.length > 1) {
@@ -235,8 +258,7 @@ export function parseBedrockLifecycleHtml(html) {
       const hasContent = row.cells.some(cell => cell.text)
       if (!hasContent) continue
       const model = bedrockModelCell(row, headers.model)
-      const modelCell = model.cell
-      const bedrockId = modelCell.text.trim()
+      const bedrockId = model.ids.join(', ')
       const offset = model.index - headers.model
       const legacyCell = row.cells[headers.legacy + offset]
       const eolCell = row.cells[headers.eol + offset]
@@ -248,7 +270,7 @@ export function parseBedrockLifecycleHtml(html) {
 
       const legacy = lifecycleDate(legacyCell, 'legacy', bedrockId)
       const eol = lifecycleDate(eolCell, 'EOL', bedrockId)
-      const extendedAccess = lifecycleDate(extendedAccessCell, 'public extended access', bedrockId)
+      const extendedAccess = lifecycleDate(extendedAccessCell, 'public extended access', bedrockId, true)
       if (legacy && eol && eol < legacy) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has EOL before legacy date`)
       }
@@ -267,10 +289,15 @@ export function parseBedrockLifecycleHtml(html) {
       if (status === 'extended-access' && !extendedAccess) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} reports extended access without a start date`)
       }
-      const record = { bedrockId, status }
-      if (legacy !== undefined) record.legacy = legacy
-      if (eol !== undefined) record.eol = eol
-      records.push(record)
+      const regionsCell = headers.regions >= 0 ? row.cells[headers.regions + offset] : undefined
+      const regions = regionsCell?.text.split(',').map(region => region.trim()).filter(Boolean)
+      for (const id of model.ids) {
+        const record = { bedrockId: id, status }
+        if (legacy !== undefined) record.legacy = legacy
+        if (eol !== undefined) record.eol = eol
+        if (regions?.length) bedrockRecordRegions.set(record, regions)
+        records.push(record)
+      }
       tableRecords++
     }
     if (!tableRecords) throw new Error('aws-bedrock lifecycle table has no model entries')
@@ -404,9 +431,9 @@ export function parseBedrockModelCardHtml(html, source) {
     const regionDates = []
     for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
       if (!bedrockLifecycleCell(cell)) continue
-      const match = cell.text.match(/^Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)$/)
+      const match = cell.text.match(/^(?:Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)|EOL: (\d{4}-\d{2}-\d{2}))$/)
       if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
-      regionDates.push(assertIsoDate(match[1], 'region EOL'))
+      regionDates.push(assertIsoDate(match[1] ?? match[2], 'region EOL'))
     }
     if (!ids.size) return skip('no model ids')
     const eol = fields.get('Model EOL date')

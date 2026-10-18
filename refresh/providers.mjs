@@ -473,11 +473,17 @@ function openAIModelIds(fragment) {
   const codes = codeText(fragment)
   const tokens = [...new Set((codes.length ? codes : [modelId(fragment)]).filter(Boolean).map(token => token.trim()))]
   if (!tokens.length) return undefined
-  const canonical = tokens.find(token => /\b(?:19|20)\d{2}[-_]\d{2}[-_]\d{2}\b/.test(token)) ?? tokens[0]
-  return {
+  const dated = tokens.filter(token => /\b(?:19|20)\d{2}[-_]\d{2}[-_]\d{2}\b/.test(token))
+  if (dated.length > 1) {
+    const undated = tokens.find(token => !dated.includes(token))
+    if (undated) throw new Error(`openai deprecations row lists snapshots ${dated.join(', ')} with ambiguous alias ${undated}`)
+    return dated.map(id => ({ id, aliases: [] }))
+  }
+  const canonical = dated[0] ?? tokens[0]
+  return [{
     id: canonical,
     aliases: tokens.filter(token => token !== canonical),
-  }
+  }]
 }
 
 const openAIReplacement = extractReplacementFields
@@ -514,9 +520,9 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       if (!modelCell || !modelCell.text) continue
-      const parsedModel = openAIModelIds(modelCell.html)
-      if (!parsedModel) throw new Error('openai deprecations table contains a row without a model id')
-      const modelTokens = [parsedModel.id, ...parsedModel.aliases]
+      const parsedModels = openAIModelIds(modelCell.html)
+      if (!parsedModels) throw new Error('openai deprecations table contains a row without a model id')
+      const modelTokens = parsedModels.flatMap(parsedModel => [parsedModel.id, ...parsedModel.aliases])
       if (modelTokens.some(token => !MODEL_ID_PATTERN.test(token))) {
         const invalid = modelTokens.find(token => !MODEL_ID_PATTERN.test(token))
         skippedReasons.add(/[\s/]/.test(invalid) ? 'endpoint-or-product-row' : 'invalid-model-id')
@@ -525,16 +531,18 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
 
       const shutdownCell = row.cells[headers.date]
       const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
-      if (!shutdown) throw new Error(`openai deprecations entry ${parsedModel.id} has no valid shutdown date`)
+      if (!shutdown) throw new Error(`openai deprecations entry ${parsedModels[0].id} has no valid shutdown date`)
+      if (shutdown < announced) {
+        throw new Error(`openai deprecations entry ${parsedModels[0].id} has shutdown before announcement`)
+      }
 
       const replacementCell = row.cells[headers.replacement]
-      const item = { id: parsedModel.id, announced, shutdown, source: sourceUrl }
-      if (parsedModel.aliases.length) item.aliases = parsedModel.aliases
-      if (replacementCell) Object.assign(item, openAIReplacement(replacementCell.html))
-      if (item.shutdown < item.announced) {
-        throw new Error(`openai deprecations entry ${parsedModel.id} has shutdown before announcement`)
+      for (const parsedModel of parsedModels) {
+        const item = { id: parsedModel.id, announced, shutdown, source: sourceUrl }
+        if (parsedModel.aliases.length) item.aliases = parsedModel.aliases
+        if (replacementCell) Object.assign(item, openAIReplacement(replacementCell.html))
+        records.push(item)
       }
-      records.push(item)
     }
   }
 
@@ -851,7 +859,7 @@ function googleModelId(fragment) {
 }
 
 function googleShutdown(text, id) {
-  if (!text || /^no\s+shutdown\s+date(?:\s+announced)?$/i.test(text) || /^[-\u2013\u2014]+$/.test(text)) return undefined
+  if (!text || /^(?:no\s+shutdown\s+date(?:\s+announced)?|n\/a)$/i.test(text) || /^[-\u2013\u2014]+$/.test(text)) return undefined
   const parsed = dateFromText(text)
   if (!parsed) throw new Error(`google deprecations entry ${id} has an unrecognised shutdown date: ${text}`)
   return parsed
