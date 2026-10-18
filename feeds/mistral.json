@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "mistral",
-  "generated": "2026-10-05T18:22:56.995Z",
+  "generated": "2026-10-18T18:39:55.066Z",
   "source": "https://docs.mistral.ai/models",
   "models": [
     {
@@ -129,6 +129,7 @@
       "distributions": [
         {
           "via": "azure-ai-foundry",
+          "shutdown": "2026-12-09",
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
@@ -143,6 +144,7 @@
       "distributions": [
         {
           "via": "azure-ai-foundry",
+          "shutdown": "2026-12-09",
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
@@ -318,22 +320,22 @@
     },
     {
       "id": "zai-glm-5-2",
+      "source": "https://docs.mistral.ai/models",
       "announced": "2026-09-29",
       "shutdown": "2026-10-31",
-      "source": "https://docs.mistral.ai/models",
       "replacement_note": "Mistral lists Z.ai GLM 5.3 as the alternative"
     },
     {
       "id": "labs-leanstral-1-5",
+      "source": "https://docs.mistral.ai/models",
       "announced": "2026-09-29",
-      "shutdown": "2026-09-30",
-      "source": "https://docs.mistral.ai/models"
+      "shutdown": "2026-09-30"
     },
     {
       "id": "mistral-ocr-4-0",
+      "source": "https://docs.mistral.ai/models",
       "announced": "2026-09-29",
       "shutdown": "2026-09-30",
-      "source": "https://docs.mistral.ai/models",
       "replacement_note": "Mistral lists OCR 4.1 as the alternative"
     }
   ]

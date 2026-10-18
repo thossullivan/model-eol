@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-10-05T18:22:57.253Z",
+  "generated": "2026-10-18T18:39:55.065Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "policy": {
     "min_notice_days": 60,
@@ -17,15 +17,16 @@
       "distributions": [
         {
           "via": "aws-bedrock",
-          "announced": "2026-01-30",
-          "shutdown": "2026-07-30",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+          "announced": "2026-10-10",
+          "shutdown": "2026-11-13",
+          "status": "extended-access",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         }
       ],
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "announced": "2025-10-28",
       "shutdown": "2026-02-19",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-5-5"
     },
     {
       "id": "claude-3-5-haiku-20241022",
@@ -89,7 +90,7 @@
       ],
       "announced": "2026-04-14",
       "shutdown": "2026-06-15",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-5-5"
     },
     {
       "id": "claude-opus-4-20250514",
@@ -133,14 +134,15 @@
       "distributions": [
         {
           "via": "aws-bedrock",
-          "announced": "2026-01-30",
-          "shutdown": "2026-07-30",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+          "announced": "2026-10-10",
+          "shutdown": "2026-11-13",
+          "status": "extended-access",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         }
       ],
       "announced": "2025-08-13",
       "shutdown": "2025-10-28",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-5-5"
     },
     {
       "id": "claude-3-5-sonnet-20241022",
@@ -148,14 +150,15 @@
       "distributions": [
         {
           "via": "aws-bedrock",
-          "announced": "2026-01-30",
-          "shutdown": "2026-07-30",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+          "announced": "2026-10-10",
+          "shutdown": "2026-11-13",
+          "status": "extended-access",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         }
       ],
       "announced": "2025-08-13",
       "shutdown": "2025-10-28",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-5-5"
     },
     {
       "id": "claude-2.0",
@@ -177,14 +180,15 @@
       "distributions": [
         {
           "via": "aws-bedrock",
-          "announced": "2026-01-30",
-          "shutdown": "2026-07-30",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html"
+          "announced": "2026-10-10",
+          "shutdown": "2026-11-13",
+          "status": "extended-access",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         }
       ],
       "announced": "2025-01-21",
       "shutdown": "2025-07-21",
-      "replacement": "claude-sonnet-4-6"
+      "replacement": "claude-sonnet-5-5"
     },
     {
       "id": "claude-1.0",
@@ -436,10 +440,10 @@
       "distributions": [
         {
           "via": "aws-bedrock",
-          "shutdown": "2026-09-30",
-          "date_precision": "tentative",
-          "status": "active",
-          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.html"
+          "announced": "2026-10-08",
+          "shutdown": "2027-04-08",
+          "status": "extended-access",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html"
         },
         {
           "via": "azure-ai-foundry",
@@ -526,8 +530,6 @@
     },
     {
       "id": "claude-opus-5-5",
-      "shutdown": "2027-09-22",
-      "date_precision": "tentative",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "distributions": [
         {
@@ -537,12 +539,12 @@
           "status": "active",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html"
         }
-      ]
+      ],
+      "shutdown": "2027-09-22",
+      "date_precision": "tentative"
     },
     {
       "id": "claude-sonnet-5-5",
-      "shutdown": "2027-09-28",
-      "date_precision": "tentative",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "distributions": [
         {
@@ -551,6 +553,23 @@
           "date_precision": "tentative",
           "status": "active",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html"
+        }
+      ],
+      "shutdown": "2027-09-28",
+      "date_precision": "tentative"
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "shutdown": "2027-10-07",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-10-07",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html"
         }
       ]
     }
