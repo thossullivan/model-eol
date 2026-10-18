@@ -1291,7 +1291,8 @@ const referenceResult = await runBot({
 const referenceIssue = referenceResult.decisions.find(item => item.group.kind === 'issue' && item.action === 'create')
 assert(referenceIssue, 'retired model-reference without a direct API signal creates an issue')
 assert(referenceIssue.body.includes('not-direct-api'), 'model-reference issue carries the not-direct-api reason')
-assert(referenceIssue.body.includes('`claude-sonnet-4-6`'), 'model-reference issue surfaces the feed replacement')
+const referenceReplacement = JSON.parse(fs.readFileSync(path.join(root, 'feeds/anthropic.json'), 'utf8')).models.find(model => model.id === 'claude-sonnet-4-20250514')?.replacement
+assert(referenceReplacement && referenceIssue.body.includes(`\`${referenceReplacement}\``), 'model-reference issue surfaces the feed replacement')
 assert(!referenceResult.decisions.some(item => item.group.kind === 'pr'), 'retired model-reference never creates a PR')
 const structuredIssueBody = buildIssueBody({
   group: {
