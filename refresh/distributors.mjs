@@ -223,20 +223,23 @@ function bedrockEndpointIds(text) {
   return [...new Set(parts.map(part => part[1]))]
 }
 
-// AWS occasionally omits a provider cell without a compensating rowspan. In
-// that row every later cell shifts left, even though the table header does not.
-// Anchor on the model ID and apply the same offset to the lifecycle columns.
-function bedrockModelCell(row, expectedIndex) {
+// A missing or over-spanned provider cell shifts a row; anchor on the model ID and apply its offset to the lifecycle columns.
+function bedrockModelCell(row, expectedIndex, headerLength) {
   const expected = row.cells[expectedIndex]
-  if (expected && isBedrockModelId(expected.text.trim())) {
-    return { cell: expected, index: expectedIndex, ids: [expected.text.trim()] }
+  let filled = row.cells.length
+  while (filled && !row.cells[filled - 1].text) filled--
+  const direct = expected && (isBedrockModelId(expected.text.trim()) ? [expected.text.trim()] : bedrockEndpointIds(expected.text))
+  if (direct) {
+    // An extra cell means an over-long rowspan pushed this row's dates out of their columns.
+    if (filled > headerLength) throw new Error(`aws-bedrock lifecycle entry ${direct.join(', ')} has more cells than the table header`)
+    return { cell: expected, index: expectedIndex, ids: direct }
   }
-  const endpointIds = expected && bedrockEndpointIds(expected.text)
-  if (endpointIds) return { cell: expected, index: expectedIndex, ids: endpointIds }
+  // Real IDs are lowercase where display and provider names are not.
   const candidates = row.cells
-    .map((cell, index) => ({ cell, index, ids: [cell.text.trim()] }))
-    .filter(candidate => isBedrockModelId(candidate.cell.text.trim()))
-  if (candidates.length === 1) return candidates[0]
+    .map((cell, index) => ({ cell, index, ids: isBedrockModelId(cell.text.trim()) ? [cell.text.trim()] : bedrockEndpointIds(cell.text) }))
+    .filter(candidate => candidate.ids?.every(id => id === id.toLowerCase()))
+  // A shift is real only when the row gained or lost exactly that many cells against the header.
+  if (candidates.length === 1 && row.cells.length - headerLength === candidates[0].index - expectedIndex) return candidates[0]
   if (candidates.length > 1) {
     throw new Error(`aws-bedrock lifecycle table contains an ambiguous model row: ${candidates.map(candidate => candidate.cell.text.trim()).join(', ')}`)
   }
@@ -262,7 +265,7 @@ export function parseBedrockLifecycleHtml(html) {
     for (const row of rows.slice(headers.row + 1)) {
       const hasContent = row.cells.some(cell => cell.text)
       if (!hasContent) continue
-      const model = bedrockModelCell(row, headers.model)
+      const model = bedrockModelCell(row, headers.model, rows[headers.row].cells.length)
       const bedrockId = model.ids.join(', ')
       const offset = model.index - headers.model
       const legacyCell = row.cells[headers.legacy + offset]
@@ -360,7 +363,10 @@ export function parseBedrockModelCardsIndexHtml(html) {
   return [...urls]
 }
 
-const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy period', 'Model lifecycle policy', 'Model EOL date']
+const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy period', 'Model lifecycle policy', 'Model EOL date', 'Model lifecycle']
+// Policy link text and the EOL banner's "see Model lifecycle" repeat the words, so only the colon form counts.
+const BEDROCK_CARD_LABEL_COUNT = new Map([['Model lifecycle', /\bModel lifecycle\s*:/gi]])
+const BEDROCK_CARD_LIFECYCLE = /^(?:Active|(Legacy)|EOL: (\d{4}-\d{2}-\d{2}))(?: \(certain regions\))?$/
 const BEDROCK_CARD_MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
 const BEDROCK_CARD_DAY = new RegExp(`^${BEDROCK_CARD_MONTH} \\d{1,2}, (?:19|20)\\d{2}$`, 'i')
 const BEDROCK_CARD_MONTH_ONLY = new RegExp(`^${BEDROCK_CARD_MONTH} (?:19|20)\\d{2}$`, 'i')
@@ -372,7 +378,12 @@ function bedrockCardFields(html) {
   for (const paragraph of html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)) {
     const text = plainText(paragraph[1])
     const label = BEDROCK_CARD_LABELS.find(candidate => text.startsWith(`${candidate}:`))
-    if (!label) continue
+    if (!label) {
+      const boldLabel = paragraph[1].match(/^\s*<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/i)
+      const renamedLabel = boldLabel && /^Model lifecycle\b/i.test(plainText(boldLabel[2])) && !/^Model lifecycle polic/i.test(plainText(boldLabel[2]))
+      if (renamedLabel || /^Model lifecycle\W*(?:Active|Legacy|EOL)\b/i.test(text) || /^Model lifecycle\b(?!\s+polic)[^:.]{0,30}:/i.test(text)) throw new Error(`unrecognised Model lifecycle field: ${text}`)
+      continue
+    }
     if (fields.has(label)) throw new Error(`duplicate ${label} field`)
     const value = text.slice(label.length + 1).trim()
     if (!value) throw new Error(`empty ${label} field`)
@@ -380,7 +391,7 @@ function bedrockCardFields(html) {
   }
   const text = plainText(html)
   for (const label of BEDROCK_CARD_LABELS) {
-    const count = [...text.matchAll(new RegExp(`\\b${label}\\b`, 'gi'))].length
+    const count = [...text.matchAll(BEDROCK_CARD_LABEL_COUNT.get(label) ?? new RegExp(`\\b${label}\\b`, 'gi'))].length
     if (count !== Number(fields.has(label))) throw new Error(`unaccounted ${label} field outside its paragraph`)
   }
   return fields
@@ -433,6 +444,11 @@ export function parseBedrockModelCardHtml(html, source) {
       ids.add(id)
     }
     const fields = bedrockCardFields(html)
+    const lifecycle = fields.get('Model lifecycle')
+    const lifecycleMatch = lifecycle === undefined ? undefined : lifecycle.match(BEDROCK_CARD_LIFECYCLE)
+    if (lifecycle !== undefined && !lifecycleMatch) throw new Error(`unrecognised Model lifecycle: ${lifecycle}`)
+    const lifecycleEol = lifecycleMatch?.[2] && assertIsoDate(lifecycleMatch[2], 'Model lifecycle EOL')
+    const lifecycleLegacy = Boolean(lifecycleMatch?.[1] || lifecycleEol)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     const regionDates = []
     for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
@@ -443,7 +459,7 @@ export function parseBedrockModelCardHtml(html, source) {
     }
     if (!ids.size) return skip('no model ids')
     const eol = fields.get('Model EOL date')
-    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol)) && !regionDates.length) return skip('no lifecycle fields')
+    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol)) && !regionDates.length && !lifecycleEol) return skip('no lifecycle fields')
 
     const launch = fields.get('Model launch date')
     if (launch !== undefined) bedrockCardDate(launch.replace(BEDROCK_CARD_ORDINAL_DAY, '$2 $1, $3'), 'Model launch date', true)
@@ -471,10 +487,12 @@ export function parseBedrockModelCardHtml(html, source) {
     if (regionDates.length && !exact) throw new Error(`region EOL ${regionDates[0]} without an exact Model EOL date`)
     const mismatch = regionDates.find(date => date !== exact)
     if (mismatch) throw new Error(`region EOL ${mismatch} differs from Model EOL date ${exact}`)
+    if (lifecycleEol && !exact) throw new Error(`Model lifecycle EOL ${lifecycleEol} without an exact Model EOL date`)
+    if (lifecycleEol && lifecycleEol !== exact) throw new Error(`Model lifecycle EOL ${lifecycleEol} differs from Model EOL date ${exact}`)
     if (!exact && !candidates.length) return skip('no day-precision date')
     const payload = exact
-      ? { shutdown: exact, status: regionDates.length || legacyField ? 'legacy' : 'active' }
-      : { shutdown: candidates.sort().at(-1), date_precision: 'tentative', status: 'active' }
+      ? { shutdown: exact, status: regionDates.length || legacyField || lifecycleLegacy ? 'legacy' : 'active' }
+      : { shutdown: candidates.sort().at(-1), date_precision: 'tentative', status: lifecycleLegacy ? 'legacy' : 'active' }
     return { records: [...ids].map(bedrockId => ({ bedrockId, ...payload, source })), skipped: [] }
   } catch (error) {
     throw new Error(`aws-bedrock model card ${source}: ${error.message}`)

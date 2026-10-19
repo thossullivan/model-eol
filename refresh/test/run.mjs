@@ -943,7 +943,7 @@ assert(card('mistral-ai-devstral-2-123b').skipped[0]?.reason === 'no day-precisi
 const mistralCard = card('mistral-ai-mistral-7b-instruct').records[0]
 assert(mistralCard.shutdown === '2025-03-01' && mistralCard.date_precision === 'tentative', 'Mistral selects the later US not-before floor')
 const jambaCard = card('ai21-labs-jamba-1-5-large').records[0]
-assert(jambaCard.shutdown === '2026-11-26' && jambaCard.status === 'active' && !Object.hasOwn(jambaCard, 'date_precision'), 'Jamba parses an exact EOL without regional Legacy status')
+assert(jambaCard.shutdown === '2026-11-26' && jambaCard.status === 'legacy' && !Object.hasOwn(jambaCard, 'date_precision'), 'Jamba parses an exact EOL and takes Legacy status from its Model lifecycle line without regional cells')
 const cardOnlyJamba = mergeBedrockSources(bedrockEntries.filter(record => record.bedrockId !== jambaCard.bedrockId), [jambaCard])
 assert(JSON.stringify(cardOnlyJamba.records.find(record => record.bedrockId === jambaCard.bedrockId)) === JSON.stringify(jambaCard), 'Jamba contributes a card-only exact record when the legacy table lacks its ID')
 const commandCard = card('cohere-command-r').records[0]
@@ -1263,6 +1263,91 @@ reviewTest('Third pass F2: Bedrock refuses the reported definition-list and titl
 reviewTest('Third pass F2: Bedrock matches whole labels without matching longer words', () => {
   const html = reviewCard + '<p>Premodel EOL date; Model EOL dates; Model launch dates; Legacy periods; Model lifecycle policymaker; EOL no sooner thanks</p>'
   strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+})
+const lifecycleLine = value => `<p><b>Model lifecycle:</b> ${value}</p>`
+const lifecycleCard = (value, eol = 'N/A') => fableHtml.replace(lifecycleLine('Active'), lifecycleLine(value)).replace('<b>Model EOL date:</b> N/A', `<b>Model EOL date:</b> ${eol}`)
+const lifecyclePolicy = text => `<p><b>Model lifecycle policy:</b> <a href="./model-lifecycle-legacy.html">${text}</a></p>`
+const lifecycleBanner = '<p>This model version has reached the end of its life. For how model lifecycle stages work, see <a href="./model-lifecycle.html">Model lifecycle</a>.</p>'
+reviewTest('Model lifecycle line: Bedrock keeps an Active card and a card without the line on current behaviour', () => {
+  strictAssert.ok(fableHtml.includes(lifecycleLine('Active')))
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Active'), fableCard.source), card('anthropic-claude-fable-5-1'))
+  strictAssert.deepEqual(parseBedrockModelCardHtml(fableHtml.replace(lifecycleLine('Active'), ''), fableCard.source), card('anthropic-claude-fable-5-1'))
+})
+reviewTest('Model lifecycle line: Bedrock marks a Legacy card legacy without changing its tentative floor', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+})
+for (const value of ['EOL: 2027-09-01', 'EOL: 2027-09-01 (certain regions)']) {
+  reviewTest(`Model lifecycle line: Bedrock marks a matching ${value} card legacy at its exact Model EOL date`, () => {
+    const { date_precision: _, ...exact } = fableCard
+    strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard(value, 'September 1, 2027'), fableCard.source).records, [{ ...exact, shutdown: '2027-09-01', status: 'legacy' }])
+  })
+}
+reviewTest('Model lifecycle line: Bedrock rejects an EOL line on a card without an exact Model EOL date', () => {
+  for (const [html, source] of [
+    [lifecycleCard('EOL: 2026-12-01'), fableCard.source],
+    [lifecycleCard('EOL: 2026-10-14', 'No sooner than 12/1/2026'), fableCard.source],
+    [lifecycleCard('EOL: 2026-10-14 (certain regions)', 'No sooner than 12/1/2026'), fableCard.source],
+    [`${reviewIdTable}${lifecycleLine('EOL: 2026-10-14')}`, reviewCardSource],
+    [`${reviewIdTable}<p>Model EOL date: N/A</p>${lifecycleLine('EOL: 2026-10-14')}`, reviewCardSource],
+  ]) {
+    strictAssert.throws(() => parseBedrockModelCardHtml(html, source), /Model lifecycle EOL 2026-10-14 without an exact Model EOL date|Model lifecycle EOL 2026-12-01 without an exact Model EOL date/)
+  }
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+})
+reviewTest('Model lifecycle line: Bedrock parses the live EOL card shape with its end-of-life banner', () => {
+  const html = cardHtml.get(commandCard.source).replace(lifecycleLine('Legacy'), lifecycleLine('EOL: 2026-08-19')).replace('<p><b>Model launch date:', `${lifecycleBanner}<p><b>Model launch date:`)
+  strictAssert.ok(html.includes(lifecycleBanner) && html.includes(lifecycleLine('EOL: 2026-08-19')))
+  strictAssert.deepEqual(parseBedrockModelCardHtml(html, commandCard.source).records, [{ ...commandCard, status: 'legacy' }])
+})
+reviewTest('Model lifecycle line: Bedrock reads Legacy (certain regions) as legacy', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy (certain regions)', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+})
+for (const paragraph of ['<p>Model lifecycle stages are described in the user guide.</p>', '<p><a href="./model-lifecycle.html">Model lifecycle</a> explains the stages.</p>', '<p><b>Model lifecycle policies:</b> see the user guide</p>']) {
+  reviewTest(`Model lifecycle line: Bedrock ignores prose that opens with the words: ${paragraph}`, () => {
+    strictAssert.deepEqual(parseBedrockModelCardHtml(fableHtml.replace('<p><b>Model launch date:', `${paragraph}<p><b>Model launch date:`), fableCard.source).records, [fableCard])
+  })
+}
+for (const value of ['active', 'LEGACY', 'Deprecated', 'Retired', 'EOL', 'EOL: 2027-9-1', 'EOL 2027-09-01', 'EOL: September 1, 2027', 'EOL: 2027-09-01 (some regions)', 'EOL: 2027-09-01 (certain regions', 'Legacy (some regions)', 'Active; EOL: 2027-09-01']) {
+  reviewTest(`Model lifecycle line: Bedrock rejects an unrecognised value: ${value}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard(value), fableCard.source), error =>
+      error.message.includes(fableCard.source) && error.message.includes(`unrecognised Model lifecycle: ${value}`))
+  })
+}
+reviewTest('Model lifecycle line: Bedrock rejects an EOL line with an impossible calendar date', () => {
+  strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard('EOL: 2027-02-30'), fableCard.source), /Model lifecycle EOL must be a real calendar date/)
+})
+for (const value of ['EOL: 2027-09-02', 'EOL: 2027-09-02 (certain regions)']) {
+  reviewTest(`Model lifecycle line: Bedrock rejects ${value} that differs from the exact Model EOL date`, () => {
+    for (const eol of ['September 1, 2027', 'Legacy: September 1, 2027']) {
+      strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard(value, eol), fableCard.source), /Model lifecycle EOL 2027-09-02 differs from Model EOL date 2027-09-01/)
+    }
+  })
+}
+reviewTest('Model lifecycle line: Bedrock rejects a duplicate Model lifecycle paragraph', () => {
+  for (const second of ['Active', 'Legacy']) {
+    strictAssert.throws(() => parseBedrockModelCardHtml(fableHtml.replace(lifecycleLine('Active'), lifecycleLine('Active') + lifecycleLine(second)), fableCard.source), /duplicate Model lifecycle field/)
+  }
+})
+for (const fragment of ['<div>Model lifecycle: Legacy</div>', '<div>MODEL LIFECYCLE : Legacy</div>', '<p>Details: Model lifecycle: Legacy</p>', '<p>Context window: 8K tokens; Model lifecycle: Legacy</p>', '<li>Model lifecycle: EOL: 2027-09-01</li>']) {
+  reviewTest(`Model lifecycle line: Bedrock accounts for Model lifecycle outside its field paragraph: ${fragment}`, () => {
+    for (const html of [reviewCard + fragment, fableHtml + fragment]) {
+      strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unaccounted Model lifecycle field outside its paragraph/)
+    }
+  })
+}
+for (const paragraph of ['<p><b>Model lifecycle</b> Legacy</p>', '<p><b>Model lifecycle -</b> Legacy</p>', '<p><b>Model lifecycle</b>: Legacy</p>', '<p>MODEL LIFECYCLE Legacy</p>', '<p><b>Model lifecycle status:</b> Legacy</p>', '<p><b>Model lifecycle</b></p>', '<p>Model lifecycle status: Legacy</p>', '<p><span class="x"><b>Model lifecycle status:</b></span> Legacy</p>', '<p><strong>Model lifecycle stage</strong> retired</p>']) {
+  reviewTest(`Model lifecycle line: Bedrock rejects a paragraph that opens with Model lifecycle in another shape: ${paragraph}`, () => {
+    for (const html of [reviewCard + paragraph, fableHtml.replace(lifecycleLine('Active'), paragraph)]) {
+      strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unrecognised Model lifecycle field: Model lifecycle/i)
+    }
+  })
+}
+reviewTest('Model lifecycle line: the policy paragraph, its link texts, and the EOL banner are not Model lifecycle fields', () => {
+  for (const text of ['Model lifecycle (For Models Launched Prior to Sept 7 2026)', 'Model lifecycle', 'Bedrock Model Lifecycle']) {
+    const html = reviewCard + lifecycleBanner + lifecyclePolicy(text)
+    strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+    strictAssert.equal(parseBedrockModelCardHtml(html + lifecycleLine('Legacy'), reviewCardSource).records[0]?.status, 'legacy')
+  }
 })
 for (const [url, html] of cardHtml) {
   reviewTest(`Third pass F2: Fixture lifecycle labels appear only in their field paragraphs: ${path.basename(new URL(url).pathname)}`, () => {
@@ -3117,6 +3202,68 @@ reviewTest('2026-10-18 shapes: Bedrock lifecycle records every endpoint-qualifie
     strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek V3', cell, 'us-east-2', 'September 30, 2026', 'March 30, 2027', 'To be announced']])), /invalid model id/)
   }
 })
+const shiftedDates = ['September 30, 2026', 'March 30, 2027', 'To be announced']
+reviewTest('Shifted row realignment: Bedrock resolves an endpoint-list ID cell whose provider cell is omitted', () => {
+  const records = parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', ...shiftedDates]]))
+  strictAssert.deepEqual(records, ['deepseek.v3-v1:0', 'deepseek.v3.1'].map(bedrockId => ({ bedrockId, status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' })))
+})
+reviewTest('Shifted row realignment: Bedrock resolves a shifted Z.AI row to its lowercase model ID', () => {
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['GLM 4.7', 'zai.glm-4.7', 'us-east-1, us-west-2', ...shiftedDates]])),
+    [{ bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
+})
+for (const cells of [
+  ['DeepSeek', 'DeepSeek-V3.1', 'see endpoint table', 'us-east-2', ...shiftedDates],
+  ['DeepSeek-V3.1', 'see endpoint table', 'us-east-2', ...shiftedDates],
+  ['Z.AI', 'GLM 4.7', 'see endpoint table', 'us-east-1', ...shiftedDates],
+  ['Z.AI', 'see endpoint table', 'us-east-1', ...shiftedDates],
+  ['DeepSeek', 'DeepSeek V3', '', 'deepseek.v3-v1:0', ...shiftedDates],
+  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', ...shiftedDates],
+  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'us-east-2', 'deepseek.v3-v1:0', 'March 30, 2027', 'To be announced'],
+]) {
+  reviewTest(`Shifted row realignment: Bedrock refuses to realign onto a display name, provider, or a cell right of Model ID: ${cells.slice(0, 4).join(' | ')}`, () => {
+    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
+  })
+}
+reviewTest('Shifted row realignment: Bedrock refuses an endpoint list with a mixed-case ID', () => {
+  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), DeepSeek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', ...shiftedDates]])), /invalid model id/)
+})
+reviewTest('Shifted row realignment: Bedrock realigns the row after a provider rowspan that runs one row too long', () => {
+  const table = shapesBedrockTable([]).replace('</table>', `<tr><td rowspan="2">Z.AI</td><td>GLM 4.7</td><td>zai.glm-4.7</td><td>us-east-1</td><td>September 30, 2026</td><td>March 30, 2027</td><td>To be announced</td></tr><tr><td>Qwen</td><td>Qwen3 Coder 480B A35B Instruct</td><td>qwen.qwen3-coder-480b-a35b-v1:0</td><td>us-east-2</td><td>October 1, 2026</td><td>April 1, 2027</td><td>To be announced</td></tr></table>`)
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(table), [
+    { bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' },
+    { bedrockId: 'qwen.qwen3-coder-480b-a35b-v1:0', status: 'legacy', legacy: '2026-10-01', eol: '2027-04-01' },
+  ])
+})
+for (const cells of [
+  ['Qwen', 'Qwen3 Coder', 'see endpoint table', 'qwen.qwen3-coder-480b-a35b-v1:0', 'October 1, 2026', 'April 1, 2027', 'To be announced'],
+  ['GLM 4.7', 'zai.glm-4.7', 'us-east-1', 'September 30, 2026', 'March 30, 2027', 'To be announced', 'extra'],
+  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'us-east-2', 'deepseek.v3-v1:0', 'March 30, 2027', 'To be announced', 'extra'],
+]) {
+  reviewTest(`Shifted row realignment: Bedrock refuses a candidate whose offset the row length does not explain: ${cells.join(' | ')}`, () => {
+    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
+  })
+}
+reviewTest('Shifted row realignment: Bedrock refuses a shifted row whose length matches the header only through a trailing empty cell', () => {
+  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['GLM 4.7', 'zai.glm-4.7', 'us-east-1', ...shiftedDates, '']])), /invalid model id/)
+  const table = shapesBedrockTable([]).replace('</table>', `<tr><td>Meta</td><td>Llama A</td><td>meta.a-v1:0</td><td>us-east-1</td><td>September 1, 2026</td><td rowspan="2">December 1, 2026</td><td>To be announced</td></tr><tr><td>Llama B</td><td>meta.b-v1:0</td><td>us-east-1</td><td>August 1, 2026</td><td>December 15, 2026</td><td></td></tr></table>`)
+  strictAssert.throws(() => parseBedrockLifecycleHtml(table), /invalid model id/)
+})
+reviewTest('Shifted row realignment: Bedrock keeps an in-place row with extra trailing empty cells', () => {
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['Z.AI', 'GLM 4.7', 'zai.glm-4.7', 'us-east-1', ...shiftedDates, '', '']])),
+    [{ bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
+})
+reviewTest('Shifted row realignment: Bedrock refuses a row in place whose extra cell pushed its dates out of their columns', () => {
+  const table = shapesBedrockTable([]).replace('</table>', `<tr><td>Meta</td><td>Llama A</td><td>meta.a-v1:0</td><td>us-east-1</td><td>September 1, 2026</td><td rowspan="2">December 1, 2026</td><td>To be announced</td></tr><tr><td>Meta</td><td>Llama B</td><td>meta.b-v1:0</td><td>us-east-1</td><td>August 1, 2026</td><td>November 1, 2026</td><td>To be announced</td></tr></table>`)
+  strictAssert.throws(() => parseBedrockLifecycleHtml(table), /meta\.b-v1:0 has more cells than the table header/)
+})
+reviewTest('Shifted row realignment: Bedrock still refuses two lowercase ID candidates left of Model ID', () => {
+  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['deepseek.r1-v1:0', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2', ...shiftedDates]])),
+    /ambiguous model row: deepseek\.r1-v1:0, deepseek\.v3-v1:0 \(bedrock-runtime\), deepseek\.v3\.1 \(bedrock-mantle\)/)
+})
+reviewTest('Shifted row realignment: the Bedrock lifecycle fixture parses to the same records', () => {
+  strictAssert.equal(bedrockEntries.length, 17)
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')), bedrockEntries)
+})
 reviewTest('2026-10-18 shapes: Bedrock lifecycle keeps the earliest deadline across disjoint region groups', () => {
   const groups = [
     ['Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', 'ap-northeast-2, ap-south-1', 'October 10, 2026', 'November 13, 2026', 'October 10, 2026'],
@@ -3166,6 +3313,47 @@ reviewTest('2026-10-18 review: an OpenAI endpoint row with several dated snapsho
   const page = shapesOpenAIPage('<code>/v1/foo</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')
     + '<h2>2026-10-15: Other</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>January 14, 2027</td><td><code>gpt-4.1-2025-04-14</code></td><td><code>gpt-6-luna</code></td></tr></table>'
   strictAssert.deepEqual(parseOpenAIDeprecations(page).map(record => record.id), ['gpt-4.1-2025-04-14'])
+})
+const openAICodes = (...ids) => ids.map(id => `<code>${id}</code>`).join(', ')
+const openAISnapshots = (...ids) => parseOpenAIDeprecations(shapesOpenAIPage(openAICodes(...ids))).map(record => [record.id, record.aliases])
+reviewTest('Month-day snapshots: OpenAI parses the live multi-code cells exactly as before', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0613', 'gpt-4', 'gpt-4-0613-completions', 'gpt-4-completions'), [['gpt-4-0613', ['gpt-4', 'gpt-4-0613-completions', 'gpt-4-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-3.5-turbo-0125', 'gpt-3.5-turbo', 'gpt-3.5-turbo-completions'), [['gpt-3.5-turbo-0125', ['gpt-3.5-turbo', 'gpt-3.5-turbo-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0125-preview', 'gpt-4-turbo-preview', 'gpt-4-turbo-preview-completions'), [['gpt-4-0125-preview', ['gpt-4-turbo-preview', 'gpt-4-turbo-preview-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4o-2024-08-06', 'gpt-4o-2024-11-20'), [['gpt-4o-2024-08-06', undefined], ['gpt-4o-2024-11-20', undefined]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-completions'), [['gpt-4-turbo-2024-04-09', ['gpt-4-turbo', 'gpt-4-turbo-completions']]])
+})
+reviewTest('Month-day snapshots: OpenAI splits a cell that lists two month-day snapshots into one record each', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0314', 'gpt-4-0613'), [['gpt-4-0314', undefined], ['gpt-4-0613', undefined]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-1106-preview', 'gpt-4-0125-preview'), [['gpt-4-1106-preview', undefined], ['gpt-4-0125-preview', undefined]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0613', 'gpt-4o-2024-08-06'), [['gpt-4-0613', undefined], ['gpt-4o-2024-08-06', undefined]])
+})
+reviewTest('Month-day snapshots: OpenAI fails closed on an undated alias shared by several month-day snapshots', () => {
+  strictAssert.throws(() => openAISnapshots('gpt-4-0314', 'gpt-4-0613', 'gpt-4'), /lists snapshots gpt-4-0314, gpt-4-0613 with ambiguous alias gpt-4$/)
+  strictAssert.throws(() => openAISnapshots('gpt-4-0314', 'gpt-4-0613', 'gpt-4-completions'), /ambiguous alias gpt-4-completions/)
+})
+reviewTest('Month-day snapshots: OpenAI attaches a -completions variant to its own snapshot', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0314', 'gpt-4-0613', 'gpt-4-0613-completions'), [['gpt-4-0314', undefined], ['gpt-4-0613', ['gpt-4-0613-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0314-completions', 'gpt-4-0314', 'gpt-4-0613'), [['gpt-4-0314', ['gpt-4-0314-completions']], ['gpt-4-0613', undefined]])
+})
+reviewTest('Month-day snapshots: OpenAI does not read an invalid month or day as a snapshot', () => {
+  for (const token of ['model-1399', 'model-0230', 'model-0431', 'model-0000', 'model-0100', 'model-1301-preview', 'model-0613-latest']) {
+    strictAssert.deepEqual(openAISnapshots(token, 'gpt-4-0613'), [['gpt-4-0613', [token]]], token)
+  }
+})
+reviewTest('Month-day snapshots: OpenAI accepts February 29 and rejects February 30', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0229', 'gpt-4-0613'), [['gpt-4-0229', undefined], ['gpt-4-0613', undefined]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0230', 'gpt-4-0613'), [['gpt-4-0613', ['gpt-4-0230']]])
+})
+reviewTest('Month-day snapshots: OpenAI keeps a full-date -completions variant on its snapshot', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4o-2024-08-06', 'gpt-4o-2024-08-06-completions'), [['gpt-4o-2024-08-06', ['gpt-4o-2024-08-06-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4o-2024-08-06-completions', 'gpt-4o-2024-08-06'), [['gpt-4o-2024-08-06', ['gpt-4o-2024-08-06-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0613', 'gpt-4o-2024-08-06', 'gpt-4o-2024-08-06-completions'), [['gpt-4-0613', undefined], ['gpt-4o-2024-08-06', ['gpt-4o-2024-08-06-completions']]])
+})
+reviewTest('Month-day snapshots: OpenAI picks the snapshot as the canonical ID of a single-snapshot cell', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4', 'gpt-4-0613'), [['gpt-4-0613', ['gpt-4']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0613-completions', 'gpt-4-0613'), [['gpt-4-0613', ['gpt-4-0613-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4', 'gpt-4-turbo'), [['gpt-4', ['gpt-4-turbo']]])
 })
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
