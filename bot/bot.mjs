@@ -849,9 +849,15 @@ export const evaluatePlan = async ({
       configured: Boolean(settings.command),
       results,
     }
-    const encoded = `${JSON.stringify(artifact, null, 2)}\n`
-    const encodedBytes = Buffer.byteLength(encoded)
     const budget = evalArtifactBudget(settings.max_report_bytes, groups.length)
+    let encoded
+    try {
+      encoded = `${JSON.stringify(artifact, null, 2)}\n`
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error
+      throw new Error(`refusing eval: eval results artifact is too large to encode, over its ${budget}-byte budget; lower eval.max_report_bytes`)
+    }
+    const encodedBytes = Buffer.byteLength(encoded)
     if (encodedBytes > budget) {
       throw new Error(`refusing eval: eval results artifact would be ${encodedBytes} bytes, over its ${budget}-byte budget; lower eval.max_report_bytes`)
     }
