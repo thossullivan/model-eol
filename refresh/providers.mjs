@@ -227,12 +227,13 @@ function replacementNote(text, tokens) {
   if (tokens.length) {
     const leading = residual.match(new RegExp(`^(?:${unit})+`))?.[0]
     if (leading && containsToken.test(leading)) residual = residual.slice(leading.length)
-    const trailing = residual.match(new RegExp(`(?:${unit})+$`))?.[0]
+    const trailing = residual.match(new RegExp(`(?:${unit})+[.,;:]?\\s*$`))?.[0]
     if (trailing && containsToken.test(trailing)) residual = residual.slice(0, -trailing.length)
   }
   residual = unwrapOuterBrackets(residual.trim())
-  if (tokens.length && new RegExp(`^(?:${unit})+$`).test(residual) && containsToken.test(residual)) return undefined
-  return residual.replace(/\s+/g, ' ').trim() || undefined
+  if (tokens.length && new RegExp(`^(?:${unit}|[()[\\]{}])+$`).test(residual) && containsToken.test(residual)) return undefined
+  residual = residual.replace(/\s+/g, ' ').replace(/ ([,;:.)\]}])/g, '$1').replace(/([([{]) /g, '$1').trim()
+  return /[\p{L}\p{N}]/u.test(residual) ? residual : undefined
 }
 
 export function extractReplacementFields(fragment) {
