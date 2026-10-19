@@ -560,8 +560,6 @@
     },
     {
       "id": "claude-haiku-5-5",
-      "shutdown": "2027-10-07",
-      "date_precision": "tentative",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "distributions": [
         {
@@ -571,7 +569,9 @@
           "status": "active",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html"
         }
-      ]
+      ],
+      "shutdown": "2027-10-07",
+      "date_precision": "tentative"
     }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-10-18T18:39:55.065Z",
+  "generated": "2026-10-19T12:21:25.927Z",
   "source": "https://ai.google.dev/gemini-api/docs/deprecations",
   "models": [
     {
@@ -40,7 +40,7 @@
         }
       ],
       "replacement": "gemini-3.6-flash",
-      "replacement_note": "not available to select in Google AI Studio the endpoint is not shutting down automatically routes API requests to"
+      "replacement_note": "not available to select in Google AI Studio; the endpoint is not shutting down and automatically routes API requests to gemini-3.6-flash"
     },
     {
       "id": "gemini-3.1-flash-image",
@@ -581,7 +581,7 @@
         }
       ],
       "replacement": "gemini-3.8-flash",
-      "replacement_note": "not available to select in Google AI Studio the endpoint is not shutting down automatically routes API requests to"
+      "replacement_note": "not available to select in Google AI Studio; the endpoint is not shutting down and automatically routes API requests to gemini-3.8-flash"
     },
     {
       "id": "gemma-4-26b-a4b-it"
