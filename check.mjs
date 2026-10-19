@@ -10,11 +10,13 @@
 //   node check.mjs alert [paths...] [--format github|markdown|badge] [--json]
 //   node check.mjs plan [paths...] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR]
 //   node check.mjs apply --plan plan.json [--dry-run]
-//   node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan|eval|feed-refresh-receipt|npm-release-result]
+//   node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan|eval|feed-refresh-receipt|npm-release-result|verification]
+//   node check.mjs verify RECEIPT [inputs] [--require-all] [--json]
 //
 // exit codes: check/alert 0 = clear, 1 = finding, 2 = usage error;
 // apply 0 = all items applied, 1 = item refused, 2 = usage or plan error;
-// validate 0 = every document valid, 2 = usage, parse, schema, or semantic error.
+// validate 0 = every document valid, 2 = usage, parse, schema, or semantic error;
+// verify 0 = verified or partial, 1 = mismatch (or partial with --require-all), 2 = usage, read, structural, or schema error.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -48,6 +50,7 @@ import {
 } from './lib/reports.mjs'
 import { addedLinesForTargets, filterFindingsToChanged, gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
 import { DOCUMENT_TYPES, formatDocumentErrors, validateDocumentFile } from './lib/validate-document.mjs'
+import { SUPPORTED_RECEIPT_SCHEMAS, VERIFY_INPUTS, VerifyError, formatVerification, printable, verifyReceipt } from './lib/verify.mjs'
 
 const rootForTarget = target => {
   const absolute = path.resolve(target)
@@ -96,7 +99,7 @@ const repoPathForFile = (file, roots) => {
 }
 
 const main = () => {
-const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'apply', 'validate', 'help'])
+const COMMANDS = new Set(['check', 'inventory', 'schedule', 'alert', 'plan', 'apply', 'validate', 'verify', 'help'])
 const args = process.argv.slice(2)
 
 if (args[0] === '--help' || args[0] === '-h') args[0] = 'help'
@@ -119,13 +122,20 @@ try {
       'dry-run': { type: 'boolean' },
       changed: { type: 'string' },
       type: { type: 'string' },
+      'feeds-dir': { type: 'string' },
+      commit: { type: 'string' },
+      'run-url': { type: 'string' },
+      package: { type: 'string' },
+      'source-commit': { type: 'string' },
+      version: { type: 'string' },
+      'require-all': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: true,
     help: 'node check.mjs --help',
   })
 } catch (error) {
-  console.error(error.message)
+  console.error(printable(error.message))
   return 2
 }
 
@@ -152,7 +162,9 @@ Usage:
   node check.mjs alert [paths...] [--config FILE] [--days N] [--scope all|direct] [--format github|markdown|badge] [--json]
   node check.mjs plan [paths...] [--config FILE] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR] [--allow-incomplete]
   node check.mjs apply --plan plan.json [--dry-run]
-  node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan|eval|feed-refresh-receipt|npm-release-result]
+  node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan|eval|feed-refresh-receipt|npm-release-result|verification]
+  node check.mjs verify RECEIPT [--feeds-dir DIR] [--commit SHA] [--run-url URL] [--package FILE.tgz]
+                        [--source-commit SHA] [--version X.Y.Z] [--plan FILE] [--config FILE] [--require-all] [--json]
 
 Commands:
   check       Fail when tracked model IDs are retired or retiring within --days.
@@ -165,8 +177,37 @@ Commands:
   plan        Emit a JSON migration plan with only safely patchable direct API references.
   apply       Apply a plan with line-hash and occurrence checks; use --dry-run to preview.
   validate    Validate a feed, config, check, inventory, schedule, alert, or plan document,
-              or an eval, feed-refresh-receipt, or npm-release-result receipt.
+              an eval, feed-refresh-receipt, or npm-release-result receipt, or a verify --json report.
               The type is inferred from its discriminator or .model-eol.json filename unless --type is set.
+  verify      Check what a receipt claims against inputs you supply, offline. The receipt kind
+              comes from its schema value:
+                ${SUPPORTED_RECEIPT_SCHEMAS.join('\n                ')}
+              Each claim is verified, mismatch, not-checked (its input was not supplied), or
+              not-applicable (a no-release receipt; a release input given for one adds a mismatched
+              released claim). Nothing is read from the current directory or git.
+              The result is verified only when every applicable claim is; partial means nothing
+              mismatched but some claim was not checked; mismatch means at least one claim failed.
+              --json emits a model-eol/verification@0.1 document.
+              Eval outcomes (status, exit_code, report) are never claims: verified means the
+              manifest is bound to the supplied commit, plan, config, and feeds, not that evals passed.
+
+Verify inputs:
+  --feeds-dir DIR       Feeds directory itself (DIR/*.json, e.g. ./feeds), not a repository root.
+                        Feed-refresh: every feeds/*.json digest; missing, extra, and changed files mismatch.
+                        Eval: with --plan and --config, recomputes each result's feed_digest
+                        (--plan and --config alone already fix the expected result set).
+  --commit SHA          Feed-refresh refresh_commit, npm-release release_commit, or eval base_sha.
+  --run-url URL         Feed-refresh refresh_run, compared after HTTPS URL normalization.
+  --package FILE.tgz    npm-release registry_integrity: sha512 SRI of the tarball bytes. No registry lookup.
+  --source-commit SHA   npm-release source_commit.
+  --version X.Y.Z       npm-release version (the tag is bound to it as vX.Y.Z).
+  --plan FILE           Eval plan_digest from a model-eol.plan/0.1 document; also needed for feed digests.
+  --config FILE         Eval eval_config_digest and configured, from .model-eol.json (use a file holding {}
+                        for a repository without one). MODEL_EOL_EVAL_COMMAND overrides eval.command as it
+                        does for the bot, and the output says when it applied.
+  --require-all         Exit 1 when the result is partial. A release gate passes --package, --version,
+                        --commit, and --require-all: a no-release receipt then mismatches.
+  SHA inputs are 40-64 hexadecimal characters; uppercase is lowercased.
 
 Scopes:
   all        Check every tracked model ID found. This preserves the original behavior.
@@ -177,9 +218,10 @@ Configuration:
   --config FILE selects an explicit config. Explicit CLI flags override config values.
 
 Exit codes:
-  0  Clean, or report generated successfully.
-  1  Findings, alert errors, or refused apply items.
-  2  Usage, feed, scan, plan, or validation errors.
+  0  Clean, or report generated successfully. verify: verified or partial (no claim mismatched).
+  1  Findings, alert errors, or refused apply items. verify: a claim mismatched, or partial with --require-all.
+  2  Usage, feed, scan, plan, or validation errors. verify: usage error, unreadable file, structurally
+     invalid receipt, or unsupported receipt schema.
   3  Output stream failure other than EPIPE.
 `)
   return 0
@@ -191,6 +233,37 @@ if (positionals.some(value => value.length === 0)) {
 }
 if (values.via === '') {
   console.error('--via must be a non-empty lifecycle channel')
+  return 2
+}
+
+if (command === 'verify') {
+  const allowedOptions = new Set([...VERIFY_INPUTS, 'require-all', 'json'])
+  const unsupported = Object.keys(values).find(option => !allowedOptions.has(option))
+  if (positionals.length !== 1 || unsupported) {
+    const detail = unsupported ? `; --${unsupported} is not supported by verify` : ''
+    console.error(`verify requires exactly one RECEIPT${detail}; run node check.mjs --help for usage`)
+    return 2
+  }
+  let report
+  try {
+    report = verifyReceipt({
+      file: positionals[0],
+      inputs: Object.fromEntries(VERIFY_INPUTS.map(flag => [flag, values[flag]])),
+      env: process.env,
+    })
+  } catch (error) {
+    console.error(printable(error instanceof VerifyError
+      ? `model-eol verify: ${error.message}`
+      : `model-eol verify: unexpected error, nothing was checked: ${error?.message ?? error}`))
+    return 2
+  }
+  console.log(AS_JSON ? JSON.stringify(report, null, 2) : formatVerification(report))
+  if (report.result === 'mismatch') return 1
+  return report.result === 'partial' && values['require-all'] ? 1 : 0
+}
+const verifyOnly = ['feeds-dir', 'commit', 'run-url', 'package', 'source-commit', 'version', 'require-all'].find(option => values[option] !== undefined)
+if (verifyOnly) {
+  console.error(`--${verifyOnly} is only supported by the verify command`)
   return 2
 }
 

@@ -12,11 +12,9 @@ import {
   branchFor,
   daysRemaining,
   hasMetadataMarker,
-  itemDigest,
   markdownCode,
   markdownLink,
   markdownText,
-  matchesAnyGlob,
   metadataLine,
   parseMetadata,
   repoPath,
@@ -24,6 +22,18 @@ import {
   staleWorkComment,
   stableJson,
 } from './lib/common.mjs'
+import {
+  contextFor,
+  effectiveEval,
+  evalConfigDigest,
+  evalIdentity,
+  feedContext,
+  groupDigest,
+  ignoredModelIds,
+  isIgnored,
+  modelGroups,
+  planDigest,
+} from '../lib/digests.mjs'
 import { assertValidPlanDocument } from '../lib/validate-document.mjs'
 import { captureWindowFor, lifecycleFor } from '../lib/feeds.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
@@ -47,6 +57,8 @@ import {
   verifyBotBranch,
   verifyRemoteBranchHead,
 } from './lib/git.mjs'
+
+export { contextFor }
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const CHECKER = path.join(ROOT, 'check.mjs')
@@ -207,27 +219,6 @@ const verifiedPlanArtifact = (file, generatedPlan) => {
   return artifact
 }
 
-const withoutGenerated = plan => {
-  const { generated, ...stable } = plan
-  return stable
-}
-
-const planDigest = plan => sha256(stableJson(withoutGenerated(plan)))
-
-const effectiveEval = (config, commandOverride = null) => ({
-  ...config.eval,
-  command: typeof commandOverride === 'string' && commandOverride.trim() ? commandOverride : config.eval.command,
-})
-
-const evalConfigDigest = settings => sha256(stableJson({
-  command: settings.command ?? null,
-  timeout_ms: settings.timeout_ms,
-  max_report_bytes: settings.max_report_bytes,
-  pass_env: settings.pass_env,
-}))
-
-const evalIdentity = (publisher, id, via) => `${publisher}\0${id}\0${via ?? ''}`
-
 const readJsonArtifact = (file, maxBytes, label) => {
   const absolute = asAbsolute(file)
   const artifact = readReportCapped(absolute, maxBytes + 1)
@@ -285,95 +276,8 @@ const boundEvalResults = ({ file, config, commandOverride, plan, groups, baseHea
   }
 }
 
-const feedContext = feedsDir => {
-  const records = new Map()
-  let files = []
-  try {
-    files = fs.readdirSync(feedsDir).filter(file => file.endsWith('.json')).sort()
-  } catch {
-    return records
-  }
-  for (const file of files) {
-    let feed
-    try {
-      feed = JSON.parse(fs.readFileSync(path.join(feedsDir, file), 'utf8'))
-    } catch {
-      continue
-    }
-    if (feed?.spec !== 'model-eol/0.1' || !Array.isArray(feed.models)) continue
-    for (const entry of feed.models) {
-      for (const key of [entry.id, ...(entry.aliases ?? [])]) {
-        if (typeof key === 'string') records.set(`${feed.publisher}\0${key}`, { feed, entry })
-      }
-    }
-  }
-  return records
-}
-
-export const contextFor = (records, publisher, id, via) => {
-  const record = records.get(`${publisher}\0${id}`)
-  if (!record) return { announced: null, notes: [], entry: null }
-  const distribution = via ? (record.entry.distributions ?? []).find(item => item.via === via) : null
-  return {
-    announced: distribution ? distribution.announced ?? null : record.entry.announced ?? null,
-    notes: [record.feed.note, record.entry.notes].filter(Boolean),
-    entry: record.entry,
-  }
-}
-
-const ignoredModelIds = (plan, config) => {
-  const ignored = new Set(config.ignore.models)
-  const ids = new Set()
-  for (const item of [...plan.items, ...plan.issues]) {
-    if (item.id && (ignored.has(item.id) || ignored.has(item.matched))) ids.add(item.id)
-  }
-  return ids
-}
-
-const isIgnored = (entry, root, config, ignoredIds) => {
-  if (entry.id && ignoredIds.has(entry.id)) return true
-  if (entry.id && config.ignore.models.includes(entry.id)) return true
-  if (entry.matched && config.ignore.models.includes(entry.matched)) return true
-  return matchesAnyGlob(repoPath(entry.file, root), config.ignore.paths)
-}
-
-const buildModelGroups = (plan, config, root, records) => {
-  const ignoredIds = ignoredModelIds(plan, config)
-  const groups = new Map()
-  for (const item of plan.items) {
-    if (activeWaiver(item)) continue
-    if (isIgnored(item, root, config, ignoredIds)) continue
-    const via = Object.hasOwn(item, 'requested_via') ? item.requested_via : plan.via
-    const key = `${item.publisher}\0${item.id}\0${via ?? ''}`
-    if (!groups.has(key)) {
-      groups.set(key, {
-        kind: 'model',
-        id: item.id,
-        publisher: item.publisher,
-        items: [],
-        via,
-        branch: branchFor(item.publisher, item.id, via),
-        context: contextFor(records, item.publisher, item.id, via),
-      })
-    }
-    groups.get(key).items.push(item)
-  }
-  for (const group of groups.values()) {
-    group.items.sort((a, b) => `${a.file}:${a.line}:${a.occurrence}`.localeCompare(`${b.file}:${b.line}:${b.occurrence}`))
-    group.feedDigest = groupDigest(group.items, group.context?.entry)
-  }
-  return [...groups.values()].sort((a, b) => `${a.publisher}/${a.id}`.localeCompare(`${b.publisher}/${b.id}`))
-}
-
-// the capture section reads clocks outside the plan items, so they join the digest that gates body updates
-const clockRows = entry => entry
-  ? {
-      shutdown: entry.shutdown ?? null,
-      date_precision: entry.date_precision ?? null,
-      distributions: itemDigest((entry.distributions ?? []).map(row => ({ via: row.via, shutdown: row.shutdown ?? null, status: row.status ?? null, date_precision: row.date_precision ?? null }))),
-    }
-  : null
-const groupDigest = (items, entry) => sha256(stableJson({ items: itemDigest(items), clocks: clockRows(entry) }))
+const buildModelGroups = (plan, config, root, records) =>
+  modelGroups(plan, config, root, records, (publisher, id, via) => ({ branch: branchFor(publisher, id, via) }))
 
 const buildIssueGroups = (plan, config, root, records) => {
   const ignoredIds = ignoredModelIds(plan, config)

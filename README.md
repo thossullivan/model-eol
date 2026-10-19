@@ -589,8 +589,79 @@ reject unknown versions. A few rules, such as feed sort order and `tag` equal
 to `v` plus `version`, cannot be written in Draft-07. Each schema's
 `description` lists them, and `model-eol validate` enforces them in code.
 
-`model-eol validate` checks a receipt's structure only. A `model-eol verify`
-command that checks what a receipt claims arrives in a later release.
+`model-eol validate` checks a receipt's structure only. `model-eol verify`
+checks what a receipt claims against inputs you supply:
+
+```bash
+# release result against the exact tarball you hold (no registry lookup)
+npm pack model-eol@0.8.4
+model-eol verify npm-release-result.json --package model-eol-0.8.4.tgz \
+  --commit RELEASE_SHA --source-commit SOURCE_SHA --version 0.8.4
+
+# refresh receipt against a checkout's feeds directory
+model-eol verify feed-refresh-receipt.json --feeds-dir ./feeds \
+  --commit REFRESH_SHA --run-url https://github.com/OWNER/REPO/actions/runs/ID
+
+# eval manifest against the plan, config, and feeds the evaluator used
+model-eol verify eval-results.json --commit BASE_SHA --plan plan.json \
+  --config .model-eol.json --feeds-dir ./feeds
+```
+
+The receipt kind comes from its `schema` value. verify validates the receipt's
+structure first, then reports each claim. It never reads the current
+directory, git state, or the network; every input is an explicit flag.
+
+| Flag | Checks |
+|---|---|
+| `--feeds-dir DIR` | Refresh: the SHA-256 of every `DIR/*.json`, compared with the receipt's `feeds` list as a set. Changed, missing, and extra files are each a mismatch. `DIR` is the feeds directory itself; a repository root (a directory holding `feeds/`) is refused. Eval: with `--plan` and `--config`, recomputes each result's `feed_digest` (`--plan` and `--config` alone already fix the expected result set). |
+| `--commit SHA` | Refresh `refresh_commit`, release `release_commit`, or eval `base_sha`. |
+| `--run-url URL` | Refresh `refresh_run`, after the same HTTPS URL normalization the receipt writer applies. |
+| `--package FILE.tgz` | Release `registry_integrity`: the sha512 SRI of the tarball bytes. |
+| `--source-commit SHA` | Release `source_commit`. |
+| `--version X.Y.Z` | Release `version`; `tag` is bound to it as `vX.Y.Z`. |
+| `--plan FILE` | Eval `plan_digest`, from a validated `model-eol.plan/0.1` document. |
+| `--config FILE` | Eval `eval_config_digest` and `configured`, with the bot's settings resolution. `MODEL_EOL_EVAL_COMMAND` in the environment overrides `eval.command` as it does for the bot, and the output says so. For a repository without `.model-eol.json`, pass a file containing `{}`. |
+| `--require-all` | Exit 1 when the result is `partial`. |
+| `--json` | Emit a [`model-eol/verification@0.1`](https://thossullivan.github.io/model-eol/schema/0.1/model-eol.verification.schema.json) document. |
+
+SHA inputs are 40 to 64 hex characters; uppercase is lowercased. A flag that
+does not apply to the receipt's kind is a usage error.
+
+Each claim is `verified`, `mismatch` (with the receipt's value and the
+computed one), `not-checked` (with the flag that would check it), or
+`not-applicable` (a `released: false` result makes no release claims, so only
+`source_commit` applies). Supplying `--commit`, `--version`, or `--package` for a
+`released: false` result adds a `released` claim that mismatches, because those
+inputs assert a release the receipt says did not happen. For a refresh receipt,
+the report also shows its `state`, `checked_at`, and `pending_pr` as information;
+a pending receipt verifies by the same rules as a clean one. For a release
+result the report shows `released`; a release gate must pass `--package`,
+`--version`, `--commit`, and `--require-all`, so that a no-release receipt
+mismatches instead of verifying through `--source-commit` alone.
+
+For a configured eval manifest, `--plan` and `--config` fix the set of result
+identities the evaluator had to produce: a planned identity with no result, a
+result for an unplanned identity, and a duplicated identity are each a
+mismatch, and `--feeds-dir` additionally checks each result's `feed_digest`.
+Without `--plan` and `--config`, a `results` claim is reported as not checked,
+so stripping results from a manifest never verifies. Text output escapes
+control characters in every printed value. The overall result is `verified` only when every
+applicable claim is verified. It is `partial` when nothing mismatched but at
+least one claim was not checked: the receipt is consistent with what you
+supplied, not proven. It is `mismatch` when any claim mismatched.
+
+Eval outcomes are never claims. `verify` does not check `status`, `exit_code`,
+`report`, or `generated`, because an evaluation cannot be reproduced offline. A
+`verified` eval manifest is bound to the supplied commit, plan, config, and
+feeds. It does not mean the evals passed. A gate that needs passing evals must
+read the results itself.
+
+| Exit | Meaning |
+|---|---|
+| 0 | No mismatch: `verified`, or `partial` without `--require-all`. |
+| 1 | At least one claim mismatched, or `partial` with `--require-all`. |
+| 2 | Usage error, unreadable file, structurally invalid receipt, or unsupported receipt schema or version. No claim is reported. |
+| 3 | Output write failure when the result would otherwise exit 0. |
 
 ## The actual ask
 

@@ -1,27 +1,7 @@
-import crypto from 'node:crypto'
-import path from 'node:path'
+import { sha256 } from '../../lib/digests.mjs'
 
 export { matchesAnyGlob, matchesGlob } from '../../lib/glob.mjs'
-
-export const sha256 = value => crypto.createHash('sha256').update(value).digest('hex')
-
-const stableValue = value => {
-  if (Array.isArray(value)) return value.map(stableValue)
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]))
-  }
-  return value
-}
-
-export const stableJson = value => JSON.stringify(stableValue(value))
-
-export const sortedJsonDigest = values => {
-  const sorted = values.slice().sort((a, b) => {
-    const [left, right] = [stableJson(a), stableJson(b)]
-    return left < right ? -1 : left > right ? 1 : 0
-  })
-  return sha256(stableJson(sorted))
-}
+export { activeWaiver, itemDigest, repoPath, sha256, sortedJsonDigest, stableJson } from '../../lib/digests.mjs'
 
 const safeSegment = value => {
   const result = String(value ?? '')
@@ -43,12 +23,6 @@ export const branchFor = (publisher, id, via = null) =>
 export const daysRemaining = (shutdown, now = new Date()) => {
   if (!shutdown) return null
   return Math.ceil((new Date(`${shutdown}T00:00:00Z`) - now) / 86400000)
-}
-
-export const repoPath = (file, root) => {
-  const absolute = path.isAbsolute(file) ? file : path.resolve(root, file)
-  const relative = path.relative(root, absolute)
-  return relative.split(path.sep).join('/').replace(/^\.\//, '')
 }
 
 export const metadataLine = metadata => `<!-- model-eol ${JSON.stringify(metadata).replaceAll('-->', '\\u002d\\u002d\\u003e')} -->`
@@ -81,10 +55,6 @@ export const parseMetadata = body => {
     return null
   }
 }
-
-export const itemDigest = items => sortedJsonDigest(items)
-
-export const activeWaiver = item => item?.waiver?.active === true ? item.waiver : null
 
 export const staleWorkComment = (kind, waiver = null) => waiver
   ? `model-eol is closing this bot-owned ${kind} because an active waiver makes its finding non-actionable. The waiver expires ${waiver.expires}, is owned by ${markdownText(waiver.owner)}, and records: ${markdownText(waiver.reason)}`
