@@ -360,7 +360,10 @@ export function parseBedrockModelCardsIndexHtml(html) {
   return [...urls]
 }
 
-const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy period', 'Model lifecycle policy', 'Model EOL date']
+const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy period', 'Model lifecycle policy', 'Model EOL date', 'Model lifecycle']
+// Policy link text and the EOL banner's "see Model lifecycle" repeat the words, so only the colon form counts.
+const BEDROCK_CARD_LABEL_COUNT = new Map([['Model lifecycle', /\bModel lifecycle\s*:/gi]])
+const BEDROCK_CARD_LIFECYCLE = /^(?:Active|(Legacy)|EOL: (\d{4}-\d{2}-\d{2})(?: \(certain regions\))?)$/
 const BEDROCK_CARD_MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
 const BEDROCK_CARD_DAY = new RegExp(`^${BEDROCK_CARD_MONTH} \\d{1,2}, (?:19|20)\\d{2}$`, 'i')
 const BEDROCK_CARD_MONTH_ONLY = new RegExp(`^${BEDROCK_CARD_MONTH} (?:19|20)\\d{2}$`, 'i')
@@ -380,7 +383,7 @@ function bedrockCardFields(html) {
   }
   const text = plainText(html)
   for (const label of BEDROCK_CARD_LABELS) {
-    const count = [...text.matchAll(new RegExp(`\\b${label}\\b`, 'gi'))].length
+    const count = [...text.matchAll(BEDROCK_CARD_LABEL_COUNT.get(label) ?? new RegExp(`\\b${label}\\b`, 'gi'))].length
     if (count !== Number(fields.has(label))) throw new Error(`unaccounted ${label} field outside its paragraph`)
   }
   return fields
@@ -433,6 +436,11 @@ export function parseBedrockModelCardHtml(html, source) {
       ids.add(id)
     }
     const fields = bedrockCardFields(html)
+    const lifecycle = fields.get('Model lifecycle')
+    const lifecycleMatch = lifecycle === undefined ? undefined : lifecycle.match(BEDROCK_CARD_LIFECYCLE)
+    if (lifecycle !== undefined && !lifecycleMatch) throw new Error(`unrecognised Model lifecycle: ${lifecycle}`)
+    const lifecycleEol = lifecycleMatch?.[2] && assertIsoDate(lifecycleMatch[2], 'Model lifecycle EOL')
+    const lifecycleLegacy = Boolean(lifecycleMatch?.[1] || lifecycleEol)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     const regionDates = []
     for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
@@ -471,10 +479,11 @@ export function parseBedrockModelCardHtml(html, source) {
     if (regionDates.length && !exact) throw new Error(`region EOL ${regionDates[0]} without an exact Model EOL date`)
     const mismatch = regionDates.find(date => date !== exact)
     if (mismatch) throw new Error(`region EOL ${mismatch} differs from Model EOL date ${exact}`)
+    if (lifecycleEol && exact && lifecycleEol !== exact) throw new Error(`Model lifecycle EOL ${lifecycleEol} differs from Model EOL date ${exact}`)
     if (!exact && !candidates.length) return skip('no day-precision date')
     const payload = exact
-      ? { shutdown: exact, status: regionDates.length || legacyField ? 'legacy' : 'active' }
-      : { shutdown: candidates.sort().at(-1), date_precision: 'tentative', status: 'active' }
+      ? { shutdown: exact, status: regionDates.length || legacyField || lifecycleLegacy ? 'legacy' : 'active' }
+      : { shutdown: candidates.sort().at(-1), date_precision: 'tentative', status: lifecycleLegacy ? 'legacy' : 'active' }
     return { records: [...ids].map(bedrockId => ({ bedrockId, ...payload, source })), skipped: [] }
   } catch (error) {
     throw new Error(`aws-bedrock model card ${source}: ${error.message}`)

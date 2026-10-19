@@ -943,7 +943,7 @@ assert(card('mistral-ai-devstral-2-123b').skipped[0]?.reason === 'no day-precisi
 const mistralCard = card('mistral-ai-mistral-7b-instruct').records[0]
 assert(mistralCard.shutdown === '2025-03-01' && mistralCard.date_precision === 'tentative', 'Mistral selects the later US not-before floor')
 const jambaCard = card('ai21-labs-jamba-1-5-large').records[0]
-assert(jambaCard.shutdown === '2026-11-26' && jambaCard.status === 'active' && !Object.hasOwn(jambaCard, 'date_precision'), 'Jamba parses an exact EOL without regional Legacy status')
+assert(jambaCard.shutdown === '2026-11-26' && jambaCard.status === 'legacy' && !Object.hasOwn(jambaCard, 'date_precision'), 'Jamba parses an exact EOL and takes Legacy status from its Model lifecycle line without regional cells')
 const cardOnlyJamba = mergeBedrockSources(bedrockEntries.filter(record => record.bedrockId !== jambaCard.bedrockId), [jambaCard])
 assert(JSON.stringify(cardOnlyJamba.records.find(record => record.bedrockId === jambaCard.bedrockId)) === JSON.stringify(jambaCard), 'Jamba contributes a card-only exact record when the legacy table lacks its ID')
 const commandCard = card('cohere-command-r').records[0]
@@ -1263,6 +1263,67 @@ reviewTest('Third pass F2: Bedrock refuses the reported definition-list and titl
 reviewTest('Third pass F2: Bedrock matches whole labels without matching longer words', () => {
   const html = reviewCard + '<p>Premodel EOL date; Model EOL dates; Model launch dates; Legacy periods; Model lifecycle policymaker; EOL no sooner thanks</p>'
   strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+})
+const lifecycleLine = value => `<p><b>Model lifecycle:</b> ${value}</p>`
+const lifecycleCard = (value, eol = 'N/A') => fableHtml.replace(lifecycleLine('Active'), lifecycleLine(value)).replace('<b>Model EOL date:</b> N/A', `<b>Model EOL date:</b> ${eol}`)
+const lifecyclePolicy = text => `<p><b>Model lifecycle policy:</b> <a href="./model-lifecycle-legacy.html">${text}</a></p>`
+const lifecycleBanner = '<p>This model version has reached the end of its life. For how model lifecycle stages work, see <a href="./model-lifecycle.html">Model lifecycle</a>.</p>'
+reviewTest('Model lifecycle line: Bedrock keeps an Active card and a card without the line on current behaviour', () => {
+  strictAssert.ok(fableHtml.includes(lifecycleLine('Active')))
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Active'), fableCard.source), card('anthropic-claude-fable-5-1'))
+  strictAssert.deepEqual(parseBedrockModelCardHtml(fableHtml.replace(lifecycleLine('Active'), ''), fableCard.source), card('anthropic-claude-fable-5-1'))
+})
+reviewTest('Model lifecycle line: Bedrock marks a Legacy card legacy without changing its tentative floor', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+})
+for (const value of ['EOL: 2027-09-01', 'EOL: 2027-09-01 (certain regions)']) {
+  reviewTest(`Model lifecycle line: Bedrock marks a matching ${value} card legacy at its exact Model EOL date`, () => {
+    const { date_precision: _, ...exact } = fableCard
+    strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard(value, 'September 1, 2027'), fableCard.source).records, [{ ...exact, shutdown: '2027-09-01', status: 'legacy' }])
+  })
+}
+reviewTest('Model lifecycle line: Bedrock does not derive a shutdown from an EOL line without an exact Model EOL date', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('EOL: 2026-12-01'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+})
+reviewTest('Model lifecycle line: Bedrock parses the live EOL card shape with its end-of-life banner', () => {
+  const html = cardHtml.get(commandCard.source).replace(lifecycleLine('Legacy'), lifecycleLine('EOL: 2026-08-19')).replace('<p><b>Model launch date:', `${lifecycleBanner}<p><b>Model launch date:`)
+  strictAssert.ok(html.includes(lifecycleBanner) && html.includes(lifecycleLine('EOL: 2026-08-19')))
+  strictAssert.deepEqual(parseBedrockModelCardHtml(html, commandCard.source).records, [{ ...commandCard, status: 'legacy' }])
+})
+for (const value of ['active', 'LEGACY', 'Deprecated', 'Retired', 'EOL', 'EOL: 2027-9-1', 'EOL 2027-09-01', 'EOL: September 1, 2027', 'EOL: 2027-09-01 (some regions)', 'EOL: 2027-09-01 (certain regions', 'Legacy (certain regions)', 'Active; EOL: 2027-09-01']) {
+  reviewTest(`Model lifecycle line: Bedrock rejects an unrecognised value: ${value}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard(value), fableCard.source), error =>
+      error.message.includes(fableCard.source) && error.message.includes(`unrecognised Model lifecycle: ${value}`))
+  })
+}
+reviewTest('Model lifecycle line: Bedrock rejects an EOL line with an impossible calendar date', () => {
+  strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard('EOL: 2027-02-30'), fableCard.source), /Model lifecycle EOL must be a real calendar date/)
+})
+for (const value of ['EOL: 2027-09-02', 'EOL: 2027-09-02 (certain regions)']) {
+  reviewTest(`Model lifecycle line: Bedrock rejects ${value} that differs from the exact Model EOL date`, () => {
+    for (const eol of ['September 1, 2027', 'Legacy: September 1, 2027']) {
+      strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard(value, eol), fableCard.source), /Model lifecycle EOL 2027-09-02 differs from Model EOL date 2027-09-01/)
+    }
+  })
+}
+reviewTest('Model lifecycle line: Bedrock rejects a duplicate Model lifecycle paragraph', () => {
+  for (const second of ['Active', 'Legacy']) {
+    strictAssert.throws(() => parseBedrockModelCardHtml(fableHtml.replace(lifecycleLine('Active'), lifecycleLine('Active') + lifecycleLine(second)), fableCard.source), /duplicate Model lifecycle field/)
+  }
+})
+for (const fragment of ['<div>Model lifecycle: Legacy</div>', '<div>MODEL LIFECYCLE : Legacy</div>', '<p>Details: Model lifecycle: Legacy</p>', '<p>Context window: 8K tokens; Model lifecycle: Legacy</p>', '<li>Model lifecycle: EOL: 2027-09-01</li>']) {
+  reviewTest(`Model lifecycle line: Bedrock accounts for Model lifecycle outside its field paragraph: ${fragment}`, () => {
+    for (const html of [reviewCard + fragment, fableHtml + fragment]) {
+      strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unaccounted Model lifecycle field outside its paragraph/)
+    }
+  })
+}
+reviewTest('Model lifecycle line: the policy paragraph, its link texts, and the EOL banner are not Model lifecycle fields', () => {
+  for (const text of ['Model lifecycle (For Models Launched Prior to Sept 7 2026)', 'Model lifecycle', 'Bedrock Model Lifecycle']) {
+    const html = reviewCard + lifecycleBanner + lifecyclePolicy(text)
+    strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+    strictAssert.equal(parseBedrockModelCardHtml(html + lifecycleLine('Legacy'), reviewCardSource).records[0]?.status, 'legacy')
+  }
 })
 for (const [url, html] of cardHtml) {
   reviewTest(`Third pass F2: Fixture lifecycle labels appear only in their field paragraphs: ${path.basename(new URL(url).pathname)}`, () => {
