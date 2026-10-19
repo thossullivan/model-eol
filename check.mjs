@@ -135,7 +135,7 @@ try {
     help: 'node check.mjs --help',
   })
 } catch (error) {
-  console.error(error.message)
+  console.error(printable(error.message))
   return 2
 }
 
@@ -188,11 +188,14 @@ Commands:
               The result is verified only when every applicable claim is; partial means nothing
               mismatched but some claim was not checked; mismatch means at least one claim failed.
               --json emits a model-eol/verification@0.1 document.
+              Eval outcomes (status, exit_code, report) are never claims: verified means the
+              manifest is bound to the supplied commit, plan, config, and feeds, not that evals passed.
 
 Verify inputs:
   --feeds-dir DIR       Feeds directory itself (DIR/*.json, e.g. ./feeds), not a repository root.
                         Feed-refresh: every feeds/*.json digest; missing, extra, and changed files mismatch.
-                        Eval: with --plan and --config, recomputes each result's feed_digest.
+                        Eval: with --plan and --config, recomputes each result's feed_digest
+                        (--plan and --config alone already fix the expected result set).
   --commit SHA          Feed-refresh refresh_commit, npm-release release_commit, or eval base_sha.
   --run-url URL         Feed-refresh refresh_run, compared after HTTPS URL normalization.
   --package FILE.tgz    npm-release registry_integrity: sha512 SRI of the tarball bytes. No registry lookup.

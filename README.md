@@ -613,7 +613,7 @@ directory, git state, or the network; every input is an explicit flag.
 
 | Flag | Checks |
 |---|---|
-| `--feeds-dir DIR` | Refresh: the SHA-256 of every `DIR/*.json`, compared with the receipt's `feeds` list as a set. Changed, missing, and extra files are each a mismatch. `DIR` is the feeds directory itself; a repository root (a directory holding `feeds/`) is refused. Eval: with `--plan` and `--config`, recomputes each result's `feed_digest`. |
+| `--feeds-dir DIR` | Refresh: the SHA-256 of every `DIR/*.json`, compared with the receipt's `feeds` list as a set. Changed, missing, and extra files are each a mismatch. `DIR` is the feeds directory itself; a repository root (a directory holding `feeds/`) is refused. Eval: with `--plan` and `--config`, recomputes each result's `feed_digest` (`--plan` and `--config` alone already fix the expected result set). |
 | `--commit SHA` | Refresh `refresh_commit`, release `release_commit`, or eval `base_sha`. |
 | `--run-url URL` | Refresh `refresh_run`, after the same HTTPS URL normalization the receipt writer applies. |
 | `--package FILE.tgz` | Release `registry_integrity`: the sha512 SRI of the tarball bytes. |
@@ -649,6 +649,12 @@ control characters in every printed value. The overall result is `verified` only
 applicable claim is verified. It is `partial` when nothing mismatched but at
 least one claim was not checked: the receipt is consistent with what you
 supplied, not proven. It is `mismatch` when any claim mismatched.
+
+Eval outcomes are never claims. `verify` does not check `status`, `exit_code`,
+`report`, or `generated`, because an evaluation cannot be reproduced offline. A
+`verified` eval manifest is bound to the supplied commit, plan, config, and
+feeds. It does not mean the evals passed. A gate that needs passing evals must
+read the results itself.
 
 | Exit | Meaning |
 |---|---|
