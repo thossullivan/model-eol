@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.npm-release-result.schema.json",
+  "title": "model-eol npm release result",
+  "description": "npm release result `model-eol/npm-release-result@0.2` written by every npm-release run. It binds the workflow source commit (source_commit) to what the run published: either nothing (released false), or one exact stable 0.x version, its git tag, the release commit, and the npm registry tarball integrity (a canonical sha512 Subresource Integrity value). Downstream consumer checks install that exact version and compare the registry integrity instead of trusting npm's latest tag. Compatibility: additive changes keep this version; any change that makes an existing result invalid or changes what a digest covers is a new version, and validators reject unknown versions. Enforced in code, not by this schema: tag must equal \"v\" followed by version.",
+  "type": "object",
+  "required": ["schema", "released", "source_commit"],
+  "properties": {
+    "schema": { "const": "model-eol/npm-release-result@0.2" },
+    "released": { "type": "boolean" },
+    "source_commit": { "$ref": "#/definitions/gitCommit" },
+    "version": { "type": "string", "pattern": "^0\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "tag": { "type": "string", "pattern": "^v0\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "release_commit": { "$ref": "#/definitions/gitCommit" },
+    "registry_integrity": { "type": "string", "pattern": "^sha512-[A-Za-z0-9+/]{85}[AQgw]==$" }
+  },
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": {
+        "released": { "const": false },
+        "version": false,
+        "tag": false,
+        "release_commit": false,
+        "registry_integrity": false
+      }
+    },
+    {
+      "required": ["version", "tag", "release_commit", "registry_integrity"],
+      "properties": {
+        "released": { "const": true }
+      }
+    }
+  ],
+  "definitions": {
+    "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" }
+  }
+}

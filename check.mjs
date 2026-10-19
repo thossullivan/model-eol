@@ -10,7 +10,7 @@
 //   node check.mjs alert [paths...] [--format github|markdown|badge] [--json]
 //   node check.mjs plan [paths...] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR]
 //   node check.mjs apply --plan plan.json [--dry-run]
-//   node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan]
+//   node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan|eval|feed-refresh-receipt|npm-release-result]
 //
 // exit codes: check/alert 0 = clear, 1 = finding, 2 = usage error;
 // apply 0 = all items applied, 1 = item refused, 2 = usage or plan error;
@@ -152,7 +152,7 @@ Usage:
   node check.mjs alert [paths...] [--config FILE] [--days N] [--scope all|direct] [--format github|markdown|badge] [--json]
   node check.mjs plan [paths...] [--config FILE] [--days N] [--scope all|direct] [--via DISTRIBUTOR] [--feeds DIR] [--allow-incomplete]
   node check.mjs apply --plan plan.json [--dry-run]
-  node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan]
+  node check.mjs validate document.json [...] [--type feed|config|check|inventory|schedule|alert|plan|eval|feed-refresh-receipt|npm-release-result]
 
 Commands:
   check       Fail when tracked model IDs are retired or retiring within --days.
@@ -164,7 +164,8 @@ Commands:
   alert       Emit GitHub Actions annotations, Markdown, or a Shields badge JSON and fail on errors.
   plan        Emit a JSON migration plan with only safely patchable direct API references.
   apply       Apply a plan with line-hash and occurrence checks; use --dry-run to preview.
-  validate    Validate a feed, config, check, inventory, schedule, alert, or plan document.
+  validate    Validate a feed, config, check, inventory, schedule, alert, or plan document,
+              or an eval, feed-refresh-receipt, or npm-release-result receipt.
               The type is inferred from its discriminator or .model-eol.json filename unless --type is set.
 
 Scopes:

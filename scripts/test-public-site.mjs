@@ -99,6 +99,9 @@ try {
   const schemaNames = fs.readdirSync(path.join(repo, 'schema')).filter(name => name.endsWith('.json')).sort()
   const feedNames = fs.readdirSync(path.join(repo, 'feeds')).filter(name => name.endsWith('.json')).sort()
   assert(schemaNames.includes('model-eol.check.schema.json'))
+  for (const name of ['model-eol.eval.schema.json', 'model-eol.feed-refresh-receipt.schema.json', 'model-eol.npm-release-result.schema.json']) {
+    assert(schemaNames.includes(name), `public site publishes receipt schema ${name}`)
+  }
   assert.deepEqual(fs.readdirSync(path.join(output, 'schema', '0.1')).sort(), schemaNames)
   assert.deepEqual(fs.readdirSync(path.join(output, 'feeds')).sort(), feedNames)
 
@@ -144,6 +147,15 @@ try {
   ])
   assert.equal(mismatchedBuild.status, 1)
   assert.match(mismatchedBuild.stderr, /receipt does not match the feeds being published/)
+
+  const upperSourceOutput = path.join(temp, 'upper-source-site')
+  const upperSourceBuild = runBuilder([
+    '--out-dir', upperSourceOutput,
+    '--receipt', receiptFile,
+    '--source-sha', sourceSha.toUpperCase(),
+  ])
+  assert.equal(upperSourceBuild.status, 0, `an uppercase --source-sha is accepted: ${upperSourceBuild.stderr}`)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(upperSourceOutput, 'index.json'), 'utf8')).published_commit, sourceSha, 'an uppercase --source-sha is published lowercased')
 
   const wrongSourceBuild = runBuilder([
     '--out-dir', path.join(temp, 'wrong-source-site'),

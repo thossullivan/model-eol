@@ -1972,6 +1972,9 @@ for (const schemaFile of [
   'schema/model-eol.schedule.schema.json',
   'schema/model-eol.alert.schema.json',
   'schema/model-eol.plan.schema.json',
+  'schema/model-eol.eval.schema.json',
+  'schema/model-eol.feed-refresh-receipt.schema.json',
+  'schema/model-eol.npm-release-result.schema.json',
 ]) {
   JSON.parse(fs.readFileSync(path.join(root, schemaFile), 'utf8'))
   assert(true, `${schemaFile} parses as JSON`)

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   DOCUMENT_TYPES,
+  detectDocumentType,
   loadDocumentSchemaCatalog,
   validateDocument,
 } from '../lib/validate-document.mjs'
@@ -76,6 +77,14 @@ for (const [type, schema] of catalog.byType) {
   }
 }
 assert.equal(catalog.registry.assertReferences(), true, 'all local and cross-document references resolve')
+for (const [type, file, discriminator] of [
+  ['eval', 'model-eol.eval.schema.json', 'model-eol.eval/0.1'],
+  ['feed-refresh-receipt', 'model-eol.feed-refresh-receipt.schema.json', 'model-eol/feed-refresh-receipt@0.1'],
+  ['npm-release-result', 'model-eol.npm-release-result.schema.json', 'model-eol/npm-release-result@0.2'],
+]) {
+  assert.equal(catalog.byType.get(type)?.$id, `${canonicalBase}${file}`, `${type} receipt schema is registered under its canonical ID`)
+  assert.equal(detectDocumentType({ schema: discriminator }), type, `${discriminator} documents select the ${type} schema`)
+}
 
 const conflictingReplacement = validFeed()
 conflictingReplacement.models = [

@@ -11,6 +11,8 @@ on:
       - 'scripts/feed-refresh-receipt.mjs'
       - 'scripts/verify-public-site.mjs'
       - 'lib/cli.mjs'
+      - 'lib/receipts.mjs'
+      - 'lib/validate-document.mjs'
       - 'lib/validate-feed.mjs'
       - 'refresh/diff.mjs'
       - '.github/workflows/public-contract.yml'

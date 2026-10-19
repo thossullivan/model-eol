@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.eval.schema.json",
+  "title": "model-eol eval results manifest",
+  "description": "Eval results manifest `model-eol.eval/0.1` written by `model-eol-bot evaluate`. It binds one pass, fail, or timeout result per planned migration group to the evaluated default-branch commit (base_sha), the SHA-256 of the plan without its generated time (plan_digest), the SHA-256 of the effective eval settings (eval_config_digest), and each group's feed digest. Publication refuses a manifest whose digests, base commit, configured state, or result identities do not match its own independently regenerated plan. Compatibility: additive changes keep this version; any change that makes an existing manifest invalid or changes what a digest covers is a new version, and validators reject unknown versions. Matching its digests, base commit, and result identities against a regenerated plan, and the per-report byte cap from eval.max_report_bytes, need the consumer's repository and stay in code. Calendar validity of generated relies on `format: date-time`, which many Draft-07 validators treat as an annotation unless format validation is enabled; model-eol's validator enforces it.",
+  "type": "object",
+  "required": ["schema", "generated", "base_sha", "plan_digest", "eval_config_digest", "configured", "results"],
+  "properties": {
+    "schema": { "const": "model-eol.eval/0.1" },
+    "generated": { "$ref": "#/definitions/utcInstant" },
+    "base_sha": { "$ref": "#/definitions/gitCommit" },
+    "plan_digest": { "$ref": "#/definitions/sha256" },
+    "eval_config_digest": { "$ref": "#/definitions/sha256" },
+    "configured": { "type": "boolean" },
+    "results": { "type": "array", "items": { "$ref": "#/definitions/result" } }
+  },
+  "additionalProperties": false,
+  "oneOf": [
+    { "required": ["configured"], "properties": { "configured": { "const": true } } },
+    { "required": ["configured"], "properties": { "configured": { "const": false }, "results": { "maxItems": 0 } } }
+  ],
+  "definitions": {
+    "utcInstant": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "result": {
+      "type": "object",
+      "required": ["publisher", "id", "via", "feed_digest", "status", "exit_code", "report"],
+      "properties": {
+        "publisher": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "via": { "type": ["string", "null"] },
+        "feed_digest": { "$ref": "#/definitions/sha256" },
+        "status": { "enum": ["pass", "fail", "timeout"] },
+        "exit_code": { "type": ["integer", "null"], "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "report": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["status"], "properties": { "status": { "const": "pass" }, "exit_code": { "type": "integer", "minimum": 0, "maximum": 0 } } },
+        { "required": ["status"], "properties": { "status": { "enum": ["fail", "timeout"] } } }
+      ]
+    }
+  }
+}

@@ -41,7 +41,7 @@ inputs:
     required: false
     default: ''
   document-type:
-    description: 'Optional validate document type: feed, config, check, inventory, schedule, alert, or plan'
+    description: 'Optional validate document type: feed, config, check, inventory, schedule, alert, plan, eval, feed-refresh-receipt, or npm-release-result'
     required: false
     default: ''
   include-docs:

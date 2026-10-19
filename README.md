@@ -571,6 +571,27 @@ Flash-Lite GA models. The pipeline opened
 and downstream checks stopped warning about dates Google no longer listed. A
 lifecycle tracker has to retract stale alarms as well as add new ones.
 
+## Receipts
+
+model-eol writes three receipt kinds. Each one is a public Draft-07 schema,
+and `model-eol validate receipt.json` selects the schema from the receipt's
+`schema` value.
+
+| Kind | `schema` value | Binds |
+|---|---|---|
+| [Eval results manifest](https://thossullivan.github.io/model-eol/schema/0.1/model-eol.eval.schema.json) | `model-eol.eval/0.1` | One pass, fail, or timeout result per migration group to the evaluated base commit, the plan digest, the eval settings digest, and each group's feed digest. Written by `model-eol-bot evaluate`. |
+| [Feed-refresh receipt](https://thossullivan.github.io/model-eol/schema/0.1/model-eol.feed-refresh-receipt.schema.json) | `model-eol/feed-refresh-receipt@0.1` | The refresh run URL, the checked commit, and the check time to the SHA-256 of every `feeds/*.json` file. A pending receipt also names the open feed PR. |
+| [npm release result](https://thossullivan.github.io/model-eol/schema/0.1/model-eol.npm-release-result.schema.json) | `model-eol/npm-release-result@0.2` | The release workflow's source commit to either no release, or one exact version, its tag, the release commit, and the registry tarball's sha512 integrity. |
+
+Additive changes keep a receipt's version. Any change that makes an old
+receipt invalid, or changes what a digest covers, is a new version. Validators
+reject unknown versions. A few rules, such as feed sort order and `tag` equal
+to `v` plus `version`, cannot be written in Draft-07. Each schema's
+`description` lists them, and `model-eol validate` enforces them in code.
+
+`model-eol validate` checks a receipt's structure only. A `model-eol verify`
+command that checks what a receipt claims arrives in a later release.
+
 ## The actual ask
 
 The goal is the format, not another checker. Providers already publish
@@ -592,7 +613,7 @@ is the most useful thing any of us can do here.
   canonical schemas, feeds, refresh health, a publication manifest, and Atom.
   Each deployment is bound to an exact feed-refresh receipt and verified against
   every live asset. `model-eol validate` checks feeds, repository policy, check
-  reports, inventories, schedules, alerts, and plans against the same
+  reports, inventories, schedules, alerts, plans, and receipts against the same
   zero-dependency runtime contracts.
 - Current-model entries, and therefore policy-floor horizons, populate only when
   the refresh runs with provider API keys for the models endpoints. Anthropic's

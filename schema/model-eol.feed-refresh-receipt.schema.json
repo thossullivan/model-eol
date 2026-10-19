@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.feed-refresh-receipt.schema.json",
+  "title": "model-eol feed-refresh receipt",
+  "description": "Feed-refresh receipt `model-eol/feed-refresh-receipt@0.1` written by every successful feed-refresh run. It binds the refresh run URL (refresh_run), the commit the run checked (refresh_commit), and the check time (checked_at) to the SHA-256 of every feeds/*.json file the run produced. A clean receipt means the live sources matched those feeds; a pending receipt means the run opened or updated pending_pr with material changes. The public contract is published only when a receipt's digests match the exact feeds being published. Compatibility: additive changes keep this version; any change that makes an existing receipt invalid or changes what a digest covers is a new version, and validators reject unknown versions. Enforced in code, not by this schema: feeds must be sorted by path (String.prototype.localeCompare), and no two feeds may share a path. URLs: the writer always emits the WHATWG-normalized URL, and the code validator accepts any https URL that WHATWG URL parsing accepts without credentials. This schema's URL pattern is stricter than the code in some ways (it refuses an uppercase HTTPS scheme, empty userinfo such as https://@host, https:host without slashes, and surrounding whitespace) and looser than the normalized form in others (it allows an uppercase host or an explicit :443 port). Calendar validity of checked_at relies on `format: date-time`, which many Draft-07 validators treat as an annotation unless format validation is enabled; model-eol's validator enforces it.",
+  "type": "object",
+  "required": ["schema", "state", "changed", "pending", "checked_at", "refresh_run", "refresh_commit", "feeds"],
+  "properties": {
+    "schema": { "const": "model-eol/feed-refresh-receipt@0.1" },
+    "state": { "enum": ["clean", "pending"] },
+    "changed": { "type": "boolean" },
+    "pending": { "type": "boolean" },
+    "checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "refresh_run": { "$ref": "#/definitions/httpsUrl" },
+    "refresh_commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "feeds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/definitions/feed" }
+    },
+    "pending_pr": { "$ref": "#/definitions/httpsUrl" }
+  },
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": {
+        "state": { "const": "clean" },
+        "changed": { "const": false },
+        "pending": { "const": false },
+        "pending_pr": false
+      }
+    },
+    {
+      "required": ["pending_pr"],
+      "properties": {
+        "state": { "const": "pending" },
+        "changed": { "const": true },
+        "pending": { "const": true }
+      }
+    }
+  ],
+  "definitions": {
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^\\s/?#@]+([/?#][^\\s]*)?$"
+    },
+    "feed": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^feeds/[a-z0-9][a-z0-9-]*\\.json$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

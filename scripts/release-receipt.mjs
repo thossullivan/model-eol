@@ -4,12 +4,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { parseCliArgs } from '../lib/cli.mjs'
-import { assertSha512Integrity } from './package-integrity.mjs'
+import {
+  RELEASE_RECEIPT_SCHEMA,
+  assertReleaseVersion,
+  assertSha,
+  assertSha512Integrity,
+  assertValidReleaseReceipt,
+} from '../lib/receipts.mjs'
 
-export const RELEASE_RECEIPT_SCHEMA = 'model-eol/npm-release-result@0.2'
-
-const versionPattern = /^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
-const shaPattern = /^[0-9a-f]{40,64}$/
+export { RELEASE_RECEIPT_SCHEMA }
 
 const usage = `Usage:
   node scripts/release-receipt.mjs create --out FILE --source-sha SHA [--version VERSION --release-sha SHA --registry-integrity SHA512_SRI]
@@ -19,22 +22,6 @@ const fail = message => {
   const error = new Error(`${message}\n${usage}`)
   error.exitCode = 2
   throw error
-}
-
-const assertSha = (value, label) => {
-  if (typeof value !== 'string' || !shaPattern.test(value)) throw new Error(`${label} must be a 40-64 character lowercase hexadecimal Git commit`)
-  return value
-}
-
-const assertVersion = value => {
-  if (typeof value !== 'string' || !versionPattern.test(value)) throw new Error(`release version must be an exact stable 0.x version, got ${value}`)
-  return value
-}
-
-const exactKeys = (value, keys) => {
-  const actual = Object.keys(value).sort()
-  const expected = [...keys].sort()
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`release receipt fields must be exactly ${expected.join(', ')}; got ${actual.join(', ')}`)
 }
 
 export function createReleaseReceipt({ sourceCommit, version = null, releaseCommit = null, registryIntegrity = null }) {
@@ -47,7 +34,7 @@ export function createReleaseReceipt({ sourceCommit, version = null, releaseComm
     if (releaseCommit !== null || registryIntegrity !== null) throw new Error('release_commit and registry_integrity cannot be set for a no-release result')
     return receipt
   }
-  receipt.version = assertVersion(version)
+  receipt.version = assertReleaseVersion(version)
   receipt.tag = `v${version}`
   receipt.release_commit = assertSha(releaseCommit, 'release_commit')
   receipt.registry_integrity = assertSha512Integrity(registryIntegrity, 'registry_integrity')
@@ -55,21 +42,9 @@ export function createReleaseReceipt({ sourceCommit, version = null, releaseComm
 }
 
 export function validateReleaseReceipt(receipt, { expectedSourceCommit = null } = {}) {
-  if (receipt === null || typeof receipt !== 'object' || Array.isArray(receipt)) throw new Error('release receipt must be a JSON object')
-  if (typeof receipt.released !== 'boolean') throw new Error('release receipt released must be boolean')
-  exactKeys(receipt, receipt.released
-    ? ['schema', 'released', 'source_commit', 'version', 'tag', 'release_commit', 'registry_integrity']
-    : ['schema', 'released', 'source_commit'])
-  if (receipt.schema !== RELEASE_RECEIPT_SCHEMA) throw new Error(`unsupported release receipt schema ${receipt.schema}`)
-  const sourceCommit = assertSha(receipt.source_commit, 'source_commit')
-  if (expectedSourceCommit !== null && sourceCommit !== assertSha(expectedSourceCommit, 'expected source commit')) {
-    throw new Error(`receipt source_commit ${sourceCommit} does not match workflow source ${expectedSourceCommit}`)
-  }
-  if (receipt.released) {
-    assertVersion(receipt.version)
-    if (receipt.tag !== `v${receipt.version}`) throw new Error(`release receipt tag ${receipt.tag} does not match version ${receipt.version}`)
-    assertSha(receipt.release_commit, 'release_commit')
-    assertSha512Integrity(receipt.registry_integrity, 'registry_integrity')
+  assertValidReleaseReceipt(receipt)
+  if (expectedSourceCommit !== null && receipt.source_commit !== assertSha(expectedSourceCommit, 'expected source commit')) {
+    throw new Error(`receipt source_commit ${receipt.source_commit} does not match workflow source ${expectedSourceCommit}`)
   }
   return receipt
 }
