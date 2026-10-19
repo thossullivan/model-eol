@@ -39,9 +39,9 @@ const writeJson = (file, value) => {
 }
 
 // runs text and --json forms; every JSON report must validate and agree with the exit code
-const verify = (args, { env = baseEnv } = {}) => {
-  const text = spawnSync(process.execPath, [checker, 'verify', ...args], { encoding: 'utf8', env })
-  const json = spawnSync(process.execPath, [checker, 'verify', ...args, '--json'], { encoding: 'utf8', env })
+const verify = (args, { env = baseEnv, nodeArgs = [] } = {}) => {
+  const text = spawnSync(process.execPath, [...nodeArgs, checker, 'verify', ...args], { encoding: 'utf8', env })
+  const json = spawnSync(process.execPath, [...nodeArgs, checker, 'verify', ...args, '--json'], { encoding: 'utf8', env })
   let report = null
   if (json.status !== 2) {
     report = JSON.parse(json.stdout)
@@ -98,6 +98,16 @@ try {
   assert(inconsistent.includes('does not follow from its claims'), 'a verification document whose result contradicts its claims is rejected')
   const forged = { schema: VERIFICATION_SCHEMA, receipt: { path: 'r.json', schema: 'model-eol.eval/0.1', sha256: '0'.repeat(64) }, structural: 'valid', claims: [{ claim: 'base_sha', status: 'not-checked', input: '--commit SHA' }], result: 'verified' }
   assert(validateDocument(forged).errors.some(error => error.message.includes('does not follow')), 'model-eol validate rejects a verified result over unchecked claims')
+  const sameValue = { claim: 'base_sha', status: 'verified', expected: 'a', actual: 'a', input: '--commit a' }
+  assert(validateDocument({ ...forged, claims: [sameValue], result: 'verified' }).errors.length === 0, 'a self-consistent verification report validates')
+  for (const [label, claims, result, detail] of [
+    ['a verified claim whose values differ', [{ ...sameValue, actual: 'b' }], 'verified', 'different expected and actual'],
+    ['a mismatch claim whose values are equal', [{ ...sameValue, status: 'mismatch' }], 'mismatch', 'equal expected and actual'],
+    ['a not-checked claim without its input', [{ claim: 'base_sha', status: 'not-checked' }], 'partial', 'must name the input'],
+    ['duplicate claim names', [sameValue, sameValue], 'verified', 'more than once'],
+  ]) {
+    assert(validateDocument({ ...forged, claims, result }).errors.some(error => error.message.includes(detail)), `model-eol validate rejects ${label}`)
+  }
 
   // npm-release-result from a real npm pack of this checkout
   const packDir = path.join(tempRoot, 'pack')
@@ -144,9 +154,23 @@ try {
 
   const noReleaseFile = path.join(tempRoot, 'no-release.json')
   run(process.execPath, [path.join(root, 'scripts', 'release-receipt.mjs'), 'create', '--out', noReleaseFile, '--source-sha', sourceCommit])
-  const noRelease = verify([noReleaseFile, '--source-commit', sourceCommit, '--package', tarball])
-  assert(noRelease.code === 0 && noRelease.report.result === 'verified' && noRelease.statuses.source_commit === 'verified', 'a no-release receipt verifies through its source commit alone')
+  const noRelease = verify([noReleaseFile, '--source-commit', sourceCommit])
+  assert(noRelease.code === 0 && noRelease.report.result === 'verified' && noRelease.statuses.source_commit === 'verified' && !('released' in noRelease.statuses), 'a no-release receipt verifies through its source commit alone')
   assert(['release_commit', 'version', 'registry_integrity'].every(claim => noRelease.statuses[claim] === 'not-applicable') && noRelease.out.includes('records no release'), 'a no-release receipt reports the release claims as not applicable, not verified')
+  const noReleaseWithPackage = verify([noReleaseFile, '--source-commit', sourceCommit, '--package', tarball])
+  exactlyMismatched('a no-release receipt checked against a tarball', noReleaseWithPackage, 'released')
+  const releasedClaim = noReleaseWithPackage.report.claims.find(claim => claim.claim === 'released')
+  assert(releasedClaim.expected === false && releasedClaim.actual === true && releasedClaim.input.includes('--package') && noReleaseWithPackage.statuses.registry_integrity === 'not-applicable', 'the released claim records that the release inputs assert a release the receipt denies')
+  for (const flag of [['--commit', head], ['--version', version]]) {
+    exactlyMismatched(`a no-release receipt checked with ${flag[0]}`, verify([noReleaseFile, '--source-commit', sourceCommit, ...flag]), 'released')
+  }
+  const headNoReleaseFile = path.join(tempRoot, 'no-release-head.json')
+  run(process.execPath, [path.join(root, 'scripts', 'release-receipt.mjs'), 'create', '--out', headNoReleaseFile, '--source-sha', head])
+  const junkTarball = path.join(tempRoot, 'junk.tgz')
+  fs.writeFileSync(junkTarball, 'junk')
+  const releaseGate = verify([headNoReleaseFile, '--source-commit', head, '--commit', head, '--version', '0.8.4', '--package', junkTarball, '--require-all'])
+  exactlyMismatched('a no-release receipt used as a release gate for any tarball', releaseGate, 'released')
+  assert(!releaseGate.out.includes('result: verified'), 'a no-release receipt never passes a release gate')
   assert(verify([noReleaseFile]).report.result === 'partial' && verify([noReleaseFile, '--require-all']).code === 1, 'a no-release receipt without --source-commit is partial')
   exactlyMismatched('a no-release receipt with the wrong source commit', verify([noReleaseFile, '--source-commit', fakeCommit]), 'source_commit')
 
@@ -158,6 +182,13 @@ try {
   const feedNames = fs.readdirSync(feedsDir).filter(name => name.endsWith('.json')).sort()
   const refreshArgs = ['--feeds-dir', feedsDir, '--commit', head, '--run-url', runUrl]
   const genuineRefresh = verify([refreshFile, ...refreshArgs])
+  assert(genuineRefresh.report.receipt.state === 'clean' && genuineRefresh.report.receipt.checked_at === '2026-10-19T05:23:00Z' && !('pending_pr' in genuineRefresh.report.receipt) && genuineRefresh.out.includes('state clean, checked 2026-10-19T05:23:00Z'), 'a clean refresh report shows its state and check time as information')
+  const pendingFile = path.join(tempRoot, 'refresh-pending.json')
+  const pendingPr = 'https://github.com/thossullivan/model-eol/pull/115'
+  run(process.execPath, [path.join(root, 'scripts', 'feed-refresh-receipt.mjs'), 'create', '--repo-dir', root, '--out', pendingFile, '--state', 'pending', '--checked-at', '2026-10-19T12:21:19Z', '--refresh-run-url', runUrl, '--refresh-sha', head, '--pending-pr-url', pendingPr])
+  const pendingRefresh = verify([pendingFile, ...refreshArgs])
+  assert(pendingRefresh.report.result === 'verified' && pendingRefresh.report.receipt.state === 'pending' && pendingRefresh.report.receipt.pending_pr === pendingPr && pendingRefresh.out.includes(`pending feed PR ${pendingPr}`), 'a pending refresh report shows its pending PR without changing the result rules')
+  assert(!('state' in genuineRelease.report.receipt), 'release reports carry no refresh state')
   assert(genuineRefresh.code === 0 && genuineRefresh.report.result === 'verified' && genuineRefresh.report.claims.length === feedNames.length + 2, 'a genuine refresh receipt verifies every feed, the commit, and the run')
   assert(verify([refreshFile, '--feeds-dir', feedsDir, '--commit', head, '--run-url', 'HTTPS://GITHUB.COM/thossullivan/model-eol/actions/runs/39251319949']).report.result === 'verified', 'the run URL is compared after the receipt writer normalization')
   const unnormalizedRun = writeJson(path.join(tempRoot, 'refresh-unnormalized.json'), { ...JSON.parse(fs.readFileSync(refreshFile, 'utf8')), refresh_run: 'https://GitHub.com/thossullivan/model-eol/actions/runs/39251319949' })
@@ -240,7 +271,9 @@ try {
   exactlyMismatched('an unexpected eval identity', verify([evalTamper('unexpected', document => { document.results.push({ ...document.results[0], id: 'not-planned' }) }), ...evalArgs]), `results[${manifest.results[0].publisher}/not-planned].feed_digest`)
   const rerouted = verify([evalTamper('rerouted', document => { document.results[0].via = 'aws-bedrock' }), ...evalArgs])
   assert(rerouted.code === 1 && rerouted.mismatches.includes(`results[${manifest.results[0].publisher}/${manifest.results[0].id}@aws-bedrock].feed_digest`) && rerouted.mismatches.includes(firstLabel), 'a result moved to another clock is both unexpected and leaves its planned group missing')
-  exactlyMismatched('a duplicated eval identity', verify([evalTamper('duplicate', document => { document.results.push(structuredClone(document.results[0])) }), ...evalArgs]), `${firstLabel} (duplicate)`)
+  exactlyMismatched('a duplicated eval identity', verify([evalTamper('duplicate', document => { document.results.push(structuredClone(document.results[0])) }), ...evalArgs]), `${firstLabel} (duplicate 2)`)
+  const tripled = verify([evalTamper('tripled', document => { document.results.push(structuredClone(document.results[0]), structuredClone(document.results[0])) }), ...evalArgs])
+  assert(tripled.code === 1 && JSON.stringify(tripled.mismatches) === JSON.stringify([`${firstLabel} (duplicate 2)`, `${firstLabel} (duplicate 3)`]), 'each extra copy of a result identity gets its own uniquely named mismatch')
   const unconfiguredConfig = writeJson(path.join(tempRoot, 'unconfigured.json'), { days: 3650, scope: 'direct', ignore: { paths: ['vendor/**'] }, eval: { timeout_ms: 5000 } })
   const unconfigured = verify([evalFile, '--commit', repoHead, '--plan', planFile, '--config', unconfiguredConfig])
   assert(unconfigured.statuses.configured === 'mismatch' && unconfigured.statuses.eval_config_digest === 'mismatch' && unconfigured.code === 1, 'a config without eval.command contradicts a configured manifest')
@@ -267,6 +300,25 @@ try {
   assert(evalNoConfig.code === 0 && evalNoConfig.report.result === 'partial' && evalNoConfig.statuses[firstLabel] === 'not-checked' && evalNoConfig.report.claims.find(claim => claim.claim === firstLabel).input.includes('--config'), 'feed digests stay unchecked without --config, whose ignore rules shape the groups')
   assert(verify([evalFile, '--commit', repoHead, '--plan', planFile, '--require-all']).code === 1, 'a partial eval verification fails under --require-all')
   refused('an invalid --plan', [evalFile, '--plan', configFile], 'plan schema')
+  const missingPlan = verify([evalFile, '--plan', path.join(tempRoot, 'missing-plan.json')])
+  assert(missingPlan.code === 2 && missingPlan.err.includes('could not read --plan') && !missingPlan.err.includes('not UTF-8 JSON'), 'a missing --plan file is reported as unreadable, not as bad JSON')
+  const plannedId = manifest.results[0].id
+  for (const field of ['distributions', 'aliases']) {
+    const dir = copyFeeds(`malformed-${field}`)
+    const feedFile = fs.readdirSync(dir).map(name => path.join(dir, name)).find(file => JSON.parse(fs.readFileSync(file, 'utf8')).models?.some(model => model.id === plannedId))
+    const feed = JSON.parse(fs.readFileSync(feedFile, 'utf8'))
+    feed.models.find(model => model.id === plannedId)[field] = 5
+    fs.writeFileSync(feedFile, JSON.stringify(feed))
+    refused(`a feed whose planned model has ${field}: 5`, [evalFile, ...evalArgs.slice(0, 6), '--feeds-dir', dir], 'malformed feed')
+  }
+  const crashPreload = path.join(tempRoot, 'crash-preload.mjs')
+  fs.writeFileSync(crashPreload, [
+    "import crypto from 'node:crypto'",
+    'const createHash = crypto.createHash',
+    "crypto.createHash = (algorithm, ...rest) => { if (algorithm === 'sha512') throw new TypeError('injected failure'); return createHash(algorithm, ...rest) }",
+    '',
+  ].join('\n'))
+  refused('an unexpected internal error', [releaseFile, '--package', tarball], 'unexpected error, nothing was checked: injected failure', { nodeArgs: ['--import', crashPreload] })
   refused('a plan with the right schema but malformed items', [evalFile, '--plan', writeJson(path.join(tempRoot, 'bad-plan.json'), { ...plan, items: [{ file: 'x.py' }] })], 'not a valid plan')
   refused('an unreadable --config', [evalFile, '--config', path.join(tempRoot, 'missing-config.json')], '--config')
   refused('a repository root as the eval --feeds-dir', [evalFile, ...evalArgs.slice(0, 6), '--feeds-dir', root], 'feeds directory itself')
@@ -282,6 +334,14 @@ try {
   const notJson = path.join(tempRoot, 'not-json.json')
   fs.writeFileSync(notJson, 'not json')
   refused('a non-JSON receipt', [notJson], 'not UTF-8 JSON')
+  const markedBytes = Buffer.from(fs.readFileSync(refreshFile, 'utf8').replace(runUrl, `${runUrl}/MARK`))
+  const markAt = markedBytes.indexOf('MARK')
+  const invalidUtf8 = path.join(tempRoot, 'invalid-utf8.json')
+  fs.writeFileSync(invalidUtf8, Buffer.concat([markedBytes.subarray(0, markAt), Buffer.from([0xff]), markedBytes.subarray(markAt + 4)]))
+  refused('a receipt with an invalid UTF-8 byte inside an otherwise valid run URL', [invalidUtf8, ...refreshArgs], 'not UTF-8 JSON')
+  const bomReceipt = path.join(tempRoot, 'bom.json')
+  fs.writeFileSync(bomReceipt, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), fs.readFileSync(refreshFile)]))
+  refused('a receipt with a byte order mark', [bomReceipt, ...refreshArgs], 'not UTF-8 JSON')
   refused('an unreadable --package', [releaseFile, '--package', path.join(tempRoot, 'missing.tgz')], 'could not read --package')
   refused('verify without a receipt', [], 'exactly one RECEIPT')
   refused('verify with two receipts', [releaseFile, refreshFile], 'exactly one RECEIPT')
@@ -291,7 +351,7 @@ try {
   refused('a short --commit', [releaseFile, '--commit', head.slice(0, 39)], '--commit must be')
   refused('a non-hex --source-commit', [releaseFile, '--source-commit', 'g'.repeat(40)], '--source-commit must be')
   refused('a v-prefixed --version', [releaseFile, '--version', `v${version}`], '--version must be')
-  for (const [command, flag] of [['check', '--commit'], ['plan', '--require-all'], ['apply', '--package'], ['inventory', '--version']]) {
+  for (const [command, flag] of [['check', '--commit'], ['plan', '--require-all'], ['apply', '--package'], ['inventory', '--version'], ['schedule', '--feeds-dir'], ['alert', '--run-url'], ['check', '--source-commit']]) {
     const args = flag === '--require-all' ? [command, flag] : [command, flag, 'x']
     if (command === 'apply') args.push('--plan', planFile)
     const result = spawnSync(process.execPath, [checker, ...args], { encoding: 'utf8', cwd: tempRoot, env: baseEnv })

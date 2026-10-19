@@ -630,7 +630,11 @@ does not apply to the receipt's kind is a usage error.
 Each claim is `verified`, `mismatch` (with the receipt's value and the
 computed one), `not-checked` (with the flag that would check it), or
 `not-applicable` (a `released: false` result makes no release claims, so only
-`source_commit` applies). The overall result is `verified` only when every
+`source_commit` applies). Supplying `--commit`, `--version`, or `--package` for a
+`released: false` result adds a `released` claim that mismatches, because those
+inputs assert a release the receipt says did not happen. For a refresh receipt,
+the report also shows its `state`, `checked_at`, and `pending_pr` as information;
+a pending receipt verifies by the same rules as a clean one. The overall result is `verified` only when every
 applicable claim is verified. It is `partial` when nothing mismatched but at
 least one claim was not checked: the receipt is consistent with what you
 supplied, not proven. It is `mismatch` when any claim mismatched.

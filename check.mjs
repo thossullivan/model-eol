@@ -183,7 +183,8 @@ Commands:
               comes from its schema value:
                 ${SUPPORTED_RECEIPT_SCHEMAS.join('\n                ')}
               Each claim is verified, mismatch, not-checked (its input was not supplied), or
-              not-applicable (a no-release receipt). Nothing is read from the current directory or git.
+              not-applicable (a no-release receipt; a release input given for one adds a mismatched
+              released claim). Nothing is read from the current directory or git.
               The result is verified only when every applicable claim is; partial means nothing
               mismatched but some claim was not checked; mismatch means at least one claim failed.
               --json emits a model-eol/verification@0.1 document.
@@ -247,8 +248,9 @@ if (command === 'verify') {
       env: process.env,
     })
   } catch (error) {
-    if (!(error instanceof VerifyError)) throw error
-    console.error(`model-eol verify: ${error.message}`)
+    console.error(error instanceof VerifyError
+      ? `model-eol verify: ${error.message}`
+      : `model-eol verify: unexpected error, nothing was checked: ${error?.message ?? error}`)
     return 2
   }
   console.log(AS_JSON ? JSON.stringify(report, null, 2) : formatVerification(report))
