@@ -239,7 +239,7 @@ function bedrockModelCell(row, expectedIndex, headerLength) {
     .map((cell, index) => ({ cell, index, ids: isBedrockModelId(cell.text.trim()) ? [cell.text.trim()] : bedrockEndpointIds(cell.text) }))
     .filter(candidate => candidate.ids?.every(id => id === id.toLowerCase()))
   // A shift is real only when the row gained or lost exactly that many cells against the header.
-  if (candidates.length === 1 && [row.cells.length, filled].some(length => length - headerLength === candidates[0].index - expectedIndex)) return candidates[0]
+  if (candidates.length === 1 && row.cells.length - headerLength === candidates[0].index - expectedIndex) return candidates[0]
   if (candidates.length > 1) {
     throw new Error(`aws-bedrock lifecycle table contains an ambiguous model row: ${candidates.map(candidate => candidate.cell.text.trim()).join(', ')}`)
   }
@@ -381,7 +381,7 @@ function bedrockCardFields(html) {
     if (!label) {
       const boldLabel = paragraph[1].match(/^\s*<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/i)
       const renamedLabel = boldLabel && /^Model lifecycle\b/i.test(plainText(boldLabel[2])) && !/^Model lifecycle polic/i.test(plainText(boldLabel[2]))
-      if (renamedLabel || /^Model lifecycle\W*(?:Active|Legacy|EOL)\b/i.test(text)) throw new Error(`unrecognised Model lifecycle field: ${text}`)
+      if (renamedLabel || /^Model lifecycle\W*(?:Active|Legacy|EOL)\b/i.test(text) || /^Model lifecycle\b(?!\s+polic)[^:.]{0,30}:/i.test(text)) throw new Error(`unrecognised Model lifecycle field: ${text}`)
       continue
     }
     if (fields.has(label)) throw new Error(`duplicate ${label} field`)

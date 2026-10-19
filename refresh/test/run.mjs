@@ -1335,7 +1335,7 @@ for (const fragment of ['<div>Model lifecycle: Legacy</div>', '<div>MODEL LIFECY
     }
   })
 }
-for (const paragraph of ['<p><b>Model lifecycle</b> Legacy</p>', '<p><b>Model lifecycle -</b> Legacy</p>', '<p><b>Model lifecycle</b>: Legacy</p>', '<p>MODEL LIFECYCLE Legacy</p>', '<p><b>Model lifecycle status:</b> Legacy</p>', '<p><b>Model lifecycle</b></p>']) {
+for (const paragraph of ['<p><b>Model lifecycle</b> Legacy</p>', '<p><b>Model lifecycle -</b> Legacy</p>', '<p><b>Model lifecycle</b>: Legacy</p>', '<p>MODEL LIFECYCLE Legacy</p>', '<p><b>Model lifecycle status:</b> Legacy</p>', '<p><b>Model lifecycle</b></p>', '<p>Model lifecycle status: Legacy</p>', '<p><span class="x"><b>Model lifecycle status:</b></span> Legacy</p>', '<p><strong>Model lifecycle stage</strong> retired</p>']) {
   reviewTest(`Model lifecycle line: Bedrock rejects a paragraph that opens with Model lifecycle in another shape: ${paragraph}`, () => {
     for (const html of [reviewCard + paragraph, fableHtml.replace(lifecycleLine('Active'), paragraph)]) {
       strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unrecognised Model lifecycle field: Model lifecycle/i)
@@ -3243,8 +3243,13 @@ for (const cells of [
     strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
   })
 }
-reviewTest('Shifted row realignment: Bedrock realigns a row missing its provider cell that ends in an empty cell', () => {
-  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['GLM 4.7', 'zai.glm-4.7', 'us-east-1', ...shiftedDates, '']])),
+reviewTest('Shifted row realignment: Bedrock refuses a shifted row whose length matches the header only through a trailing empty cell', () => {
+  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['GLM 4.7', 'zai.glm-4.7', 'us-east-1', ...shiftedDates, '']])), /invalid model id/)
+  const table = shapesBedrockTable([]).replace('</table>', `<tr><td>Meta</td><td>Llama A</td><td>meta.a-v1:0</td><td>us-east-1</td><td>September 1, 2026</td><td rowspan="2">December 1, 2026</td><td>To be announced</td></tr><tr><td>Llama B</td><td>meta.b-v1:0</td><td>us-east-1</td><td>August 1, 2026</td><td>December 15, 2026</td><td></td></tr></table>`)
+  strictAssert.throws(() => parseBedrockLifecycleHtml(table), /invalid model id/)
+})
+reviewTest('Shifted row realignment: Bedrock keeps an in-place row with extra trailing empty cells', () => {
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['Z.AI', 'GLM 4.7', 'zai.glm-4.7', 'us-east-1', ...shiftedDates, '', '']])),
     [{ bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
 })
 reviewTest('Shifted row realignment: Bedrock refuses a row in place whose extra cell pushed its dates out of their columns', () => {
