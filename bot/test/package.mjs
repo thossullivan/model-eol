@@ -178,10 +178,13 @@ try {
     'bot/lib/github.mjs',
     'examples/model-eol-eval.mjs',
     'lib/receipts.mjs',
+    'lib/digests.mjs',
+    'lib/verify.mjs',
     'schema/model-eol.check.schema.json',
     'schema/model-eol.eval.schema.json',
     'schema/model-eol.feed-refresh-receipt.schema.json',
     'schema/model-eol.npm-release-result.schema.json',
+    'schema/model-eol.verification.schema.json',
   ]) {
     assert(packedFiles.has(file), `packed artifact contains ${file}`)
   }
@@ -262,6 +265,29 @@ try {
   const packedEval = JSON.parse(fs.readFileSync(packedEvalFile, 'utf8'))
   assert(packedEval.schema === 'model-eol.eval/0.1' && packedEval.configured === true && /^[0-9a-f]{40,64}$/.test(packedEval.base_sha), 'clean consumer runs the packed configured commit-bound evaluator')
   assert(packedEval.results.length === 1 && packedEval.results[0].status === 'pass' && packedEval.results[0].report?.includes('verification command passed'), 'packed eval starter emits one bounded passing report')
+  const verifyEnv = { ...process.env }
+  delete verifyEnv.MODEL_EOL_EVAL_COMMAND
+  const packedVerify = args => {
+    const result = spawnSync(checkerBin, ['verify', ...args, '--json'], { cwd: consumer, encoding: 'utf8', env: verifyEnv })
+    const report = result.status === 0 ? JSON.parse(result.stdout) : null
+    return { status: result.status, report, detail: report ? '' : ` (${result.stderr || result.stdout})` }
+  }
+  const sourceHead = run('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim()
+  const releaseReceiptFile = path.join(tempRoot, 'packed-release.json')
+  run(process.execPath, [path.join(root, 'scripts', 'release-receipt.mjs'), 'create', '--out', releaseReceiptFile, '--source-sha', sourceHead, '--version', manifest.version, '--release-sha', sourceHead, '--registry-integrity', packed.integrity])
+  const releaseVerify = packedVerify([releaseReceiptFile, '--package', tarball, '--commit', sourceHead, '--source-commit', sourceHead, '--version', manifest.version])
+  assert(releaseVerify.status === 0 && releaseVerify.report.result === 'verified' && releaseVerify.report.claims.length === 4, `packed model-eol verify binds a genuine release receipt to the same tarball outside the source checkout${releaseVerify.detail}`)
+  const refreshReceiptFile = path.join(tempRoot, 'packed-refresh.json')
+  run(process.execPath, [path.join(root, 'scripts', 'feed-refresh-receipt.mjs'), 'create', '--repo-dir', installedRoot, '--out', refreshReceiptFile, '--state', 'clean', '--checked-at', '2026-10-19T05:23:00Z', '--refresh-run-url', 'https://github.com/thossullivan/model-eol/actions/runs/1', '--refresh-sha', sourceHead])
+  const refreshVerify = packedVerify([refreshReceiptFile, '--feeds-dir', path.join(installedRoot, 'feeds'), '--commit', sourceHead, '--run-url', 'https://github.com/thossullivan/model-eol/actions/runs/1'])
+  assert(refreshVerify.status === 0 && refreshVerify.report.result === 'verified', `packed model-eol verify checks a genuine refresh receipt against the packed feeds${refreshVerify.detail}`)
+  const consumerHead = run('git', ['rev-parse', 'HEAD'], { cwd: consumer }).stdout.trim()
+  const evalVerify = packedVerify([packedEvalFile, '--commit', consumerHead, '--plan', packedPlanFile, '--config', path.join(consumer, '.model-eol.json'), '--feeds-dir', path.join(installedRoot, 'feeds')])
+  assert(evalVerify.status === 0 && evalVerify.report.result === 'verified' && evalVerify.report.claims.some(claim => claim.claim.endsWith('.feed_digest') && claim.status === 'verified'), `packed model-eol verify checks the packed evaluator manifest, including its feed digest${evalVerify.detail}`)
+  const packedVerificationFile = path.join(tempRoot, 'packed-verification.json')
+  fs.writeFileSync(packedVerificationFile, JSON.stringify(evalVerify.report))
+  const packedVerifyValidation = run(checkerBin, ['validate', packedVerificationFile], { cwd: consumer })
+  assert(packedVerifyValidation.stdout.includes('valid verification document'), 'packed consumer validates its emitted verification report')
   const bot = run(botBin, ['--dry-run', '--target-dir', consumer, '--repo', 'example/consumer'], {
     cwd: consumer,
     env: { ...process.env, MODEL_EOL_EVAL_RESULTS_FILE: packedEvalFile },

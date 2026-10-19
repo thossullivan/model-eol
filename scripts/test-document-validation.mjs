@@ -81,6 +81,7 @@ for (const [type, file, discriminator] of [
   ['eval', 'model-eol.eval.schema.json', 'model-eol.eval/0.1'],
   ['feed-refresh-receipt', 'model-eol.feed-refresh-receipt.schema.json', 'model-eol/feed-refresh-receipt@0.1'],
   ['npm-release-result', 'model-eol.npm-release-result.schema.json', 'model-eol/npm-release-result@0.2'],
+  ['verification', 'model-eol.verification.schema.json', 'model-eol/verification@0.1'],
 ]) {
   assert.equal(catalog.byType.get(type)?.$id, `${canonicalBase}${file}`, `${type} receipt schema is registered under its canonical ID`)
   assert.equal(detectDocumentType({ schema: discriminator }), type, `${discriminator} documents select the ${type} schema`)
