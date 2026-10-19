@@ -2,21 +2,36 @@ import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { markdownFenceText } from './common.mjs'
 
-const truncateReport = (bytes, limit, truncated) => {
-  if (!truncated) return bytes.toString('utf8')
-  const marker = Buffer.from('\n[model-eol: report truncated]', 'utf8')
-  if (limit <= marker.length) return marker.subarray(0, limit).toString('utf8')
-  return Buffer.concat([bytes.subarray(0, limit - marker.length), marker]).subarray(0, limit).toString('utf8')
+const TRUNCATION_MARKER = '\n[model-eol: report truncated]'
+
+const fitUtf8 = (text, limit) => {
+  const bytes = Buffer.from(text, 'utf8')
+  if (bytes.length <= limit) return text
+  let end = Math.max(0, limit)
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--
+  return bytes.subarray(0, end).toString('utf8')
+}
+
+const truncateReport = (text, limit) => {
+  const markerBytes = Buffer.byteLength(TRUNCATION_MARKER)
+  if (limit <= markerBytes) return fitUtf8(TRUNCATION_MARKER, limit)
+  return fitUtf8(text, limit - markerBytes) + TRUNCATION_MARKER
+}
+
+const byteCap = limit => {
+  if (!Number.isFinite(limit)) throw new Error(`report byte limit must be finite, got ${limit}`)
+  return Math.max(0, Math.floor(limit))
 }
 
 export const capReport = (report, limit) => {
   if (report === null || report === undefined) return null
-  const bytes = Buffer.from(String(report), 'utf8')
-  return truncateReport(bytes, Math.max(0, limit), bytes.length > limit)
+  const cap = byteCap(limit)
+  const text = Buffer.from(String(report), 'utf8').toString('utf8')
+  return Buffer.byteLength(text) > cap ? truncateReport(text, cap) : text
 }
 
 export const readReportCapped = (file, limit) => {
-  const cap = Math.max(0, limit)
+  const cap = byteCap(limit)
   let lstat
   try {
     lstat = fs.lstatSync(file)
@@ -41,10 +56,9 @@ export const readReportCapped = (file, limit) => {
   try {
     const buffer = Buffer.alloc(cap + 1)
     const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0)
-    return {
-      missing: false,
-      report: truncateReport(buffer.subarray(0, Math.min(bytesRead, cap)), cap, bytesRead > cap),
-    }
+    const text = buffer.subarray(0, Math.min(bytesRead, cap)).toString('utf8')
+    const truncated = bytesRead > cap || Buffer.byteLength(text) > cap
+    return { missing: false, truncated, report: truncated ? truncateReport(text, cap) : text }
   } finally {
     fs.closeSync(fd)
   }

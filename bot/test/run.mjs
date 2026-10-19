@@ -10,6 +10,7 @@ import {
   buildIssueBody,
   buildPullBody,
   contextFor,
+  evalArtifactBudget,
   evaluatePlan,
   formatDecisions,
   main,
@@ -19,7 +20,7 @@ import {
 import { branchFor, itemDigest, markdownCode, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
-import { reportForBody, runEvalHook } from '../lib/eval.mjs'
+import { capReport, readReportCapped, reportForBody, runEvalHook } from '../lib/eval.mjs'
 import { cloneRepository, deleteRemoteBranch, gitAuthentication, originFor } from '../lib/git.mjs'
 import { assertValidEvalResults } from '../../lib/receipts.mjs'
 import { validateDocument } from '../../lib/validate-document.mjs'
@@ -1886,6 +1887,215 @@ assert(dry.decisions.some(item => item.action === 'create'), 'dry-run prints wou
 assert(dry.decisions.find(item => item.group.kind === 'model')?.body.includes('Result: pass'), 'dry-run consumes the same bound eval result instead of bypassing configured evaluation')
 assert(github.calls.length === transportCallsBeforeDry, 'dry-run makes zero GitHub transport calls')
 assert(!gitTry(repo.bare, ['show-ref', '--verify', `refs/heads/${branch}-dry-run`]), 'dry-run makes no push')
+
+const truncationMarker = '\n[model-eol: report truncated]'
+const roundTrips = text => Buffer.from(text, 'utf8').toString('utf8') === text
+const capLimits = [...Array.from({ length: 65 }, (_, limit) => limit), 1023, 1025, 4097, 9999]
+const capInputs = [
+  'é'.repeat(6000),
+  '€'.repeat(4000),
+  '😀'.repeat(3000),
+  'ab€😀éc'.repeat(1200),
+  'a😀'.repeat(7),
+  'é€😀',
+]
+const capFailures = []
+for (const input of capInputs) {
+  for (const limit of capLimits) {
+    const capped = capReport(input, limit)
+    const label = `${JSON.stringify(input.slice(0, 6))} x${input.length} at ${limit}`
+    if (Buffer.byteLength(capped) > limit) capFailures.push(`${label}: ${Buffer.byteLength(capped)} bytes`)
+    if (!roundTrips(capped) || capped.includes('\uFFFD')) capFailures.push(`${label}: split or replaced a character`)
+    if (Buffer.byteLength(input) <= limit) {
+      if (capped !== input) capFailures.push(`${label}: fitting report changed`)
+    } else if (limit > truncationMarker.length) {
+      if (!capped.endsWith(truncationMarker) || !input.startsWith(capped.slice(0, -truncationMarker.length))) capFailures.push(`${label}: not an input prefix plus marker`)
+      if (Buffer.byteLength(capped) < limit - 3) capFailures.push(`${label}: kept only ${Buffer.byteLength(capped)} bytes`)
+    } else if (!truncationMarker.startsWith(capped)) {
+      capFailures.push(`${label}: not a marker prefix`)
+    }
+  }
+}
+assert(capFailures.length === 0, `capReport keeps 2-, 3- and 4-byte reports within every byte cap without splitting characters${capFailures.length ? ` (${capFailures.slice(0, 3).join('; ')})` : ''}`)
+assert(Buffer.byteLength(capReport('é'.repeat(5000), 1025)) <= 1025, 'issue 117 repro: a capped multibyte report fits its 1025-byte cap')
+const loneSurrogateFailures = []
+for (const input of ['a\ud800b'.repeat(40), '\udc00'.repeat(40), '😀\ud83d'.repeat(20)]) {
+  for (const limit of capLimits) {
+    const capped = capReport(input, limit)
+    if (Buffer.byteLength(capped) > limit || !roundTrips(capped)) loneSurrogateFailures.push(`${JSON.stringify(input.slice(0, 3))} at ${limit}`)
+  }
+}
+assert(loneSurrogateFailures.length === 0, `capReport output for lone-surrogate input round-trips and fits${loneSurrogateFailures.length ? ` (${loneSurrogateFailures.slice(0, 3).join('; ')})` : ''}`)
+const fractionalCapped = capReport(`a${'é'.repeat(100)}`, 40.5)
+assert(Buffer.byteLength(fractionalCapped) <= 40 && roundTrips(fractionalCapped) && !fractionalCapped.includes('\uFFFD'), 'capReport floors a fractional limit without splitting a character')
+const fractionalReportFile = path.join(tempRoot, 'fractional-limit-report.txt')
+fs.writeFileSync(fractionalReportFile, `a${'é'.repeat(100)}`)
+const fractionalRead = readReportCapped(fractionalReportFile, 40.5).report
+assert(Buffer.byteLength(fractionalRead) <= 40 && roundTrips(fractionalRead) && !fractionalRead.includes('\uFFFD'), 'readReportCapped floors a fractional limit without splitting a character')
+const negativeRead = readReportCapped(fractionalReportFile, -5)
+assert(negativeRead.truncated && negativeRead.report === '', 'readReportCapped treats a negative limit as a zero-byte cap')
+const throwsFor = action => {
+  try {
+    action()
+  } catch (error) {
+    return error.message.includes('must be finite')
+  }
+  return false
+}
+assert([NaN, Infinity, -Infinity].every(limit => throwsFor(() => capReport('report', limit)) && throwsFor(() => readReportCapped(fractionalReportFile, limit))), 'capReport and readReportCapped refuse a non-finite limit instead of leaving reports uncapped')
+
+const invalidUtf8Files = {
+  'ff-run': Buffer.alloc(1000, 0xff),
+  'truncated-4-byte': Buffer.concat([Buffer.from('abc😀'.repeat(200)), Buffer.from([0xf0, 0x9f, 0x98])]),
+  'overlong': Buffer.concat(Array.from({ length: 300 }, () => Buffer.from([0xc0, 0xaf, 0xe0, 0x80, 0xaf, 0xf0, 0x80, 0x80, 0xaf]))),
+  'mixed-stray': Buffer.concat(Array.from({ length: 400 }, () => Buffer.from([0xc3, 0xa9, 0xff, 0x41, 0x80]))),
+}
+const invalidCaps = [0, 1, 2, 3, 7, 29, 30, 31, 32, 33, 100, 999, 1000, 1001, 2001, 2999, 5000]
+const readCapFailures = []
+for (const [name, bytes] of Object.entries(invalidUtf8Files)) {
+  const file = path.join(tempRoot, `invalid-utf8-${name}.bin`)
+  fs.writeFileSync(file, bytes)
+  for (const cap of invalidCaps) {
+    const { report, truncated } = readReportCapped(file, cap)
+    if (Buffer.byteLength(report) > cap) readCapFailures.push(`${name} at ${cap}: ${Buffer.byteLength(report)} bytes`)
+    if (!roundTrips(report)) readCapFailures.push(`${name} at ${cap}: split a character`)
+    if (truncated && cap > truncationMarker.length && !report.endsWith(truncationMarker)) readCapFailures.push(`${name} at ${cap}: truncated without marker`)
+  }
+}
+assert(readCapFailures.length === 0, `readReportCapped keeps invalid UTF-8 report files within every byte cap${readCapFailures.length ? ` (${readCapFailures.slice(0, 3).join('; ')})` : ''}`)
+const ffReport = readReportCapped(path.join(tempRoot, 'invalid-utf8-ff-run.bin'), 1000)
+assert(ffReport.truncated && ffReport.report.endsWith(truncationMarker) && Buffer.byteLength(ffReport.report) <= 1000, 'a report over its cap only through replacement characters counts as truncated and carries the marker')
+const fittingReportFile = path.join(tempRoot, 'fitting-utf8-report.txt')
+fs.writeFileSync(fittingReportFile, 'é€😀 fits')
+const fittingReport = readReportCapped(fittingReportFile, Buffer.byteLength('é€😀 fits'))
+assert(!fittingReport.truncated && fittingReport.report === 'é€😀 fits', 'a valid UTF-8 report that fits its cap is read unchanged')
+
+const multibyteEvalRepo = makeRepo({
+  name: 'multibyte-eval-report',
+  files: baseFiles,
+  config: {
+    ...config,
+    eval: {
+      command: 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "\\u00e9".repeat(3000))\'',
+      timeout_ms: 1000,
+      max_report_bytes: 1025,
+      pass_env: [],
+    },
+  },
+})
+const multibyteEvalArtifacts = await evaluateForPublish({ targetDir: multibyteEvalRepo.work })
+const multibyteManifestReport = JSON.parse(fs.readFileSync(multibyteEvalArtifacts.evalResultsFile, 'utf8')).results[0]?.report ?? ''
+assert(Buffer.byteLength(multibyteManifestReport) <= 1025 && multibyteManifestReport.endsWith(truncationMarker) && !multibyteManifestReport.includes('\uFFFD'), 'evaluate writes a truncated non-ASCII report within an odd max_report_bytes')
+let multibyteDryError = null
+let multibyteDry = null
+try {
+  multibyteDry = await runBot({
+    repo: 'example/multibyte-eval-report',
+    targetDir: multibyteEvalRepo.work,
+    dryRun: true,
+    transport: async () => { throw new Error('dry-run must not call transport') },
+    vendoredFeeds: path.join(root, 'feeds'),
+    planFile: multibyteEvalArtifacts.planFile,
+    evalResultsFile: multibyteEvalArtifacts.evalResultsFile,
+  })
+} catch (error) {
+  multibyteDryError = error
+}
+assert(!multibyteDryError && multibyteDry?.decisions.find(item => item.group.kind === 'model')?.body.includes('Result: pass'), `dry-run accepts the bot's own manifest with a capped non-ASCII report${multibyteDryError ? ` (${multibyteDryError.message})` : ''}`)
+
+const multibyteBudget = evalArtifactBudget(1025, 1)
+const oversizedCut = multibyteBudget + 1 - truncationMarker.length
+const oversizedArtifactFile = path.join(tempRoot, 'oversized-multibyte-eval.json')
+fs.writeFileSync(oversizedArtifactFile, 'a'.repeat((oversizedCut - 1) % 3) + '€'.repeat(Math.ceil(multibyteBudget / 3) + 10))
+let oversizedArtifactError = null
+try {
+  await runBot({
+    repo: 'example/multibyte-eval-report',
+    targetDir: multibyteEvalRepo.work,
+    dryRun: true,
+    transport: async () => { throw new Error('dry-run must not call transport') },
+    vendoredFeeds: path.join(root, 'feeds'),
+    planFile: multibyteEvalArtifacts.planFile,
+    evalResultsFile: oversizedArtifactFile,
+  })
+} catch (error) {
+  oversizedArtifactError = error
+}
+assert(oversizedArtifactError?.message.includes(`eval results artifact exceeds ${multibyteBudget} bytes`), `an over-budget multibyte eval results artifact is refused as oversized, not as malformed JSON${oversizedArtifactError ? ` (${oversizedArtifactError.message})` : ''}`)
+
+assert(evalArtifactBudget(1, 1) === 1024 * 1024 && evalArtifactBudget(1024 * 1024, 1) === 4096 + 6 * 1024 * 1024 + 4096 && evalArtifactBudget(8 * 1024 * 1024, 2) === 64 * 1024 * 1024, 'eval artifact budget allows 6x escaping per report, floors at 1 MiB, and caps at 64 MiB')
+const escapingReportCases = [
+  ['quote-heavy', '"\\'],
+  ['control-character-heavy', '\u001b\u0000'],
+]
+for (const [label, unit] of escapingReportCases) {
+  const escapingRepo = makeRepo({
+    name: `escaping-eval-${label}`,
+    files: baseFiles,
+    config: {
+      ...config,
+      eval: {
+        command: `node -e 'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, ${JSON.stringify(unit)}.repeat(${1024 * 1024 / unit.length}))'`,
+        timeout_ms: 10000,
+        max_report_bytes: 1024 * 1024,
+        pass_env: [],
+      },
+    },
+  })
+  let escapingError = null
+  let escapingDry = null
+  let escapingManifestBytes = 0
+  try {
+    const escapingArtifacts = await evaluateForPublish({ targetDir: escapingRepo.work })
+    escapingManifestBytes = fs.statSync(escapingArtifacts.evalResultsFile).size
+    escapingDry = await runBot({
+      repo: `example/escaping-eval-${label}`,
+      targetDir: escapingRepo.work,
+      dryRun: true,
+      transport: async () => { throw new Error('dry-run must not call transport') },
+      vendoredFeeds: path.join(root, 'feeds'),
+      planFile: escapingArtifacts.planFile,
+      evalResultsFile: escapingArtifacts.evalResultsFile,
+    })
+  } catch (error) {
+    escapingError = error
+  }
+  assert(!escapingError && escapingManifestBytes > 2 * 1024 * 1024 && escapingDry?.decisions.find(item => item.group.kind === 'model')?.body.includes('Result: pass'), `a ${label} 1 MiB report evaluates and dry-runs despite JSON escaping growth${escapingError ? ` (${escapingError.message})` : ''}`)
+}
+
+const ceilingRepo = makeRepo({
+  name: 'eval-artifact-ceiling',
+  files: {
+    'public/direct.py': baseFiles['direct.py'],
+    'fail/direct.py': baseFiles['direct.py'].replace('o3-deep-research', 'o4-mini-deep-research'),
+  },
+  config: {
+    ...config,
+    eval: {
+      command: `node -e 'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, Buffer.alloc(${8 * 1024 * 1024}, 1))'`,
+      timeout_ms: 10000,
+      max_report_bytes: 8 * 1024 * 1024,
+      pass_env: [],
+    },
+  },
+})
+const ceilingPlanFile = path.join(tempRoot, 'ceiling-plan.json')
+const ceilingOutputFile = path.join(tempRoot, 'ceiling-eval.json')
+write(ceilingPlanFile, JSON.stringify(runPlan({ workDir: ceilingRepo.work, config: loadConfig(path.join(ceilingRepo.work, '.model-eol.json')), configPath: path.join(ceilingRepo.work, '.model-eol.json'), feedsDir: path.join(root, 'feeds'), warn: () => {} }), null, 2))
+let ceilingError = null
+try {
+  await evaluatePlan({
+    targetDir: ceilingRepo.work,
+    planFile: ceilingPlanFile,
+    outputFile: ceilingOutputFile,
+    vendoredFeeds: path.join(root, 'feeds'),
+    now: new Date('2026-08-01T00:00:00Z'),
+    warn: () => {},
+  })
+} catch (error) {
+  ceilingError = error
+}
+assert(/eval results artifact would be \d+ bytes, over its 67108864-byte budget; lower eval\.max_report_bytes/.test(ceilingError?.message ?? '') && !fs.existsSync(ceilingOutputFile), `evaluate refuses a manifest over the 64 MiB ceiling with the size, budget, and remedy before writing it${ceilingError ? ` (${ceilingError.message})` : ''}`)
 
 const mismatchChecker = path.join(tempRoot, 'mismatch-checker.mjs')
 write(mismatchChecker, 'console.log(JSON.stringify({ plan_schema: "model-eol.plan/9.9", items: [], issues: [] }))\n')
