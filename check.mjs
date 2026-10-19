@@ -50,7 +50,7 @@ import {
 } from './lib/reports.mjs'
 import { addedLinesForTargets, filterFindingsToChanged, gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
 import { DOCUMENT_TYPES, formatDocumentErrors, validateDocumentFile } from './lib/validate-document.mjs'
-import { SUPPORTED_RECEIPT_SCHEMAS, VERIFY_INPUTS, VerifyError, formatVerification, verifyReceipt } from './lib/verify.mjs'
+import { SUPPORTED_RECEIPT_SCHEMAS, VERIFY_INPUTS, VerifyError, formatVerification, printable, verifyReceipt } from './lib/verify.mjs'
 
 const rootForTarget = target => {
   const absolute = path.resolve(target)
@@ -202,7 +202,8 @@ Verify inputs:
   --config FILE         Eval eval_config_digest and configured, from .model-eol.json (use a file holding {}
                         for a repository without one). MODEL_EOL_EVAL_COMMAND overrides eval.command as it
                         does for the bot, and the output says when it applied.
-  --require-all         Exit 1 when the result is partial.
+  --require-all         Exit 1 when the result is partial. A release gate passes --package, --version,
+                        --commit, and --require-all: a no-release receipt then mismatches.
   SHA inputs are 40-64 hexadecimal characters; uppercase is lowercased.
 
 Scopes:
@@ -248,9 +249,9 @@ if (command === 'verify') {
       env: process.env,
     })
   } catch (error) {
-    console.error(error instanceof VerifyError
+    console.error(printable(error instanceof VerifyError
       ? `model-eol verify: ${error.message}`
-      : `model-eol verify: unexpected error, nothing was checked: ${error?.message ?? error}`)
+      : `model-eol verify: unexpected error, nothing was checked: ${error?.message ?? error}`))
     return 2
   }
   console.log(AS_JSON ? JSON.stringify(report, null, 2) : formatVerification(report))

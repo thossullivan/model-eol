@@ -634,7 +634,18 @@ computed one), `not-checked` (with the flag that would check it), or
 `released: false` result adds a `released` claim that mismatches, because those
 inputs assert a release the receipt says did not happen. For a refresh receipt,
 the report also shows its `state`, `checked_at`, and `pending_pr` as information;
-a pending receipt verifies by the same rules as a clean one. The overall result is `verified` only when every
+a pending receipt verifies by the same rules as a clean one. For a release
+result the report shows `released`; a release gate must pass `--package`,
+`--version`, `--commit`, and `--require-all`, so that a no-release receipt
+mismatches instead of verifying through `--source-commit` alone.
+
+For a configured eval manifest, `--plan` and `--config` fix the set of result
+identities the evaluator had to produce: a planned identity with no result, a
+result for an unplanned identity, and a duplicated identity are each a
+mismatch, and `--feeds-dir` additionally checks each result's `feed_digest`.
+Without `--plan` and `--config`, a `results` claim is reported as not checked,
+so stripping results from a manifest never verifies. Text output escapes
+control characters in every printed value. The overall result is `verified` only when every
 applicable claim is verified. It is `partial` when nothing mismatched but at
 least one claim was not checked: the receipt is consistent with what you
 supplied, not proven. It is `mismatch` when any claim mismatched.
