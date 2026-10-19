@@ -148,6 +148,15 @@ try {
   assert.equal(mismatchedBuild.status, 1)
   assert.match(mismatchedBuild.stderr, /receipt does not match the feeds being published/)
 
+  const upperSourceOutput = path.join(temp, 'upper-source-site')
+  const upperSourceBuild = runBuilder([
+    '--out-dir', upperSourceOutput,
+    '--receipt', receiptFile,
+    '--source-sha', sourceSha.toUpperCase(),
+  ])
+  assert.equal(upperSourceBuild.status, 0, `an uppercase --source-sha is accepted: ${upperSourceBuild.stderr}`)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(upperSourceOutput, 'index.json'), 'utf8')).published_commit, sourceSha, 'an uppercase --source-sha is published lowercased')
+
   const wrongSourceBuild = runBuilder([
     '--out-dir', path.join(temp, 'wrong-source-site'),
     '--receipt', receiptFile,

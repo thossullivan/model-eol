@@ -164,7 +164,8 @@ Commands:
   alert       Emit GitHub Actions annotations, Markdown, or a Shields badge JSON and fail on errors.
   plan        Emit a JSON migration plan with only safely patchable direct API references.
   apply       Apply a plan with line-hash and occurrence checks; use --dry-run to preview.
-  validate    Validate a feed, config, check, inventory, schedule, alert, or plan document.
+  validate    Validate a feed, config, check, inventory, schedule, alert, or plan document,
+              or an eval, feed-refresh-receipt, or npm-release-result receipt.
               The type is inferred from its discriminator or .model-eol.json filename unless --type is set.
 
 Scopes:

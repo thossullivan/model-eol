@@ -2130,30 +2130,38 @@ try {
 }
 assert(digestTamperError?.message.includes('plan digest') && digestTamperGithub.calls.length === 0, 'tampered eval digest is rejected before any GitHub read or write')
 
-for (const [label, mutate] of [
-  ['top-level', manifest => { manifest.signed_by = 'nobody' }],
-  ['result', manifest => { manifest.results[0].waived = true }],
+for (const [label, mutate, expectedMessage] of [
+  ['an unknown top-level key', manifest => { manifest.signed_by = 'nobody' }, 'fields must be exactly'],
+  ['an unknown result key', manifest => { manifest.results[0].waived = true }, 'fields must be exactly'],
+  ['a report over eval.max_report_bytes', manifest => { manifest.results[0].report = 'x'.repeat(129) }, 'report exceeds configured cap'],
+  ['fewer results than planned groups', manifest => { manifest.results.pop() }, 'expected exactly one result for every planned migration'],
+  ['a duplicated result identity', manifest => { manifest.results[1] = structuredClone(manifest.results[0]) }, 'result identity is unexpected or duplicated'],
+  ['a feed digest mismatch', manifest => { manifest.results[0].feed_digest = '0'.repeat(64) }, 'feed digest mismatch'],
+  ['a configured state that disagrees with eval.command', manifest => {
+    manifest.configured = false
+    manifest.results = []
+  }, 'configured state does not match eval.command'],
 ]) {
-  const extraKey = JSON.parse(fs.readFileSync(partitionEvalFile, 'utf8'))
-  mutate(extraKey)
-  const extraKeyFile = path.join(tempRoot, `partition-eval-extra-${label}.json`)
-  write(extraKeyFile, JSON.stringify(extraKey, null, 2))
-  const extraKeyGithub = new FakeGitHub()
-  let extraKeyError = null
+  const tampered = JSON.parse(fs.readFileSync(partitionEvalFile, 'utf8'))
+  mutate(tampered)
+  const tamperedFile = path.join(tempRoot, `partition-eval-${label.replaceAll(/[^a-z]+/g, '-')}.json`)
+  write(tamperedFile, JSON.stringify(tampered, null, 2))
+  const tamperedGithub = new FakeGitHub()
+  let tamperedError = null
   try {
     await runBot({
       repo: 'example/partition-eval',
       targetDir: partitionRepo.work,
       token: 'test-token',
-      transport: extraKeyGithub.transport.bind(extraKeyGithub),
+      transport: tamperedGithub.transport.bind(tamperedGithub),
       planFile: partitionPlanFile,
-      evalResultsFile: extraKeyFile,
+      evalResultsFile: tamperedFile,
       vendoredFeeds: path.join(root, 'feeds'),
     })
   } catch (error) {
-    extraKeyError = error
+    tamperedError = error
   }
-  assert(extraKeyError?.message.includes('refusing eval results artifact') && extraKeyError.message.includes('fields must be exactly') && extraKeyGithub.calls.length === 0, `eval manifest with an unknown ${label} key is rejected before any GitHub read or write`)
+  assert(tamperedError?.message.includes('refusing eval results artifact') && tamperedError.message.includes(expectedMessage) && tamperedGithub.calls.length === 0, `eval manifest with ${label} is rejected before any GitHub read or write`)
 }
 
 write(path.join(partitionRepo.work, 'README.md'), 'default branch advanced after evaluation\n')
