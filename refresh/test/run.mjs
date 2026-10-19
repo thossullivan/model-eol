@@ -3258,6 +3258,33 @@ reviewTest('2026-10-18 review: an OpenAI endpoint row with several dated snapsho
     + '<h2>2026-10-15: Other</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>January 14, 2027</td><td><code>gpt-4.1-2025-04-14</code></td><td><code>gpt-6-luna</code></td></tr></table>'
   strictAssert.deepEqual(parseOpenAIDeprecations(page).map(record => record.id), ['gpt-4.1-2025-04-14'])
 })
+const openAICodes = (...ids) => ids.map(id => `<code>${id}</code>`).join(', ')
+const openAISnapshots = (...ids) => parseOpenAIDeprecations(shapesOpenAIPage(openAICodes(...ids))).map(record => [record.id, record.aliases])
+reviewTest('Month-day snapshots: OpenAI parses the live multi-code cells exactly as before', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0613', 'gpt-4', 'gpt-4-0613-completions', 'gpt-4-completions'), [['gpt-4-0613', ['gpt-4', 'gpt-4-0613-completions', 'gpt-4-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-3.5-turbo-0125', 'gpt-3.5-turbo', 'gpt-3.5-turbo-completions'), [['gpt-3.5-turbo-0125', ['gpt-3.5-turbo', 'gpt-3.5-turbo-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0125-preview', 'gpt-4-turbo-preview', 'gpt-4-turbo-preview-completions'), [['gpt-4-0125-preview', ['gpt-4-turbo-preview', 'gpt-4-turbo-preview-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4o-2024-08-06', 'gpt-4o-2024-11-20'), [['gpt-4o-2024-08-06', undefined], ['gpt-4o-2024-11-20', undefined]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-turbo', 'gpt-4-turbo-2024-04-09', 'gpt-4-turbo-completions'), [['gpt-4-turbo-2024-04-09', ['gpt-4-turbo', 'gpt-4-turbo-completions']]])
+})
+reviewTest('Month-day snapshots: OpenAI splits a cell that lists two month-day snapshots into one record each', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0314', 'gpt-4-0613'), [['gpt-4-0314', undefined], ['gpt-4-0613', undefined]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-1106-preview', 'gpt-4-0125-preview'), [['gpt-4-1106-preview', undefined], ['gpt-4-0125-preview', undefined]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0613', 'gpt-4o-2024-08-06'), [['gpt-4-0613', undefined], ['gpt-4o-2024-08-06', undefined]])
+})
+reviewTest('Month-day snapshots: OpenAI fails closed on an undated alias shared by several month-day snapshots', () => {
+  strictAssert.throws(() => openAISnapshots('gpt-4-0314', 'gpt-4-0613', 'gpt-4'), /lists snapshots gpt-4-0314, gpt-4-0613 with ambiguous alias gpt-4$/)
+  strictAssert.throws(() => openAISnapshots('gpt-4-0314', 'gpt-4-0613', 'gpt-4-completions'), /ambiguous alias gpt-4-completions/)
+})
+reviewTest('Month-day snapshots: OpenAI attaches a -completions variant to its own snapshot', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0314', 'gpt-4-0613', 'gpt-4-0613-completions'), [['gpt-4-0314', undefined], ['gpt-4-0613', ['gpt-4-0613-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0314-completions', 'gpt-4-0314', 'gpt-4-0613'), [['gpt-4-0314', ['gpt-4-0314-completions']], ['gpt-4-0613', undefined]])
+})
+reviewTest('Month-day snapshots: OpenAI does not read an invalid month or day as a snapshot', () => {
+  for (const token of ['model-1399', 'model-0230', 'model-0431', 'model-0000', 'model-1301-preview', 'model-0613-latest']) {
+    strictAssert.deepEqual(openAISnapshots(token, 'gpt-4-0613'), [[token, ['gpt-4-0613']]], token)
+  }
+})
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
   strictAssert.equal(record.id, 'gemini-3.7-flash')

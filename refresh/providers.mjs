@@ -490,17 +490,27 @@ function openAIAnnouncementDate(headings, tableStart) {
   return heading?.date
 }
 
+const OPENAI_MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+function openAIMonthDaySnapshot(token) {
+  const match = token.match(/-(\d{2})(\d{2})(?:-preview)?$/)
+  const month = Number(match?.[1])
+  return Boolean(match) && month >= 1 && month <= 12 && Number(match[2]) >= 1 && Number(match[2]) <= OPENAI_MONTH_DAYS[month - 1]
+}
+
 function openAIModelIds(fragment) {
   const codes = codeText(fragment)
   const tokens = [...new Set((codes.length ? codes : [modelId(fragment)]).filter(Boolean).map(token => token.trim()))]
   if (!tokens.length) return undefined
   const dated = tokens.filter(token => /\b(?:19|20)\d{2}[-_]\d{2}[-_]\d{2}\b/.test(token))
-  if (dated.length > 1) {
-    const undated = tokens.filter(token => !dated.includes(token))
-    const ambiguous = undated.find(token => MODEL_ID_PATTERN.test(token))
-    if (ambiguous) throw new Error(`openai deprecations row lists snapshots ${dated.join(', ')} with ambiguous alias ${ambiguous}`)
+  const snapshots = tokens.filter(token => dated.includes(token) || openAIMonthDaySnapshot(token))
+  if (snapshots.length > 1) {
+    const undated = tokens.filter(token => !snapshots.includes(token))
+    const completionsOf = token => snapshots.find(snapshot => token === `${snapshot}-completions`)
+    const ambiguous = undated.find(token => MODEL_ID_PATTERN.test(token) && !completionsOf(token))
+    if (ambiguous) throw new Error(`openai deprecations row lists snapshots ${snapshots.join(', ')} with ambiguous alias ${ambiguous}`)
     // Non-model tokens stay attached so the caller skips the row as an endpoint or product row.
-    return dated.map((id, index) => ({ id, aliases: index ? [] : undated }))
+    return snapshots.map((id, index) => ({ id, aliases: undated.filter(token => completionsOf(token) ? completionsOf(token) === id : !index) }))
   }
   const canonical = dated[0] ?? tokens[0]
   return [{
