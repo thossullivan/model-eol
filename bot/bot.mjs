@@ -223,7 +223,7 @@ const readJsonArtifact = (file, maxBytes, label) => {
   const absolute = asAbsolute(file)
   const artifact = readReportCapped(absolute, maxBytes + 1)
   if (artifact.missing) throw new Error(`${label} is missing`)
-  if (Buffer.byteLength(artifact.report) > maxBytes) throw new Error(`${label} exceeds ${maxBytes} bytes`)
+  if (artifact.truncated || Buffer.byteLength(artifact.report) > maxBytes) throw new Error(`${label} exceeds ${maxBytes} bytes`)
   try {
     return JSON.parse(artifact.report)
   } catch (error) {

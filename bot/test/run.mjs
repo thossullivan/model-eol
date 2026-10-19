@@ -19,7 +19,7 @@ import {
 import { branchFor, itemDigest, markdownCode, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
-import { reportForBody, runEvalHook } from '../lib/eval.mjs'
+import { capReport, readReportCapped, reportForBody, runEvalHook } from '../lib/eval.mjs'
 import { cloneRepository, deleteRemoteBranch, gitAuthentication, originFor } from '../lib/git.mjs'
 import { assertValidEvalResults } from '../../lib/receipts.mjs'
 import { validateDocument } from '../../lib/validate-document.mjs'
@@ -1886,6 +1886,95 @@ assert(dry.decisions.some(item => item.action === 'create'), 'dry-run prints wou
 assert(dry.decisions.find(item => item.group.kind === 'model')?.body.includes('Result: pass'), 'dry-run consumes the same bound eval result instead of bypassing configured evaluation')
 assert(github.calls.length === transportCallsBeforeDry, 'dry-run makes zero GitHub transport calls')
 assert(!gitTry(repo.bare, ['show-ref', '--verify', `refs/heads/${branch}-dry-run`]), 'dry-run makes no push')
+
+const truncationMarker = '\n[model-eol: report truncated]'
+const roundTrips = text => Buffer.from(text, 'utf8').toString('utf8') === text
+const capLimits = [...Array.from({ length: 65 }, (_, limit) => limit), 1023, 1025, 4097, 9999]
+const capInputs = [
+  'é'.repeat(6000),
+  '€'.repeat(4000),
+  '😀'.repeat(3000),
+  'ab€😀éc'.repeat(1200),
+  'a😀'.repeat(7),
+  'é€😀',
+]
+const capFailures = []
+for (const input of capInputs) {
+  for (const limit of capLimits) {
+    const capped = capReport(input, limit)
+    const label = `${JSON.stringify(input.slice(0, 6))} x${input.length} at ${limit}`
+    if (Buffer.byteLength(capped) > limit) capFailures.push(`${label}: ${Buffer.byteLength(capped)} bytes`)
+    if (!roundTrips(capped) || capped.includes('\uFFFD')) capFailures.push(`${label}: split or replaced a character`)
+    if (Buffer.byteLength(input) <= limit) {
+      if (capped !== input) capFailures.push(`${label}: fitting report changed`)
+    } else if (limit > truncationMarker.length) {
+      if (!capped.endsWith(truncationMarker) || !input.startsWith(capped.slice(0, -truncationMarker.length))) capFailures.push(`${label}: not an input prefix plus marker`)
+    } else if (!truncationMarker.startsWith(capped)) {
+      capFailures.push(`${label}: not a marker prefix`)
+    }
+  }
+}
+assert(capFailures.length === 0, `capReport keeps 2-, 3- and 4-byte reports within every byte cap without splitting characters${capFailures.length ? ` (${capFailures.slice(0, 3).join('; ')})` : ''}`)
+assert(Buffer.byteLength(capReport('é'.repeat(5000), 1025)) <= 1025, 'issue 117 repro: a capped multibyte report fits its 1025-byte cap')
+
+const invalidUtf8Files = {
+  'ff-run': Buffer.alloc(1000, 0xff),
+  'truncated-4-byte': Buffer.concat([Buffer.from('abc😀'.repeat(200)), Buffer.from([0xf0, 0x9f, 0x98])]),
+  'overlong': Buffer.concat(Array.from({ length: 300 }, () => Buffer.from([0xc0, 0xaf, 0xe0, 0x80, 0xaf, 0xf0, 0x80, 0x80, 0xaf]))),
+  'mixed-stray': Buffer.concat(Array.from({ length: 400 }, () => Buffer.from([0xc3, 0xa9, 0xff, 0x41, 0x80]))),
+}
+const invalidCaps = [0, 1, 2, 3, 7, 29, 30, 31, 32, 33, 100, 999, 1000, 1001, 2001, 2999, 5000]
+const readCapFailures = []
+for (const [name, bytes] of Object.entries(invalidUtf8Files)) {
+  const file = path.join(tempRoot, `invalid-utf8-${name}.bin`)
+  fs.writeFileSync(file, bytes)
+  for (const cap of invalidCaps) {
+    const { report, truncated } = readReportCapped(file, cap)
+    if (Buffer.byteLength(report) > cap) readCapFailures.push(`${name} at ${cap}: ${Buffer.byteLength(report)} bytes`)
+    if (!roundTrips(report)) readCapFailures.push(`${name} at ${cap}: split a character`)
+    if (truncated && cap > truncationMarker.length && !report.endsWith(truncationMarker)) readCapFailures.push(`${name} at ${cap}: truncated without marker`)
+  }
+}
+assert(readCapFailures.length === 0, `readReportCapped keeps invalid UTF-8 report files within every byte cap${readCapFailures.length ? ` (${readCapFailures.slice(0, 3).join('; ')})` : ''}`)
+const ffReport = readReportCapped(path.join(tempRoot, 'invalid-utf8-ff-run.bin'), 1000)
+assert(ffReport.truncated && ffReport.report.endsWith(truncationMarker) && Buffer.byteLength(ffReport.report) <= 1000, 'a report over its cap only through replacement characters counts as truncated and carries the marker')
+const fittingReportFile = path.join(tempRoot, 'fitting-utf8-report.txt')
+fs.writeFileSync(fittingReportFile, 'é€😀 fits')
+const fittingReport = readReportCapped(fittingReportFile, Buffer.byteLength('é€😀 fits'))
+assert(!fittingReport.truncated && fittingReport.report === 'é€😀 fits', 'a valid UTF-8 report that fits its cap is read unchanged')
+
+const multibyteEvalRepo = makeRepo({
+  name: 'multibyte-eval-report',
+  files: baseFiles,
+  config: {
+    ...config,
+    eval: {
+      command: 'node -e \'require("fs").writeFileSync(process.env.MODEL_EOL_REPORT, "\\u00e9".repeat(3000))\'',
+      timeout_ms: 1000,
+      max_report_bytes: 1025,
+      pass_env: [],
+    },
+  },
+})
+const multibyteEvalArtifacts = await evaluateForPublish({ targetDir: multibyteEvalRepo.work })
+const multibyteManifestReport = JSON.parse(fs.readFileSync(multibyteEvalArtifacts.evalResultsFile, 'utf8')).results[0]?.report ?? ''
+assert(Buffer.byteLength(multibyteManifestReport) <= 1025 && multibyteManifestReport.endsWith(truncationMarker) && !multibyteManifestReport.includes('\uFFFD'), 'evaluate writes a truncated non-ASCII report within an odd max_report_bytes')
+let multibyteDryError = null
+let multibyteDry = null
+try {
+  multibyteDry = await runBot({
+    repo: 'example/multibyte-eval-report',
+    targetDir: multibyteEvalRepo.work,
+    dryRun: true,
+    transport: async () => { throw new Error('dry-run must not call transport') },
+    vendoredFeeds: path.join(root, 'feeds'),
+    planFile: multibyteEvalArtifacts.planFile,
+    evalResultsFile: multibyteEvalArtifacts.evalResultsFile,
+  })
+} catch (error) {
+  multibyteDryError = error
+}
+assert(!multibyteDryError && multibyteDry?.decisions.find(item => item.group.kind === 'model')?.body.includes('Result: pass'), `dry-run accepts the bot's own manifest with a capped non-ASCII report${multibyteDryError ? ` (${multibyteDryError.message})` : ''}`)
 
 const mismatchChecker = path.join(tempRoot, 'mismatch-checker.mjs')
 write(mismatchChecker, 'console.log(JSON.stringify({ plan_schema: "model-eol.plan/9.9", items: [], issues: [] }))\n')
