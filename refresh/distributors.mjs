@@ -226,17 +226,20 @@ function bedrockEndpointIds(text) {
 // A missing or over-spanned provider cell shifts a row; anchor on the model ID and apply its offset to the lifecycle columns.
 function bedrockModelCell(row, expectedIndex, headerLength) {
   const expected = row.cells[expectedIndex]
-  if (expected && isBedrockModelId(expected.text.trim())) {
-    return { cell: expected, index: expectedIndex, ids: [expected.text.trim()] }
+  let filled = row.cells.length
+  while (filled && !row.cells[filled - 1].text) filled--
+  const direct = expected && (isBedrockModelId(expected.text.trim()) ? [expected.text.trim()] : bedrockEndpointIds(expected.text))
+  if (direct) {
+    // An extra cell means an over-long rowspan pushed this row's dates out of their columns.
+    if (filled > headerLength) throw new Error(`aws-bedrock lifecycle entry ${direct.join(', ')} has more cells than the table header`)
+    return { cell: expected, index: expectedIndex, ids: direct }
   }
-  const endpointIds = expected && bedrockEndpointIds(expected.text)
-  if (endpointIds) return { cell: expected, index: expectedIndex, ids: endpointIds }
   // Real IDs are lowercase where display and provider names are not.
   const candidates = row.cells
     .map((cell, index) => ({ cell, index, ids: isBedrockModelId(cell.text.trim()) ? [cell.text.trim()] : bedrockEndpointIds(cell.text) }))
     .filter(candidate => candidate.ids?.every(id => id === id.toLowerCase()))
   // A shift is real only when the row gained or lost exactly that many cells against the header.
-  if (candidates.length === 1 && row.cells.length - headerLength === candidates[0].index - expectedIndex) return candidates[0]
+  if (candidates.length === 1 && [row.cells.length, filled].some(length => length - headerLength === candidates[0].index - expectedIndex)) return candidates[0]
   if (candidates.length > 1) {
     throw new Error(`aws-bedrock lifecycle table contains an ambiguous model row: ${candidates.map(candidate => candidate.cell.text.trim()).join(', ')}`)
   }
@@ -363,7 +366,7 @@ export function parseBedrockModelCardsIndexHtml(html) {
 const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy period', 'Model lifecycle policy', 'Model EOL date', 'Model lifecycle']
 // Policy link text and the EOL banner's "see Model lifecycle" repeat the words, so only the colon form counts.
 const BEDROCK_CARD_LABEL_COUNT = new Map([['Model lifecycle', /\bModel lifecycle\s*:/gi]])
-const BEDROCK_CARD_LIFECYCLE = /^(?:Active|(Legacy)|EOL: (\d{4}-\d{2}-\d{2})(?: \(certain regions\))?)$/
+const BEDROCK_CARD_LIFECYCLE = /^(?:Active|(Legacy)|EOL: (\d{4}-\d{2}-\d{2}))(?: \(certain regions\))?$/
 const BEDROCK_CARD_MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
 const BEDROCK_CARD_DAY = new RegExp(`^${BEDROCK_CARD_MONTH} \\d{1,2}, (?:19|20)\\d{2}$`, 'i')
 const BEDROCK_CARD_MONTH_ONLY = new RegExp(`^${BEDROCK_CARD_MONTH} (?:19|20)\\d{2}$`, 'i')
@@ -376,7 +379,9 @@ function bedrockCardFields(html) {
     const text = plainText(paragraph[1])
     const label = BEDROCK_CARD_LABELS.find(candidate => text.startsWith(`${candidate}:`))
     if (!label) {
-      if (/^Model lifecycle\b/i.test(text) && !/^Model lifecycle policy\b/i.test(text)) throw new Error(`unrecognised Model lifecycle field: ${text}`)
+      const boldLabel = paragraph[1].match(/^\s*<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/i)
+      const renamedLabel = boldLabel && /^Model lifecycle\b/i.test(plainText(boldLabel[2])) && !/^Model lifecycle polic/i.test(plainText(boldLabel[2]))
+      if (renamedLabel || /^Model lifecycle\W*(?:Active|Legacy|EOL)\b/i.test(text)) throw new Error(`unrecognised Model lifecycle field: ${text}`)
       continue
     }
     if (fields.has(label)) throw new Error(`duplicate ${label} field`)

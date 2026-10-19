@@ -1299,7 +1299,15 @@ reviewTest('Model lifecycle line: Bedrock parses the live EOL card shape with it
   strictAssert.ok(html.includes(lifecycleBanner) && html.includes(lifecycleLine('EOL: 2026-08-19')))
   strictAssert.deepEqual(parseBedrockModelCardHtml(html, commandCard.source).records, [{ ...commandCard, status: 'legacy' }])
 })
-for (const value of ['active', 'LEGACY', 'Deprecated', 'Retired', 'EOL', 'EOL: 2027-9-1', 'EOL 2027-09-01', 'EOL: September 1, 2027', 'EOL: 2027-09-01 (some regions)', 'EOL: 2027-09-01 (certain regions', 'Legacy (certain regions)', 'Active; EOL: 2027-09-01']) {
+reviewTest('Model lifecycle line: Bedrock reads Legacy (certain regions) as legacy', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy (certain regions)', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+})
+for (const paragraph of ['<p>Model lifecycle stages are described in the user guide.</p>', '<p><a href="./model-lifecycle.html">Model lifecycle</a> explains the stages.</p>', '<p><b>Model lifecycle policies:</b> see the user guide</p>']) {
+  reviewTest(`Model lifecycle line: Bedrock ignores prose that opens with the words: ${paragraph}`, () => {
+    strictAssert.deepEqual(parseBedrockModelCardHtml(fableHtml.replace('<p><b>Model launch date:', `${paragraph}<p><b>Model launch date:`), fableCard.source).records, [fableCard])
+  })
+}
+for (const value of ['active', 'LEGACY', 'Deprecated', 'Retired', 'EOL', 'EOL: 2027-9-1', 'EOL 2027-09-01', 'EOL: September 1, 2027', 'EOL: 2027-09-01 (some regions)', 'EOL: 2027-09-01 (certain regions', 'Legacy (some regions)', 'Active; EOL: 2027-09-01']) {
   reviewTest(`Model lifecycle line: Bedrock rejects an unrecognised value: ${value}`, () => {
     strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard(value), fableCard.source), error =>
       error.message.includes(fableCard.source) && error.message.includes(`unrecognised Model lifecycle: ${value}`))
@@ -3235,6 +3243,14 @@ for (const cells of [
     strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
   })
 }
+reviewTest('Shifted row realignment: Bedrock realigns a row missing its provider cell that ends in an empty cell', () => {
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['GLM 4.7', 'zai.glm-4.7', 'us-east-1', ...shiftedDates, '']])),
+    [{ bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
+})
+reviewTest('Shifted row realignment: Bedrock refuses a row in place whose extra cell pushed its dates out of their columns', () => {
+  const table = shapesBedrockTable([]).replace('</table>', `<tr><td>Meta</td><td>Llama A</td><td>meta.a-v1:0</td><td>us-east-1</td><td>September 1, 2026</td><td rowspan="2">December 1, 2026</td><td>To be announced</td></tr><tr><td>Meta</td><td>Llama B</td><td>meta.b-v1:0</td><td>us-east-1</td><td>August 1, 2026</td><td>November 1, 2026</td><td>To be announced</td></tr></table>`)
+  strictAssert.throws(() => parseBedrockLifecycleHtml(table), /meta\.b-v1:0 has more cells than the table header/)
+})
 reviewTest('Shifted row realignment: Bedrock still refuses two lowercase ID candidates left of Model ID', () => {
   strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['deepseek.r1-v1:0', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2', ...shiftedDates]])),
     /ambiguous model row: deepseek\.r1-v1:0, deepseek\.v3-v1:0 \(bedrock-runtime\), deepseek\.v3\.1 \(bedrock-mantle\)/)
