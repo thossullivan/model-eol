@@ -231,8 +231,8 @@ function replacementNote(text, tokens) {
     if (trailing && containsToken.test(trailing)) residual = residual.slice(0, -trailing.length)
   }
   residual = unwrapOuterBrackets(residual.trim())
-  if (tokens.length && new RegExp(`^(?:${unit}|[()[\\]{}])+$`).test(residual) && containsToken.test(residual)) return undefined
-  residual = residual.replace(/\s+/g, ' ').replace(/ ([,;:.)\]}])/g, '$1').replace(/([([{]) /g, '$1').trim()
+  if (tokens.length && new RegExp(`^(?:${unit}|[()[\\]{}])+[.,;:]?$`).test(residual) && containsToken.test(residual)) return undefined
+  residual = residual.replace(/\s+/g, ' ').replace(/ ([,;:.)\]}])(?![A-Za-z0-9])/g, '$1').replace(/([([{]) /g, '$1').trim()
   return /[\p{L}\p{N}]/u.test(residual) ? residual : undefined
 }
 
