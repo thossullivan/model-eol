@@ -1284,9 +1284,9 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-10-14",
       "shutdown": "2027-01-14",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement": "gpt-6-luna"
     },
     {
@@ -1302,9 +1302,9 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-10-14",
       "shutdown": "2027-01-14",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement": "gpt-6-luna"
     },
     {
@@ -1323,9 +1323,9 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-10-14",
       "shutdown": "2027-01-14",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement": "gpt-6-luna"
     },
     {
@@ -1372,9 +1372,9 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-10-14",
       "shutdown": "2027-01-14",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement": "gpt-6-luna"
     },
     {
@@ -1390,9 +1390,9 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-10-14",
       "shutdown": "2027-01-14",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement": "gpt-6-luna"
     },
     {
