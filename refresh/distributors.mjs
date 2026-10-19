@@ -233,9 +233,10 @@ function bedrockModelCell(row, expectedIndex) {
   }
   const endpointIds = expected && bedrockEndpointIds(expected.text)
   if (endpointIds) return { cell: expected, index: expectedIndex, ids: endpointIds }
-  const candidates = row.cells
-    .map((cell, index) => ({ cell, index, ids: [cell.text.trim()] }))
-    .filter(candidate => isBedrockModelId(candidate.cell.text.trim()))
+  // Only a leftward shift is documented, and real IDs are lowercase where display and provider names are not.
+  const candidates = row.cells.slice(0, expectedIndex)
+    .map((cell, index) => ({ cell, index, ids: isBedrockModelId(cell.text.trim()) ? [cell.text.trim()] : bedrockEndpointIds(cell.text) }))
+    .filter(candidate => candidate.ids?.every(id => id === id.toLowerCase()))
   if (candidates.length === 1) return candidates[0]
   if (candidates.length > 1) {
     throw new Error(`aws-bedrock lifecycle table contains an ambiguous model row: ${candidates.map(candidate => candidate.cell.text.trim()).join(', ')}`)

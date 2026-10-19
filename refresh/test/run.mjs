@@ -3178,6 +3178,36 @@ reviewTest('2026-10-18 shapes: Bedrock lifecycle records every endpoint-qualifie
     strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek V3', cell, 'us-east-2', 'September 30, 2026', 'March 30, 2027', 'To be announced']])), /invalid model id/)
   }
 })
+const shiftedDates = ['September 30, 2026', 'March 30, 2027', 'To be announced']
+reviewTest('Shifted row realignment: Bedrock resolves an endpoint-list ID cell whose provider cell is omitted', () => {
+  const records = parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', ...shiftedDates]]))
+  strictAssert.deepEqual(records, ['deepseek.v3-v1:0', 'deepseek.v3.1'].map(bedrockId => ({ bedrockId, status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' })))
+})
+reviewTest('Shifted row realignment: Bedrock resolves a shifted Z.AI row to its lowercase model ID', () => {
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['GLM 4.7', 'zai.glm-4.7', 'us-east-1, us-west-2', ...shiftedDates]])),
+    [{ bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
+})
+for (const cells of [
+  ['DeepSeek', 'DeepSeek-V3.1', 'see endpoint table', 'us-east-2', ...shiftedDates],
+  ['DeepSeek-V3.1', 'see endpoint table', 'us-east-2', ...shiftedDates],
+  ['Z.AI', 'GLM 4.7', 'see endpoint table', 'us-east-1', ...shiftedDates],
+  ['Z.AI', 'see endpoint table', 'us-east-1', ...shiftedDates],
+  ['DeepSeek', 'DeepSeek V3', '', 'deepseek.v3-v1:0', ...shiftedDates],
+  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', ...shiftedDates],
+  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'us-east-2', 'deepseek.v3-v1:0', 'March 30, 2027', 'To be announced'],
+]) {
+  reviewTest(`Shifted row realignment: Bedrock refuses to realign onto a display name, provider, or a cell right of Model ID: ${cells.slice(0, 4).join(' | ')}`, () => {
+    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
+  })
+}
+reviewTest('Shifted row realignment: Bedrock still refuses two lowercase ID candidates left of Model ID', () => {
+  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['deepseek.r1-v1:0', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2', ...shiftedDates]])),
+    /ambiguous model row: deepseek\.r1-v1:0, deepseek\.v3-v1:0 \(bedrock-runtime\), deepseek\.v3\.1 \(bedrock-mantle\)/)
+})
+reviewTest('Shifted row realignment: the Bedrock lifecycle fixture parses to the same records', () => {
+  strictAssert.equal(bedrockEntries.length, 17)
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')), bedrockEntries)
+})
 reviewTest('2026-10-18 shapes: Bedrock lifecycle keeps the earliest deadline across disjoint region groups', () => {
   const groups = [
     ['Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', 'ap-northeast-2, ap-south-1', 'October 10, 2026', 'November 13, 2026', 'October 10, 2026'],
