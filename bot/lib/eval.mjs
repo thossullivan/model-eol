@@ -18,15 +18,20 @@ const truncateReport = (text, limit) => {
   return fitUtf8(text, limit - markerBytes) + TRUNCATION_MARKER
 }
 
+const byteCap = limit => {
+  if (!Number.isFinite(limit)) throw new Error(`report byte limit must be finite, got ${limit}`)
+  return Math.max(0, Math.floor(limit))
+}
+
 export const capReport = (report, limit) => {
   if (report === null || report === undefined) return null
-  const cap = Math.max(0, limit)
+  const cap = byteCap(limit)
   const text = Buffer.from(String(report), 'utf8').toString('utf8')
   return Buffer.byteLength(text) > cap ? truncateReport(text, cap) : text
 }
 
 export const readReportCapped = (file, limit) => {
-  const cap = Math.max(0, limit)
+  const cap = byteCap(limit)
   let lstat
   try {
     lstat = fs.lstatSync(file)

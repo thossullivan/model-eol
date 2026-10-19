@@ -67,6 +67,12 @@ const PLAN_SCHEMA = 'model-eol.plan/0.1'
 const BOT_SCHEMA = 'model-eol.bot/0.1'
 const EVAL_FAILURE_CHANNEL = 'configured-eval'
 const EVAL_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
+const EVAL_RESULT_OVERHEAD_BYTES = 4096
+
+export const evalArtifactBudget = (maxReportBytes, groupCount) => Math.min(
+  EVAL_ARTIFACT_MAX_BYTES,
+  Math.max(1024 * 1024, EVAL_RESULT_OVERHEAD_BYTES + groupCount * (6 * maxReportBytes + EVAL_RESULT_OVERHEAD_BYTES)),
+)
 const ISSUE_REASONS = new Set([
   'not-direct-api',
   'no-replacement',
@@ -233,7 +239,7 @@ const readJsonArtifact = (file, maxBytes, label) => {
 
 const readEvalResults = ({ file, config, commandOverride, plan, groups, baseHead }) => {
   const settings = effectiveEval(config, commandOverride)
-  const maxBytes = Math.min(EVAL_ARTIFACT_MAX_BYTES, Math.max(1024 * 1024, groups.length * (settings.max_report_bytes + 2048)))
+  const maxBytes = evalArtifactBudget(settings.max_report_bytes, groups.length)
   const artifact = readJsonArtifact(file, maxBytes, 'eval results artifact')
   if (artifact?.schema !== EVAL_SCHEMA) throw new Error(`refusing eval results schema ${artifact?.schema ?? 'missing'}; expected ${EVAL_SCHEMA}`)
   try {
@@ -712,12 +718,12 @@ const evalWorkspaceDrift = (root, planFiles, expectedHashes, expectedHead) => {
   return null
 }
 
-const writeJsonAtomic = (file, value) => {
+const writeTextAtomic = (file, text) => {
   const absolute = asAbsolute(file)
   fs.mkdirSync(path.dirname(absolute), { recursive: true })
   const temporary = `${absolute}.${process.pid}.${sha256(`${Date.now()}-${absolute}`).slice(0, 8)}.tmp`
   try {
-    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
+    fs.writeFileSync(temporary, text, { mode: 0o600 })
     fs.renameSync(temporary, absolute)
   } finally {
     fs.rmSync(temporary, { force: true })
@@ -843,7 +849,13 @@ export const evaluatePlan = async ({
       configured: Boolean(settings.command),
       results,
     }
-    writeJsonAtomic(outputFile, artifact)
+    const encoded = `${JSON.stringify(artifact, null, 2)}\n`
+    const encodedBytes = Buffer.byteLength(encoded)
+    const budget = evalArtifactBudget(settings.max_report_bytes, groups.length)
+    if (encodedBytes > budget) {
+      throw new Error(`refusing eval: eval results artifact would be ${encodedBytes} bytes, over its ${budget}-byte budget; lower eval.max_report_bytes`)
+    }
+    writeTextAtomic(outputFile, encoded)
     return { artifact, plan, config: { ...config, eval: settings }, degraded: Boolean(feedSet.degraded) }
   } finally {
     feedSet.cleanup()
