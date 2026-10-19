@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
 import { parseCliArgs } from '../lib/cli.mjs'
+import { assertSha512Integrity, sha512Integrity } from '../lib/receipts.mjs'
+
+export { assertSha512Integrity, sha512Integrity }
 
 const usage = 'Usage: node scripts/package-integrity.mjs verify --tarball FILE --expected-integrity SHA512_SRI'
 
@@ -13,25 +15,6 @@ const fail = message => {
   error.exitCode = 2
   throw error
 }
-
-export const assertSha512Integrity = (value, label = 'integrity') => {
-  if (typeof value !== 'string' || !value.startsWith('sha512-')) {
-    throw new Error(`${label} must be an npm sha512 Subresource Integrity value`)
-  }
-  const encoded = value.slice('sha512-'.length)
-  let digest
-  try {
-    digest = Buffer.from(encoded, 'base64')
-  } catch {
-    digest = Buffer.alloc(0)
-  }
-  if (digest.length !== 64 || digest.toString('base64') !== encoded) {
-    throw new Error(`${label} must contain one canonical 64-byte SHA-512 digest`)
-  }
-  return value
-}
-
-export const sha512Integrity = bytes => `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}`
 
 export const verifyPackageIntegrity = ({ tarball, expectedIntegrity }) => {
   const expected = assertSha512Integrity(expectedIntegrity, 'expected integrity')

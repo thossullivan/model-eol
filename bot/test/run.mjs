@@ -21,6 +21,8 @@ import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { reportForBody, runEvalHook } from '../lib/eval.mjs'
 import { cloneRepository, deleteRemoteBranch, gitAuthentication, originFor } from '../lib/git.mjs'
+import { assertValidEvalResults } from '../../lib/receipts.mjs'
+import { validateDocument } from '../../lib/validate-document.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bot-test-'))
@@ -82,6 +84,10 @@ const makeRepo = ({ name = 'repo', files = {}, config = null } = {}) => {
 }
 
 let boundArtifactSequence = 0
+const producedEvalManifests = []
+const recordEvalManifest = (artifact, file) => {
+  producedEvalManifests.push({ artifact, written: JSON.parse(fs.readFileSync(file, 'utf8')) })
+}
 const evaluateForPublish = async ({
   targetDir,
   configPath = null,
@@ -116,6 +122,7 @@ const evaluateForPublish = async ({
     now,
     warn: () => {},
   })
+  recordEvalManifest(evaluation.artifact, evalResultsFile)
   return { plan, planFile, evalResultsFile, evaluation }
 }
 
@@ -2023,6 +2030,7 @@ if (savedAllowed === undefined) delete process.env.MODEL_EOL_ALLOWED
 else process.env.MODEL_EOL_ALLOWED = savedAllowed
 if (savedHidden === undefined) delete process.env.MODEL_EOL_HIDDEN
 else process.env.MODEL_EOL_HIDDEN = savedHidden
+recordEvalManifest(partitionEvaluation.artifact, partitionEvalFile)
 const partitionPass = partitionEvaluation.artifact.results.find(item => item.status === 'pass')
 const partitionFail = partitionEvaluation.artifact.results.find(item => item.status === 'fail')
 assert(partitionEvaluation.artifact.results.length === 2 && partitionPass && partitionFail, 'isolated evaluator records an independent pass/fail result for every migration group')
@@ -2085,6 +2093,7 @@ const timeoutEvaluation = await evaluatePlan({
   commandOverride: 'node -e \'setTimeout(()=>{},10000)\'',
 })
 assert(timeoutEvaluation.artifact.results.every(item => item.status === 'timeout'), 'isolated evaluator applies eval.timeout_ms to each migration')
+recordEvalManifest(timeoutEvaluation.artifact, timeoutEvalFile)
 
 const partitionGithub = new FakeGitHub()
 const partitionPublished = await runBot({
@@ -2120,6 +2129,32 @@ try {
   digestTamperError = error
 }
 assert(digestTamperError?.message.includes('plan digest') && digestTamperGithub.calls.length === 0, 'tampered eval digest is rejected before any GitHub read or write')
+
+for (const [label, mutate] of [
+  ['top-level', manifest => { manifest.signed_by = 'nobody' }],
+  ['result', manifest => { manifest.results[0].waived = true }],
+]) {
+  const extraKey = JSON.parse(fs.readFileSync(partitionEvalFile, 'utf8'))
+  mutate(extraKey)
+  const extraKeyFile = path.join(tempRoot, `partition-eval-extra-${label}.json`)
+  write(extraKeyFile, JSON.stringify(extraKey, null, 2))
+  const extraKeyGithub = new FakeGitHub()
+  let extraKeyError = null
+  try {
+    await runBot({
+      repo: 'example/partition-eval',
+      targetDir: partitionRepo.work,
+      token: 'test-token',
+      transport: extraKeyGithub.transport.bind(extraKeyGithub),
+      planFile: partitionPlanFile,
+      evalResultsFile: extraKeyFile,
+      vendoredFeeds: path.join(root, 'feeds'),
+    })
+  } catch (error) {
+    extraKeyError = error
+  }
+  assert(extraKeyError?.message.includes('refusing eval results artifact') && extraKeyError.message.includes('fields must be exactly') && extraKeyGithub.calls.length === 0, `eval manifest with an unknown ${label} key is rejected before any GitHub read or write`)
+}
 
 write(path.join(partitionRepo.work, 'README.md'), 'default branch advanced after evaluation\n')
 git(partitionRepo.work, ['add', 'README.md'])
@@ -2288,6 +2323,21 @@ try {
   malformedPlanRefused = error.message.includes('refusing malformed plan document') && error.message.includes('line must be an integer')
 }
 assert(malformedPlanRefused, 'bot refuses malformed plan items before grouping or applying')
+
+const unconfiguredEvalRepo = makeRepo({ name: 'unconfigured-eval', files: baseFiles, config: { issues: { enabled: false } } })
+await evaluateForPublish({ targetDir: unconfiguredEvalRepo.work })
+const manifestConforms = ({ written }) => {
+  try {
+    assertValidEvalResults(written)
+  } catch {
+    return false
+  }
+  const result = validateDocument(written)
+  return result.type === 'eval' && result.errors.length === 0
+}
+assert(producedEvalManifests.some(({ artifact }) => artifact.configured && artifact.results.length > 0) && producedEvalManifests.some(({ artifact }) => !artifact.configured), 'tests produced both configured and unconfigured eval manifests')
+assert(producedEvalManifests.every(({ artifact, written }) => JSON.stringify(artifact) === JSON.stringify(written)), 'every written eval manifest matches the returned artifact')
+assert(producedEvalManifests.every(manifestConforms), 'every produced eval manifest passes the shared validator and its public schema')
 
 JSON.parse(fs.readFileSync(path.join(root, 'schema/model-eol.bot-config.schema.json'), 'utf8'))
 assert(true, 'bot config schema parses as JSON')

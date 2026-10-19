@@ -177,7 +177,11 @@ try {
     'bot/lib/git.mjs',
     'bot/lib/github.mjs',
     'examples/model-eol-eval.mjs',
+    'lib/receipts.mjs',
     'schema/model-eol.check.schema.json',
+    'schema/model-eol.eval.schema.json',
+    'schema/model-eol.feed-refresh-receipt.schema.json',
+    'schema/model-eol.npm-release-result.schema.json',
   ]) {
     assert(packedFiles.has(file), `packed artifact contains ${file}`)
   }

@@ -99,6 +99,9 @@ try {
   const schemaNames = fs.readdirSync(path.join(repo, 'schema')).filter(name => name.endsWith('.json')).sort()
   const feedNames = fs.readdirSync(path.join(repo, 'feeds')).filter(name => name.endsWith('.json')).sort()
   assert(schemaNames.includes('model-eol.check.schema.json'))
+  for (const name of ['model-eol.eval.schema.json', 'model-eol.feed-refresh-receipt.schema.json', 'model-eol.npm-release-result.schema.json']) {
+    assert(schemaNames.includes(name), `public site publishes receipt schema ${name}`)
+  }
   assert.deepEqual(fs.readdirSync(path.join(output, 'schema', '0.1')).sort(), schemaNames)
   assert.deepEqual(fs.readdirSync(path.join(output, 'feeds')).sort(), feedNames)
 

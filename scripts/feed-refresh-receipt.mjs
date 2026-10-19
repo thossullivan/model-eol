@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
 import { parseCliArgs } from '../lib/cli.mjs'
+import {
+  FEED_REFRESH_RECEIPT_SCHEMA,
+  assertHttpsUrl,
+  assertInstant,
+  assertSha,
+  assertValidFeedRefreshReceipt,
+  hashFeedDirectory,
+} from '../lib/receipts.mjs'
 
-export const FEED_REFRESH_RECEIPT_SCHEMA = 'model-eol/feed-refresh-receipt@0.1'
-
-const shaPattern = /^[0-9a-f]{40,64}$/
-const digestPattern = /^[0-9a-f]{64}$/
-const feedNamePattern = /^[a-z0-9][a-z0-9-]*\.json$/
+export { FEED_REFRESH_RECEIPT_SCHEMA, hashFeedDirectory }
 
 const usage = `Usage:
   node scripts/feed-refresh-receipt.mjs create --repo-dir DIR --out FILE --state clean|pending --checked-at ISO_DATE --refresh-run-url HTTPS_URL --refresh-sha SHA [--pending-pr-url HTTPS_URL]
@@ -20,61 +23,6 @@ const fail = message => {
   const error = new Error(`${message}\n${usage}`)
   error.exitCode = 2
   throw error
-}
-
-const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
-
-const assertExactKeys = (value, expected, label) => {
-  const actual = Object.keys(value).sort()
-  const wanted = [...expected].sort()
-  if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
-    throw new Error(`${label} fields must be exactly ${wanted.join(', ')}; got ${actual.join(', ')}`)
-  }
-}
-
-const assertInstant = (value, label) => {
-  const match = typeof value === 'string'
-    ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/.exec(value)
-    : null
-  const parsed = match ? new Date(value) : null
-  if (!match || !Number.isFinite(parsed.getTime())
-    || parsed.getUTCFullYear() !== Number(match[1])
-    || parsed.getUTCMonth() + 1 !== Number(match[2])
-    || parsed.getUTCDate() !== Number(match[3])
-    || parsed.getUTCHours() !== Number(match[4])
-    || parsed.getUTCMinutes() !== Number(match[5])
-    || parsed.getUTCSeconds() !== Number(match[6])) {
-    throw new Error(`${label} must be a valid UTC ISO 8601 instant`)
-  }
-  return value
-}
-
-const assertSha = (value, label) => {
-  if (typeof value !== 'string' || !shaPattern.test(value)) throw new Error(`${label} must be a 40-64 character lowercase hexadecimal Git commit`)
-  return value
-}
-
-const assertHttpsUrl = (value, label) => {
-  let parsed
-  try {
-    parsed = new URL(value)
-  } catch {
-    throw new Error(`${label} must be a valid HTTPS URL`)
-  }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error(`${label} must be a valid HTTPS URL`)
-  return parsed.toString()
-}
-
-const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex')
-
-export const hashFeedDirectory = repoDir => {
-  const feedDir = path.join(path.resolve(repoDir), 'feeds')
-  const names = fs.readdirSync(feedDir).filter(name => name.endsWith('.json')).sort()
-  if (!names.length) throw new Error(`no JSON feeds found in ${feedDir}`)
-  return names.map(name => ({
-    path: `feeds/${name}`,
-    sha256: sha256(fs.readFileSync(path.join(feedDir, name))),
-  }))
 }
 
 export function createFeedRefreshReceipt({
@@ -106,40 +54,15 @@ export function validateFeedRefreshReceipt(receipt, {
   expectedRunUrl = null,
   expectedRefreshSha = null,
 } = {}) {
-  if (!isPlainObject(receipt)) throw new Error('feed refresh receipt must be a JSON object')
-  const keys = ['schema', 'state', 'changed', 'pending', 'checked_at', 'refresh_run', 'refresh_commit', 'feeds']
-  if (receipt.state === 'pending') keys.push('pending_pr')
-  assertExactKeys(receipt, keys, 'feed refresh receipt')
-  if (receipt.schema !== FEED_REFRESH_RECEIPT_SCHEMA) throw new Error(`unsupported feed refresh receipt schema ${receipt.schema}`)
-  if (receipt.state !== 'clean' && receipt.state !== 'pending') throw new Error('receipt state must be clean or pending')
-  if (typeof receipt.changed !== 'boolean' || typeof receipt.pending !== 'boolean') throw new Error('receipt changed and pending fields must be boolean')
-  if (receipt.changed !== (receipt.state === 'pending') || receipt.pending !== (receipt.state === 'pending')) {
-    throw new Error('receipt changed/pending fields do not agree with receipt state')
-  }
-  assertInstant(receipt.checked_at, 'checked_at')
+  assertValidFeedRefreshReceipt(receipt)
   const runUrl = assertHttpsUrl(receipt.refresh_run, 'refresh_run')
-  const refreshSha = assertSha(receipt.refresh_commit, 'refresh_commit')
-  if (receipt.state === 'pending') assertHttpsUrl(receipt.pending_pr, 'pending_pr')
+  const refreshSha = receipt.refresh_commit
   if (expectedRunUrl !== null && runUrl !== assertHttpsUrl(expectedRunUrl, 'expected refresh run URL')) {
     throw new Error(`receipt refresh_run ${runUrl} does not match ${expectedRunUrl}`)
   }
   if (expectedRefreshSha !== null && refreshSha !== assertSha(expectedRefreshSha, 'expected refresh SHA')) {
     throw new Error(`receipt refresh_commit ${refreshSha} does not match ${expectedRefreshSha}`)
   }
-  if (!Array.isArray(receipt.feeds) || !receipt.feeds.length) throw new Error('receipt feeds must be a non-empty array')
-  const priorPaths = new Set()
-  for (const [index, feed] of receipt.feeds.entries()) {
-    if (!isPlainObject(feed)) throw new Error(`receipt feeds[${index}] must be an object`)
-    assertExactKeys(feed, ['path', 'sha256'], `receipt feeds[${index}]`)
-    if (typeof feed.path !== 'string' || !feed.path.startsWith('feeds/') || !feedNamePattern.test(feed.path.slice('feeds/'.length))) {
-      throw new Error(`receipt feeds[${index}].path must identify one feeds/*.json file`)
-    }
-    if (priorPaths.has(feed.path)) throw new Error(`receipt contains duplicate feed path ${feed.path}`)
-    priorPaths.add(feed.path)
-    if (typeof feed.sha256 !== 'string' || !digestPattern.test(feed.sha256)) throw new Error(`receipt ${feed.path} has an invalid SHA-256 digest`)
-  }
-  const sorted = [...receipt.feeds].sort((left, right) => left.path.localeCompare(right.path))
-  if (JSON.stringify(sorted) !== JSON.stringify(receipt.feeds)) throw new Error('receipt feeds must be sorted by path')
 
   const actualFeeds = hashFeedDirectory(repoDir)
   const actualByPath = new Map(actualFeeds.map(feed => [feed.path, feed.sha256]))

@@ -27,6 +27,7 @@ import {
 import { assertValidPlanDocument } from '../lib/validate-document.mjs'
 import { captureWindowFor, lifecycleFor } from '../lib/feeds.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
+import { EVAL_RESULTS_SCHEMA as EVAL_SCHEMA, assertValidEvalResults } from '../lib/receipts.mjs'
 import { loadConfig } from './lib/config.mjs'
 import { downloadFeeds } from './lib/feeds.mjs'
 import { capReport, readReportCapped, runEvalHook, reportForBody } from './lib/eval.mjs'
@@ -52,7 +53,6 @@ const CHECKER = path.join(ROOT, 'check.mjs')
 const VENDORED_FEEDS = path.join(ROOT, 'feeds')
 const PLAN_SCHEMA = 'model-eol.plan/0.1'
 const BOT_SCHEMA = 'model-eol.bot/0.1'
-const EVAL_SCHEMA = 'model-eol.eval/0.1'
 const EVAL_FAILURE_CHANNEL = 'configured-eval'
 const EVAL_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
 const ISSUE_REASONS = new Set([
@@ -245,30 +245,26 @@ const readEvalResults = ({ file, config, commandOverride, plan, groups, baseHead
   const maxBytes = Math.min(EVAL_ARTIFACT_MAX_BYTES, Math.max(1024 * 1024, groups.length * (settings.max_report_bytes + 2048)))
   const artifact = readJsonArtifact(file, maxBytes, 'eval results artifact')
   if (artifact?.schema !== EVAL_SCHEMA) throw new Error(`refusing eval results schema ${artifact?.schema ?? 'missing'}; expected ${EVAL_SCHEMA}`)
+  try {
+    assertValidEvalResults(artifact)
+  } catch (error) {
+    throw new Error(`refusing eval results artifact: ${error.message}`)
+  }
   if (artifact.plan_digest !== planDigest(plan)) throw new Error('refusing eval results artifact: plan digest does not match the independently verified plan')
   if (artifact.eval_config_digest !== evalConfigDigest(settings)) throw new Error('refusing eval results artifact: eval configuration digest does not match')
-  if (typeof artifact.base_sha !== 'string' || !/^[0-9a-f]{40,64}$/.test(artifact.base_sha)) throw new Error('refusing eval results artifact: evaluated base commit is malformed or missing')
   if (artifact.base_sha !== baseHead) throw new Error(`refusing eval results artifact: evaluated base commit ${artifact.base_sha} does not match current default-branch head ${baseHead}`)
   const configured = Boolean(settings.command)
   if (artifact.configured !== configured) throw new Error('refusing eval results artifact: configured state does not match eval.command')
-  if (!Array.isArray(artifact.results)) throw new Error('refusing eval results artifact: results must be an array')
   if (artifact.results.length !== (configured ? groups.length : 0)) {
     throw new Error('refusing eval results artifact: expected exactly one result for every planned migration')
   }
   const expected = new Map(groups.map(group => [evalIdentity(group.publisher, group.id, group.via), group]))
   const results = new Map()
   for (const result of artifact.results) {
-    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('refusing eval results artifact: result must be an object')
-    if (typeof result.publisher !== 'string' || !result.publisher || typeof result.id !== 'string' || !result.id) throw new Error('refusing eval results artifact: result identity is malformed')
-    if (result.via !== null && typeof result.via !== 'string') throw new Error('refusing eval results artifact: result clock is malformed')
     const key = evalIdentity(result.publisher, result.id, result.via)
     const group = expected.get(key)
     if (!group || results.has(key)) throw new Error('refusing eval results artifact: result identity is unexpected or duplicated')
     if (result.feed_digest !== group.feedDigest) throw new Error(`refusing eval results artifact: feed digest mismatch for ${group.publisher}/${group.id}`)
-    if (!['pass', 'fail', 'timeout'].includes(result.status)) throw new Error(`refusing eval results artifact: invalid status for ${group.publisher}/${group.id}`)
-    if (result.exit_code !== null && !Number.isSafeInteger(result.exit_code)) throw new Error(`refusing eval results artifact: invalid exit code for ${group.publisher}/${group.id}`)
-    if (result.status === 'pass' && result.exit_code !== 0) throw new Error(`refusing eval results artifact: passing result has a non-zero exit code for ${group.publisher}/${group.id}`)
-    if (result.report !== null && typeof result.report !== 'string') throw new Error(`refusing eval results artifact: invalid report for ${group.publisher}/${group.id}`)
     if (result.report !== null && Buffer.byteLength(result.report) > settings.max_report_bytes) throw new Error(`refusing eval results artifact: report exceeds configured cap for ${group.publisher}/${group.id}`)
     results.set(key, { status: result.status, exit_code: result.exit_code, report: result.report })
   }

@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { parseCliArgs } from '../lib/cli.mjs'
+import { SHA_PATTERN } from '../lib/receipts.mjs'
 import { assertValidFeed } from '../lib/validate-feed.mjs'
 import { readFeedRefreshReceipt } from './feed-refresh-receipt.mjs'
 
@@ -47,8 +48,9 @@ const git = (repoDir, args, { encoding = 'utf8' } = {}) => {
 }
 
 const assertSha = (value, name) => {
-  if (!/^[0-9a-f]{40,64}$/i.test(value)) fail(`${name} must be a 40-64 character hexadecimal Git commit`)
-  return value.toLowerCase()
+  const commit = String(value).toLowerCase()
+  if (!SHA_PATTERN.test(commit)) fail(`${name} must be a 40-64 character hexadecimal Git commit`)
+  return commit
 }
 
 const writeJson = (file, value) => fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`)
