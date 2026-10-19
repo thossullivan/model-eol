@@ -503,7 +503,8 @@ function openAIModelIds(fragment) {
   const tokens = [...new Set((codes.length ? codes : [modelId(fragment)]).filter(Boolean).map(token => token.trim()))]
   if (!tokens.length) return undefined
   const dated = tokens.filter(token => /\b(?:19|20)\d{2}[-_]\d{2}[-_]\d{2}\b/.test(token))
-  const snapshots = tokens.filter(token => dated.includes(token) || openAIMonthDaySnapshot(token))
+  const candidates = tokens.filter(token => dated.includes(token) || openAIMonthDaySnapshot(token))
+  const snapshots = candidates.filter(token => !candidates.some(snapshot => token === `${snapshot}-completions`))
   if (snapshots.length > 1) {
     const undated = tokens.filter(token => !snapshots.includes(token))
     const completionsOf = token => snapshots.find(snapshot => token === `${snapshot}-completions`)
@@ -512,7 +513,7 @@ function openAIModelIds(fragment) {
     // Non-model tokens stay attached so the caller skips the row as an endpoint or product row.
     return snapshots.map((id, index) => ({ id, aliases: undated.filter(token => completionsOf(token) ? completionsOf(token) === id : !index) }))
   }
-  const canonical = dated[0] ?? tokens[0]
+  const canonical = snapshots[0] ?? tokens[0]
   return [{
     id: canonical,
     aliases: tokens.filter(token => token !== canonical),

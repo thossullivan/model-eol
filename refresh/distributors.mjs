@@ -223,21 +223,20 @@ function bedrockEndpointIds(text) {
   return [...new Set(parts.map(part => part[1]))]
 }
 
-// AWS occasionally omits a provider cell without a compensating rowspan. In
-// that row every later cell shifts left, even though the table header does not.
-// Anchor on the model ID and apply the same offset to the lifecycle columns.
-function bedrockModelCell(row, expectedIndex) {
+// A missing or over-spanned provider cell shifts a row; anchor on the model ID and apply its offset to the lifecycle columns.
+function bedrockModelCell(row, expectedIndex, headerLength) {
   const expected = row.cells[expectedIndex]
   if (expected && isBedrockModelId(expected.text.trim())) {
     return { cell: expected, index: expectedIndex, ids: [expected.text.trim()] }
   }
   const endpointIds = expected && bedrockEndpointIds(expected.text)
   if (endpointIds) return { cell: expected, index: expectedIndex, ids: endpointIds }
-  // Only a leftward shift is documented, and real IDs are lowercase where display and provider names are not.
-  const candidates = row.cells.slice(0, expectedIndex)
+  // Real IDs are lowercase where display and provider names are not.
+  const candidates = row.cells
     .map((cell, index) => ({ cell, index, ids: isBedrockModelId(cell.text.trim()) ? [cell.text.trim()] : bedrockEndpointIds(cell.text) }))
     .filter(candidate => candidate.ids?.every(id => id === id.toLowerCase()))
-  if (candidates.length === 1) return candidates[0]
+  // A shift is real only when the row gained or lost exactly that many cells against the header.
+  if (candidates.length === 1 && row.cells.length - headerLength === candidates[0].index - expectedIndex) return candidates[0]
   if (candidates.length > 1) {
     throw new Error(`aws-bedrock lifecycle table contains an ambiguous model row: ${candidates.map(candidate => candidate.cell.text.trim()).join(', ')}`)
   }
@@ -263,7 +262,7 @@ export function parseBedrockLifecycleHtml(html) {
     for (const row of rows.slice(headers.row + 1)) {
       const hasContent = row.cells.some(cell => cell.text)
       if (!hasContent) continue
-      const model = bedrockModelCell(row, headers.model)
+      const model = bedrockModelCell(row, headers.model, rows[headers.row].cells.length)
       const bedrockId = model.ids.join(', ')
       const offset = model.index - headers.model
       const legacyCell = row.cells[headers.legacy + offset]
@@ -376,7 +375,10 @@ function bedrockCardFields(html) {
   for (const paragraph of html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)) {
     const text = plainText(paragraph[1])
     const label = BEDROCK_CARD_LABELS.find(candidate => text.startsWith(`${candidate}:`))
-    if (!label) continue
+    if (!label) {
+      if (/^Model lifecycle\b/i.test(text) && !/^Model lifecycle policy\b/i.test(text)) throw new Error(`unrecognised Model lifecycle field: ${text}`)
+      continue
+    }
     if (fields.has(label)) throw new Error(`duplicate ${label} field`)
     const value = text.slice(label.length + 1).trim()
     if (!value) throw new Error(`empty ${label} field`)
@@ -452,7 +454,7 @@ export function parseBedrockModelCardHtml(html, source) {
     }
     if (!ids.size) return skip('no model ids')
     const eol = fields.get('Model EOL date')
-    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol)) && !regionDates.length) return skip('no lifecycle fields')
+    if (!BEDROCK_CARD_LABELS.slice(0, 3).some(label => fields.has(label)) && (eol === undefined || BEDROCK_CARD_NO_EOL.test(eol)) && !regionDates.length && !lifecycleEol) return skip('no lifecycle fields')
 
     const launch = fields.get('Model launch date')
     if (launch !== undefined) bedrockCardDate(launch.replace(BEDROCK_CARD_ORDINAL_DAY, '$2 $1, $3'), 'Model launch date', true)
@@ -480,7 +482,8 @@ export function parseBedrockModelCardHtml(html, source) {
     if (regionDates.length && !exact) throw new Error(`region EOL ${regionDates[0]} without an exact Model EOL date`)
     const mismatch = regionDates.find(date => date !== exact)
     if (mismatch) throw new Error(`region EOL ${mismatch} differs from Model EOL date ${exact}`)
-    if (lifecycleEol && exact && lifecycleEol !== exact) throw new Error(`Model lifecycle EOL ${lifecycleEol} differs from Model EOL date ${exact}`)
+    if (lifecycleEol && !exact) throw new Error(`Model lifecycle EOL ${lifecycleEol} without an exact Model EOL date`)
+    if (lifecycleEol && lifecycleEol !== exact) throw new Error(`Model lifecycle EOL ${lifecycleEol} differs from Model EOL date ${exact}`)
     if (!exact && !candidates.length) return skip('no day-precision date')
     const payload = exact
       ? { shutdown: exact, status: regionDates.length || legacyField || lifecycleLegacy ? 'legacy' : 'active' }

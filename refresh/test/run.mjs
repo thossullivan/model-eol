@@ -1282,8 +1282,17 @@ for (const value of ['EOL: 2027-09-01', 'EOL: 2027-09-01 (certain regions)']) {
     strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard(value, 'September 1, 2027'), fableCard.source).records, [{ ...exact, shutdown: '2027-09-01', status: 'legacy' }])
   })
 }
-reviewTest('Model lifecycle line: Bedrock does not derive a shutdown from an EOL line without an exact Model EOL date', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('EOL: 2026-12-01'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+reviewTest('Model lifecycle line: Bedrock rejects an EOL line on a card without an exact Model EOL date', () => {
+  for (const [html, source] of [
+    [lifecycleCard('EOL: 2026-12-01'), fableCard.source],
+    [lifecycleCard('EOL: 2026-10-14', 'No sooner than 12/1/2026'), fableCard.source],
+    [lifecycleCard('EOL: 2026-10-14 (certain regions)', 'No sooner than 12/1/2026'), fableCard.source],
+    [`${reviewIdTable}${lifecycleLine('EOL: 2026-10-14')}`, reviewCardSource],
+    [`${reviewIdTable}<p>Model EOL date: N/A</p>${lifecycleLine('EOL: 2026-10-14')}`, reviewCardSource],
+  ]) {
+    strictAssert.throws(() => parseBedrockModelCardHtml(html, source), /Model lifecycle EOL 2026-10-14 without an exact Model EOL date|Model lifecycle EOL 2026-12-01 without an exact Model EOL date/)
+  }
+  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
 })
 reviewTest('Model lifecycle line: Bedrock parses the live EOL card shape with its end-of-life banner', () => {
   const html = cardHtml.get(commandCard.source).replace(lifecycleLine('Legacy'), lifecycleLine('EOL: 2026-08-19')).replace('<p><b>Model launch date:', `${lifecycleBanner}<p><b>Model launch date:`)
@@ -1315,6 +1324,13 @@ for (const fragment of ['<div>Model lifecycle: Legacy</div>', '<div>MODEL LIFECY
   reviewTest(`Model lifecycle line: Bedrock accounts for Model lifecycle outside its field paragraph: ${fragment}`, () => {
     for (const html of [reviewCard + fragment, fableHtml + fragment]) {
       strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unaccounted Model lifecycle field outside its paragraph/)
+    }
+  })
+}
+for (const paragraph of ['<p><b>Model lifecycle</b> Legacy</p>', '<p><b>Model lifecycle -</b> Legacy</p>', '<p><b>Model lifecycle</b>: Legacy</p>', '<p>MODEL LIFECYCLE Legacy</p>', '<p><b>Model lifecycle status:</b> Legacy</p>', '<p><b>Model lifecycle</b></p>']) {
+  reviewTest(`Model lifecycle line: Bedrock rejects a paragraph that opens with Model lifecycle in another shape: ${paragraph}`, () => {
+    for (const html of [reviewCard + paragraph, fableHtml.replace(lifecycleLine('Active'), paragraph)]) {
+      strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unrecognised Model lifecycle field: Model lifecycle/i)
     }
   })
 }
@@ -3200,6 +3216,25 @@ for (const cells of [
     strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
   })
 }
+reviewTest('Shifted row realignment: Bedrock refuses an endpoint list with a mixed-case ID', () => {
+  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), DeepSeek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', ...shiftedDates]])), /invalid model id/)
+})
+reviewTest('Shifted row realignment: Bedrock realigns the row after a provider rowspan that runs one row too long', () => {
+  const table = shapesBedrockTable([]).replace('</table>', `<tr><td rowspan="2">Z.AI</td><td>GLM 4.7</td><td>zai.glm-4.7</td><td>us-east-1</td><td>September 30, 2026</td><td>March 30, 2027</td><td>To be announced</td></tr><tr><td>Qwen</td><td>Qwen3 Coder 480B A35B Instruct</td><td>qwen.qwen3-coder-480b-a35b-v1:0</td><td>us-east-2</td><td>October 1, 2026</td><td>April 1, 2027</td><td>To be announced</td></tr></table>`)
+  strictAssert.deepEqual(parseBedrockLifecycleHtml(table), [
+    { bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' },
+    { bedrockId: 'qwen.qwen3-coder-480b-a35b-v1:0', status: 'legacy', legacy: '2026-10-01', eol: '2027-04-01' },
+  ])
+})
+for (const cells of [
+  ['Qwen', 'Qwen3 Coder', 'see endpoint table', 'qwen.qwen3-coder-480b-a35b-v1:0', 'October 1, 2026', 'April 1, 2027', 'To be announced'],
+  ['GLM 4.7', 'zai.glm-4.7', 'us-east-1', 'September 30, 2026', 'March 30, 2027', 'To be announced', 'extra'],
+  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'us-east-2', 'deepseek.v3-v1:0', 'March 30, 2027', 'To be announced', 'extra'],
+]) {
+  reviewTest(`Shifted row realignment: Bedrock refuses a candidate whose offset the row length does not explain: ${cells.join(' | ')}`, () => {
+    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
+  })
+}
 reviewTest('Shifted row realignment: Bedrock still refuses two lowercase ID candidates left of Model ID', () => {
   strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['deepseek.r1-v1:0', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2', ...shiftedDates]])),
     /ambiguous model row: deepseek\.r1-v1:0, deepseek\.v3-v1:0 \(bedrock-runtime\), deepseek\.v3\.1 \(bedrock-mantle\)/)
@@ -3281,9 +3316,23 @@ reviewTest('Month-day snapshots: OpenAI attaches a -completions variant to its o
   strictAssert.deepEqual(openAISnapshots('gpt-4-0314-completions', 'gpt-4-0314', 'gpt-4-0613'), [['gpt-4-0314', ['gpt-4-0314-completions']], ['gpt-4-0613', undefined]])
 })
 reviewTest('Month-day snapshots: OpenAI does not read an invalid month or day as a snapshot', () => {
-  for (const token of ['model-1399', 'model-0230', 'model-0431', 'model-0000', 'model-1301-preview', 'model-0613-latest']) {
-    strictAssert.deepEqual(openAISnapshots(token, 'gpt-4-0613'), [[token, ['gpt-4-0613']]], token)
+  for (const token of ['model-1399', 'model-0230', 'model-0431', 'model-0000', 'model-0100', 'model-1301-preview', 'model-0613-latest']) {
+    strictAssert.deepEqual(openAISnapshots(token, 'gpt-4-0613'), [['gpt-4-0613', [token]]], token)
   }
+})
+reviewTest('Month-day snapshots: OpenAI accepts February 29 and rejects February 30', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0229', 'gpt-4-0613'), [['gpt-4-0229', undefined], ['gpt-4-0613', undefined]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0230', 'gpt-4-0613'), [['gpt-4-0613', ['gpt-4-0230']]])
+})
+reviewTest('Month-day snapshots: OpenAI keeps a full-date -completions variant on its snapshot', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4o-2024-08-06', 'gpt-4o-2024-08-06-completions'), [['gpt-4o-2024-08-06', ['gpt-4o-2024-08-06-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4o-2024-08-06-completions', 'gpt-4o-2024-08-06'), [['gpt-4o-2024-08-06', ['gpt-4o-2024-08-06-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0613', 'gpt-4o-2024-08-06', 'gpt-4o-2024-08-06-completions'), [['gpt-4-0613', undefined], ['gpt-4o-2024-08-06', ['gpt-4o-2024-08-06-completions']]])
+})
+reviewTest('Month-day snapshots: OpenAI picks the snapshot as the canonical ID of a single-snapshot cell', () => {
+  strictAssert.deepEqual(openAISnapshots('gpt-4', 'gpt-4-0613'), [['gpt-4-0613', ['gpt-4']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4-0613-completions', 'gpt-4-0613'), [['gpt-4-0613', ['gpt-4-0613-completions']]])
+  strictAssert.deepEqual(openAISnapshots('gpt-4', 'gpt-4-turbo'), [['gpt-4', ['gpt-4-turbo']]])
 })
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
