@@ -1744,6 +1744,148 @@ for (const [variant, linkFor] of [
   assert(result.code === 0 && result.findings.length === 1 && result.findings[0].id === 'clean-model', '--changed classifies base files by their repository path, not the temporary path')
 }
 
+let changedStatsCount = 0
+const runWithStats = (label, dir, extra = [], options = {}) => {
+  const statsFile = path.join(tempRoot, `changed-stats-${++changedStatsCount}.json`)
+  const result = runCompare(label, dir, extra, { ...options, env: { ...(options.env ?? process.env), MODEL_EOL_CHANGED_STATS: statsFile } })
+  let stats = null
+  try {
+    stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'))
+  } catch {
+  }
+  assert(stats?.schema === 'model-eol/changed-stats@0', `${label}: writes --changed stats`)
+  return { ...result, stats }
+}
+const retiredBase = { status: 'retired', via: 'publisher', usage: 'model-reference', threshold_days: 90, effective_scope: 'all' }
+
+{
+  const files = { '.model-eol.json': { scope: 'all', days: 30 } }
+  for (const dir of ['a', 'b', 'c']) {
+    for (let index = 0; index < 20; index++) files[`${dir}/debt${index}.py`] = 'OLD = "retired-model"\n'
+  }
+  files['c/debt0.py'] = 'OLD = "retired-model"\nNEXT = "soon-model"\n'
+  const repo = compareRepo('config narrowed to one path', files)
+  repo.write({ '.model-eol.json': { scope: 'all', days: 30, overrides: [{ paths: ['c/**'], days: 90 }] } })
+  const result = runWithStats('config narrowed to one path', repo.dir)
+  const finding = result.findings[0]
+  assert(result.code === 1 && result.findings.length === 1 && finding.id === 'soon-model' && finding.file.endsWith(path.join('c', 'debt0.py')) && sameJson(finding.changed, { reason: 'newly-actionable', inputs: ['config'], base: scheduledBase }), '--changed reports the reference a path override makes retiring and no old debt')
+  assert(result.stats?.scanned_files === 60 && result.stats.affected_files === 20 && result.stats.affected_by.config === 20 && result.stats.affected_by.file === 0, '--changed limits a path override to the files under that path')
+  assert(result.stats?.base_materialized_files > 0 && result.stats.base_materialized_files <= 20 && result.stats.candidate_findings === 21, '--changed materializes base files only under the overridden path')
+  const overridden = runWithStats('config narrowed to one path under --days', repo.dir, ['--days', '30'])
+  assert(overridden.code === 0 && overridden.findings.length === 0 && overridden.stats?.affected_by.config === 0 && overridden.stats.base_materialized_files === 0, '--changed ignores a config days change that --days overrides')
+}
+
+{
+  const files = {
+    'feeds/openai.json': compareFeed([{ id: 'drift-model' }, { id: 'retired-model', shutdown: '2020-01-01' }, { id: 'clean-model' }]),
+    'src/drift.py': 'MODEL = "drift-model"\n',
+    'src/clean.py': 'MODEL = "clean-model"\n',
+  }
+  for (let index = 0; index < 10; index++) files[`src/debt${index}.py`] = 'OLD = "retired-model"\n'
+  const repo = compareRepo('feeds narrowed to one model', files)
+  repo.write({ 'feeds/openai.json': compareFeed([{ id: 'drift-model', shutdown: '2020-01-01' }, { id: 'retired-model', shutdown: '2020-01-01' }, { id: 'clean-model' }]) })
+  const result = runWithStats('feeds narrowed to one model', repo.dir, [], { target: path.join(repo.dir, 'src'), feeds: path.join(repo.dir, 'feeds') })
+  const finding = result.findings[0]
+  assert(result.code === 1 && result.findings.length === 1 && finding.id === 'drift-model' && sameJson(finding.changed?.inputs, ['feeds']) && finding.changed.base?.status === 'ok', '--changed reports the reference a feeds change retires and no old debt')
+  assert(result.stats?.scanned_files === 12 && result.stats.affected_files === 1 && result.stats.affected_by.feeds === 1 && result.stats.base_materialized_files === 1, '--changed limits a feeds change to the files that reference the changed model')
+}
+
+{
+  const repo = compareRepo('feeds alias added', {
+    'feeds/openai.json': compareFeed([{ id: 'retired-model', shutdown: '2020-01-01' }, { id: 'clean-model' }]),
+    'src/legacy.py': 'MODEL = "legacy-name"\n',
+    'src/debt.py': 'OLD = "retired-model"\n',
+    'src/clean.py': 'MODEL = "clean-model"\n',
+  })
+  repo.write({ 'feeds/openai.json': compareFeed([{ id: 'retired-model', aliases: ['legacy-name'], shutdown: '2020-01-01' }, { id: 'clean-model' }]) })
+  const result = runWithStats('feeds alias added', repo.dir, [], { target: path.join(repo.dir, 'src'), feeds: path.join(repo.dir, 'feeds') })
+  const finding = result.findings[0]
+  assert(result.code === 1 && result.findings.length === 1 && finding.matched === 'legacy-name' && finding.id === 'retired-model' && sameJson(finding.changed, { reason: 'newly-actionable', inputs: ['feeds'], base: null }), '--changed reports an unchanged line that a new feed alias matches')
+  assert(result.stats?.affected_by.feeds === 2 && result.stats.affected_files === 2, '--changed leaves files without the changed model out of a feeds change')
+}
+
+{
+  const repo = compareRepo('route on one path', {
+    '.model-eol.json': { scope: 'all' },
+    'r/far.py': 'MODEL = "far-model"\n',
+    'r/debt.py': 'OLD = "retired-model"\n',
+    'other/far.py': 'MODEL = "far-model"\n',
+    'other/debt.py': 'OLD = "retired-model"\n',
+  })
+  repo.write({ '.model-eol.json': { scope: 'all', routes: [{ paths: ['r/**'], via: 'aws-bedrock' }] } })
+  const result = runWithStats('route on one path', repo.dir)
+  const finding = result.findings[0]
+  assert(result.code === 1 && result.findings.length === 1 && finding.file.endsWith(path.join('r', 'far.py')) && finding.via === 'aws-bedrock' && sameJson(finding.changed?.inputs, ['config']) && finding.changed.base?.status === 'scheduled', '--changed reports the reference a path route retires and no old debt')
+  assert(result.stats?.affected_by.config === 2 && result.stats.affected_files === 2, '--changed limits a route change to the files under its paths')
+}
+
+{
+  const repo = compareRepo('ignored model removed with debt', {
+    '.model-eol.json': { scope: 'all', ignore: { models: ['soon-model'] } },
+    'a.py': 'OLD = "retired-model"\n',
+    'b.py': 'NEXT = "soon-model"\n',
+  })
+  repo.write({ '.model-eol.json': { scope: 'all' } })
+  const result = runWithStats('ignored model removed with debt', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].id === 'soon-model' && sameJson(result.findings[0].changed, { reason: 'newly-actionable', inputs: ['config'], base: null }), '--changed reports a reference an ignore.models removal exposes and no old debt')
+  assert(result.stats?.affected_by.config === 2 && result.stats.scanned_files === 2, '--changed treats every file as affected by a global ignore.models change')
+}
+
+{
+  const repo = compareRepo('global via change with debt', {
+    '.model-eol.json': { scope: 'all' },
+    'a.py': 'OLD = "retired-model"\n',
+    'b.py': 'MODEL = "far-model"\n',
+  })
+  repo.write({ '.model-eol.json': { scope: 'all', via: 'aws-bedrock' } })
+  const result = runWithStats('global via change with debt', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].id === 'far-model' && sameJson(result.findings[0].changed?.inputs, ['config']), '--changed reports a reference a global via change retires and no old debt')
+  assert(result.stats?.affected_by.config === 2 && result.stats.scanned_files === 2, '--changed treats every file as affected by a global via change')
+}
+
+{
+  const waiver = { model: 'retired-model', reason: 'migrating', owner: 'platform', expires: '2099-01-01' }
+  const repo = compareRepo('waiver removed on one path', {
+    '.model-eol.json': { scope: 'all', overrides: [{ paths: ['w/**'], waivers: [waiver] }] },
+    'w/a.py': 'OLD = "retired-model"\n',
+    'x/b.py': 'OLD = "retired-model"\n',
+  })
+  repo.write({ '.model-eol.json': { scope: 'all' } })
+  const result = runWithStats('waiver removed on one path', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].file.endsWith(path.join('w', 'a.py')) && sameJson(result.findings[0].changed, { reason: 'newly-actionable', inputs: ['config'], base: retiredBase }), '--changed reports a reference whose path waiver the change removes')
+  assert(result.stats?.affected_by.config === 1, '--changed limits a waiver change to the files it covers')
+}
+
+{
+  const before = { scope: 'all', days: 30, overrides: [{ paths: ['a/**'], days: 60 }, { paths: ['b/**'], scope: 'direct' }] }
+  const repo = compareRepo('config edit with no effect', {
+    '.model-eol.json': before,
+    'a/debt.py': 'OLD = "retired-model"\n',
+    'a/next.py': 'NEXT = "soon-model"\n',
+    'b/debt.py': 'OLD = "retired-model"\n',
+    'c.py': 'NEXT = "soon-model"\n',
+  })
+  repo.write({ '.model-eol.json': `${JSON.stringify({ issues: { enabled: false }, overrides: [before.overrides[1], before.overrides[0]], days: 30, scope: 'all' }, null, 2)}\n` })
+  const result = runWithStats('config edit with no effect', repo.dir)
+  assert(result.code === 0 && result.findings.length === 0, '--changed reports nothing for a config edit with no effect')
+  assert(result.stats?.affected_by.config === 0 && result.stats.affected_files === 0 && result.stats.base_materialized_files === 0, '--changed treats no file as affected by a reformatted config with reordered equivalent overrides')
+}
+
+{
+  const repo = compareRepo('invalid base config with stats', {
+    '.model-eol.json': '{ invalid',
+    'a.py': 'OLD = "retired-model"\n',
+    'b.py': 'MODEL = "clean-model"\n',
+  })
+  repo.write({ '.model-eol.json': { scope: 'all' } })
+  const result = runWithStats('invalid base config with stats', repo.dir)
+  const changed = result.findings[0]?.changed
+  assert(result.code === 1 && result.findings.length === 1 && changed?.reason === 'base-unavailable' && changed.message.includes('HEAD:.model-eol.json'), '--changed still reports base-unavailable when the base config cannot load')
+  assert(result.stats?.affected_by.config === 2 && result.stats.scanned_files === 2, '--changed treats every file as affected when the base config cannot load')
+  const unwritable = runCompare('unwritable stats file', repo.dir, [], { env: { ...process.env, MODEL_EOL_CHANGED_STATS: tempRoot } })
+  assert(unwritable.code === 1 && unwritable.findings.length === 1 && unwritable.err.split('\n').filter(line => line.includes('warning')).length === 1, '--changed warns once and keeps its exit code when the stats file cannot be written')
+}
+
 {
   const output = formatCheck({
     findings: [{
