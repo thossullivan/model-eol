@@ -109,7 +109,7 @@ const policyError = (config, feedData, via) => {
   return null
 }
 
-const evaluateTargets = ({ targets, config, roots, ignoredFiles, feedData, overrides, includeDocs, noGit = false }) => {
+const evaluateTargets = ({ targets, config, roots, ignoredFiles, feedData, overrides, includeDocs, noGit = false, classificationPathFor = null }) => {
   const policyCache = new Map()
   const policyForFile = file => {
     const absolute = path.resolve(file)
@@ -139,6 +139,7 @@ const evaluateTargets = ({ targets, config, roots, ignoredFiles, feedData, overr
     routeForReference,
     mappedRoutesForFile,
     noGit,
+    classificationPathFor,
   })
 
   const findings = scan.modelRefs.map(ref => {
@@ -478,7 +479,7 @@ if (incompleteNotes.length && (command === 'check' || command === 'plan')) {
   if (!ALLOW_INCOMPLETE) return 2
 }
 
-const evaluateBase = ({ treeRoot, files, configFile, feedsDir }) => {
+const evaluateBase = ({ treeRoot, files, configFile, feedsDir, classificationPathFor }) => {
   let config = repositoryConfig
   let baseFeeds = feedData
   try {
@@ -507,6 +508,7 @@ const evaluateBase = ({ treeRoot, files, configFile, feedsDir }) => {
       overrides,
       includeDocs: INCLUDE_DOCS,
       noGit: true,
+      classificationPathFor,
     })
     return { findings: base.findings, notes: base.scan.notes }
   } catch (e) {
