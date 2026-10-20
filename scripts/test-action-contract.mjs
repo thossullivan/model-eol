@@ -266,6 +266,35 @@ try {
     config: selectedConfig,
   }, { cwd: tempRoot })
   assert.equal(explicitConfig.code, 0, 'config input selects an explicit shared config')
+
+  const gitIn = (cwd, ...args) => {
+    const result = spawnSync('git', ['-c', 'user.name=model-eol test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' })
+    assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`)
+  }
+  const changedRepo = (name, files, edits) => {
+    const repo = path.join(tempRoot, name)
+    fs.mkdirSync(repo)
+    gitIn(repo, 'init', '-q')
+    for (const [file, content] of Object.entries(files)) fs.writeFileSync(path.join(repo, file), content)
+    gitIn(repo, 'add', '-A')
+    gitIn(repo, 'commit', '-q', '--no-verify', '-m', 'base')
+    for (const [file, content] of Object.entries(edits)) fs.writeFileSync(path.join(repo, file), content)
+  }
+  changedRepo('changed-config', {
+    'app.py': 'MODEL = "claude-opus-4-1-20250805"\n',
+    '.model-eol.json': '{"ignore":{"models":["claude-opus-4-1-20250805"]}}\n',
+  }, { '.model-eol.json': '{}\n' })
+  const changedConfig = runAction({ command: 'check', paths: 'changed-config', changed: 'HEAD' }, { cwd: tempRoot })
+  assert.equal(changedConfig.code, 1, `changed input fails a config-only change that makes an unchanged reference bad: ${changedConfig.err}`)
+  changedRepo('changed-debt', {
+    'app.py': 'MODEL = "claude-opus-4-1-20250805"\nRETRIES = 1\n',
+  }, { 'app.py': 'MODEL = "claude-opus-4-1-20250805"\nRETRIES = 2\n' })
+  const changedDebt = runAction({ command: 'check', paths: 'changed-debt', changed: 'HEAD' }, { cwd: tempRoot })
+  assert.equal(changedDebt.code, 0, `changed input passes an edit next to old debt: ${changedDebt.out}${changedDebt.err}`)
+
+  const ciWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8')
+  assert.match(ciWorkflow, /id: changed-config\n\s+continue-on-error: true\n\s+uses: \.\/\n[\s\S]*?changed: HEAD/, 'CI runs the Action changed gate on a config-only change without stopping the job')
+  assert.match(ciWorkflow, /steps\.changed-config\.outcome/, 'CI fails unless the config-only changed gate failed')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }

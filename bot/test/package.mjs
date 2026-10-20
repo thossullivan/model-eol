@@ -6,7 +6,7 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 
 import { verifyPackageIntegrity } from '../../scripts/package-integrity.mjs'
-import { expectedTarballUrl, probeTarball, registryWaitSchedule, registryWaitSeconds } from '../../scripts/published-consumer-uat.mjs'
+import { expectedTarballUrl, probeTarball, registryWaitSchedule, registryWaitSeconds, runChangedGateUat } from '../../scripts/published-consumer-uat.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-package-test-'))
@@ -254,6 +254,10 @@ try {
   fs.writeFileSync(packedCheckFile, packedCheck.stdout)
   const packedCheckValidation = run(checkerBin, ['validate', packedCheckFile], { cwd: consumer })
   assert(packedCheckValidation.stdout.includes('valid check document'), 'packed consumer validates its emitted check artifact')
+  const changedGateTemp = path.join(tempRoot, 'changed-gate')
+  fs.mkdirSync(changedGateTemp)
+  runChangedGateUat({ checker: checkerBin, temp: changedGateTemp })
+  console.log('ok: packed check --changed fails a config-only change that makes a reference newly actionable and passes an edit next to old debt')
   const validation = run(checkerBin, ['validate', path.join(installedRoot, 'feeds', 'openai.json')], { cwd: consumer })
   assert(validation.stdout.includes('valid feed document'), 'clean consumer runs the packed public document validator')
   const packedPlan = run(checkerBin, ['plan', '.', '--days', '90', '--scope', 'direct'], { cwd: consumer })

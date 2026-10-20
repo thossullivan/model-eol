@@ -147,6 +147,43 @@ const waitForPublishedVersion = ({ version, expectedIntegrity, cache, delays = r
   throw new Error(`npm did not expose model-eol@${version} with a reachable tarball after ${elapsed} seconds: ${detail}`)
 }
 
+// A config-only change that makes an unchanged reference bad must fail check --changed; an edit next to old debt must not.
+export function runChangedGateUat({ checker, temp }) {
+  const changedGate = (name, files, edits) => {
+    const repo = path.join(temp, name)
+    fs.mkdirSync(repo)
+    for (const [file, content] of Object.entries(files)) fs.writeFileSync(path.join(repo, file), content)
+    run('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+    run('git', ['add', '-A'], { cwd: repo })
+    run('git', ['-c', 'user.name=model-eol published UAT', '-c', 'user.email=published-uat@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '-m', 'base'], { cwd: repo })
+    for (const [file, content] of Object.entries(edits)) fs.writeFileSync(path.join(repo, file), content)
+    const result = spawnSync(checker, ['check', '.', '--changed', 'HEAD', '--json'], {
+      cwd: repo,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 10 * 1024 * 1024,
+    })
+    if (result.error || ![0, 1].includes(result.status)) {
+      throw new Error(`published check --changed failed in ${name}: ${result.error?.message || result.stderr?.trim() || `exit ${result.status}`}`)
+    }
+    return { status: result.status, report: parseJson(result.stdout, `published check --changed report for ${name}`) }
+  }
+  const retiredModel = 'claude-opus-4-1-20250805'
+  const configChange = changedGate('changed-config', {
+    'app.py': `MODEL = "${retiredModel}"\n`,
+    '.model-eol.json': `${JSON.stringify({ ignore: { models: [retiredModel] } })}\n`,
+  }, { '.model-eol.json': '{}\n' })
+  if (configChange.status !== 1 || !configChange.report.findings.some(finding => finding.matched === retiredModel && finding.changed?.reason === 'newly-actionable')) {
+    throw new Error(`published check --changed did not fail a config-only change that makes ${retiredModel} newly actionable (exit ${configChange.status})`)
+  }
+  const oldDebt = changedGate('changed-debt', {
+    'app.py': `MODEL = "${retiredModel}"\nRETRIES = 1\n`,
+  }, { 'app.py': `MODEL = "${retiredModel}"\nRETRIES = 2\n` })
+  if (oldDebt.status !== 0 || oldDebt.report.findings.length) {
+    throw new Error(`published check --changed reported old debt next to an unrelated edit (exit ${oldDebt.status}, ${oldDebt.report.findings.length} finding(s))`)
+  }
+}
+
 export function runPublishedConsumerUat({ packageSpec, expectedVersion, expectedIntegrity, expectedEngine = null }) {
   if (!packagePattern.test(packageSpec)) fail('--package must be model-eol@0 or an exact stable 0.x version')
   if (!versionPattern.test(expectedVersion)) fail('--expected-version must be an exact stable 0.x version')
@@ -242,6 +279,8 @@ export function runPublishedConsumerUat({ packageSpec, expectedVersion, expected
     fs.writeFileSync(checkFile, checkResult.stdout)
     const checkValidation = run(checker, ['validate', checkFile], { cwd: consumer })
     if (!checkValidation.stdout.includes('valid check document')) throw new Error('published checker did not validate its own check artifact')
+
+    runChangedGateUat({ checker, temp })
 
     const planResult = run(checker, ['plan', '.', '--days', '90', '--scope', 'direct'], { cwd: consumer })
     const plan = parseJson(planResult.stdout, 'published plan')
