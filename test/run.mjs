@@ -1657,6 +1657,69 @@ for (const [variant, linkFor] of [
 }
 
 {
+  const sub = compareRepo('fake git dir source', { 'cfg.json': { scope: 'all', days: 30 } })
+  const repo = compareRepo('fake git dir', { 'src/app.py': 'MODEL = "soon-model"\n' })
+  assert(repo.git(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub.dir, 'sub']).status === 0 && repo.commitAll('submodule'), 'fake git dir test adds the submodule')
+  const marker = path.join(tempRoot, 'fake-git-dir-command-ran')
+  assert(repo.git(['rm', '-q', '--cached', 'sub']).status === 0, 'fake git dir test removes the gitlink')
+  fs.rmSync(path.join(repo.dir, 'sub'), { recursive: true, force: true })
+  writeRepoFiles(repo.dir, {
+    'sub/HEAD': 'ref: refs/heads/main\n',
+    'sub/objects/info/keep': '',
+    'sub/objects/pack/keep': '',
+    'sub/refs/heads/keep': '',
+    'sub/cfg.json': { scope: 'all', days: 90 },
+    'sub/config': `[core]\n\tbare = false\n\tworktree = .\n\trepositoryformatversion = 1\n[extensions]\n\tpartialClone = origin\n[remote "origin"]\n\turl = ${sub.dir}\n\tpromisor = true\n\tuploadpack = touch ${JSON.stringify(marker)}; false\n`,
+  })
+  assert(repo.commitAll('replace the gitlink with a git dir layout'), 'fake git dir test commits the PR')
+  const clone = path.join(tempRoot, 'fake-git-dir-clone')
+  assert(spawnSync('git', ['clone', '-q', repo.dir, clone]).status === 0, 'fake git dir test clones the PR')
+  const result = run(['check', path.join(clone, 'src'), '--changed', 'HEAD~1', '--feeds', compareFeeds, '--config', path.join(clone, 'sub', 'cfg.json'), '--json'])
+  assert(!fs.existsSync(marker), '--changed never runs git with repository config a PR committed in place of a submodule')
+  assert(result.code === 1 && JSON.parse(result.out).findings[0]?.changed?.reason === 'base-unavailable', '--changed treats a committed git dir layout at a base gitlink as an unavailable base')
+}
+
+{
+  const repo = compareRepo('dot-dot after a symlink in --feeds', {
+    'feeds/openai.json': compareFeed([{ id: 'soon-model', shutdown: '2020-02-02' }]),
+    'vendor/feeds/openai.json': compareFeed([{ id: 'soon-model', shutdown: '2099-02-02' }]),
+    'vendor/x/keep': '',
+    link: symlinkTo('vendor/x'),
+    'src/a.py': 'M = "soon-model"\n',
+  })
+  repo.write({ 'vendor/feeds/openai.json': compareFeed([{ id: 'soon-model', shutdown: '2020-03-03' }]) })
+  const result = runCompare('dot-dot after a symlink in --feeds', repo.dir, [], { target: path.join(repo.dir, 'src'), feeds: `${repo.dir}/link/../feeds` })
+  assert(result.code === 1 && sameJson(result.findings[0]?.changed?.inputs, ['feeds']), '--changed compares the feeds the OS opens when --feeds has .. after a symlink')
+}
+
+{
+  const repo = compareRepo('dot-dot after a symlink in a base config link', {
+    'cfg.json': { days: 365 },
+    'vendor/cfg.json': { days: 30 },
+    'vendor/x/keep': '',
+    link: symlinkTo('vendor/x'),
+    '.model-eol.json': symlinkTo('link/../cfg.json'),
+    'src/a.py': 'M = "soon-model"\n',
+  })
+  repo.write({ 'vendor/cfg.json': { days: 365 } })
+  const result = runCompare('dot-dot after a symlink in a base config link', repo.dir, [], { target: path.join(repo.dir, 'src') })
+  assert(result.code === 1 && result.findings[0]?.changed?.base?.threshold_days === 30, '--changed resolves .. after a symlink in a base link target the way the OS does')
+}
+
+{
+  const repo = compareRepo('wrong-case --feeds', {
+    'feeds/openai.json': compareFeed([{ id: 'retired-model', shutdown: '2020-01-01' }]),
+    'a.py': 'OLD = "retired-model"\nX = 1\n',
+    'b.py': 'OLD = "retired-model"\n',
+  })
+  if (fs.existsSync(path.join(repo.dir, 'FEEDS'))) {
+    repo.write({ 'a.py': 'OLD = "retired-model"\nX = 2\n' })
+    const result = runCompare('wrong-case --feeds', repo.dir, [], { feeds: path.join(repo.dir, 'FEEDS') })
+    assert(result.code === 0 && result.findings.length === 0, '--changed maps a wrong-case --feeds path to the tracked directory on a case-insensitive file system')
+  }
+}
+
+{
   const outside = path.join(tempRoot, 'outside-feeds-with-fifo')
   fs.mkdirSync(outside)
   fs.writeFileSync(path.join(outside, 'openai.json'), compareFeed([{ id: 'retired-model', shutdown: '2020-01-01' }]))
