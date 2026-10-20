@@ -2019,26 +2019,52 @@ const sameAsFullDiff = (dir, includeDocs = false) => {
     [...diff.added].filter(key => keep(key.slice(0, key.lastIndexOf(':')))).sort(),
     [...diff.files].filter(([absolute]) => keep(absolute)).sort(([left], [right]) => left < right ? -1 : 1),
   ])
-  return view(restricted, () => true) === view(full, scanned)
+  return view(restricted, restricted.stats.mode === 'narrow' ? () => true : scanned) === view(full, scanned)
 }
+const largeBinary = crypto.randomBytes(9 * 1024 * 1024)
+const addLargeBinary = repo => {
+  fs.writeFileSync(path.join(repo.dir, 'large.bin'), largeBinary)
+  return repo.git(['add', 'large.bin']).status === 0
+}
+const repoLines = (repo, result) => result.findings.map(finding => `${path.relative(fs.realpathSync(repo.dir), path.resolve(finding.file)).split(path.sep).join('/')}:${finding.line}:${finding.changed?.reason}`).sort().join(',')
 
 {
   const repo = compareRepo('binary file in the change', { 'app.py': 'M = "clean-model"\n' })
-  fs.mkdirSync(path.join(repo.dir, 'assets'))
-  fs.writeFileSync(path.join(repo.dir, 'assets', 'weights.bin'), crypto.randomBytes(3 * 1024 * 1024))
   repo.write({ 'app.py': 'M = "clean-model"\nNEW = "retired-model"\n' })
-  assert(repo.git(['add', '-A']).status === 0, 'binary diff test stages the binary file')
+  assert(addLargeBinary(repo), 'binary diff test stages the binary file')
   const result = runWithStats('binary file in the change', repo.dir)
   assert(result.code === 1 && result.findings.length === 1 && result.findings[0].line === 2 && result.findings[0].changed?.reason === 'added-line', '--changed reports an added line next to a binary file')
-  assert(result.stats?.diff_paths === 1 && result.stats.diff_runs === 1 && result.stats.diff_bytes < 64 * 1024 && result.stats.diff_fallback === false, '--changed does not diff a binary file the scanner never reads')
-  assert(changedLinesForTargets([repo.dir], 'HEAD', { fullDiff: true }).stats.bytes > 3 * 1024 * 1024 && sameAsFullDiff(repo.dir), '--changed diff_bytes would expose a diffed binary file, and the scannable diff matches the full diff')
+  assert(result.stats?.diff_mode === 'narrow' && result.stats.diff_dropped_bytes === largeBinary.length && result.stats.diff_paths === 1 && result.stats.diff_runs === 1 && result.stats.diff_bytes < 64 * 1024 && result.stats.diff_fallback === false, '--changed does not diff a binary file the scanner never reads')
+  assert(changedLinesForTargets([repo.dir], 'HEAD', { fullDiff: true }).stats.bytes > largeBinary.length && sameAsFullDiff(repo.dir), '--changed diff_bytes would expose a diffed binary file, and the scannable diff matches the full diff')
+  assert(repo.commitAll('large binary') && repo.git(['rm', '-q', 'large.bin']).status === 0, 'binary deletion test removes the committed binary file')
+  repo.write({ 'app.py': 'M = "clean-model"\nNEW = "retired-model"\nNEXT = "retired-model"\n' })
+  const deleted = runWithStats('binary file deleted in the change', repo.dir)
+  assert(deleted.code === 1 && deleted.findings.length === 1 && deleted.findings[0].line === 3 && deleted.stats?.diff_mode === 'narrow' && deleted.stats.diff_dropped_bytes === largeBinary.length, '--changed counts the base size of a deleted binary file it does not diff')
+}
+
+{
+  const repo = compareRepo('small binary file in the change', { 'app.py': 'M = "clean-model"\n', 'logo.png': 'x' })
+  repo.write({ 'app.py': 'M = "clean-model"\nNEW = "retired-model"\n', 'logo.png': crypto.randomBytes(64 * 1024).toString('latin1') })
+  const result = runWithStats('small binary file in the change', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.stats?.diff_mode === 'full' && result.stats.diff_dropped_bytes > 64 * 1024 && result.stats.diff_runs === 1 && result.stats.diff_bytes > 64 * 1024, '--changed runs the single full diff when the dropped files print little')
+}
+
+{
+  const files = {}
+  for (let index = 0; index < 300; index++) files[`src/m${index}.py`] = `A = ${index}\n`
+  const repo = compareRepo('many text files change', files)
+  for (let index = 0; index < 300; index++) files[`src/m${index}.py`] = `A = ${index}\n${index % 30 === 0 ? 'NEW = "retired-model"\n' : 'B = 1\n'}`
+  repo.write({ ...files, 'notes.txt': 'x\n' })
+  const result = runWithStats('many text files change', repo.dir)
+  assert(result.code === 1 && result.findings.length === 10 && result.stats?.diff_mode === 'full' && result.stats.diff_runs === 1 && result.stats.diff_paths === 0, '--changed runs the single full diff for a text-only change')
 }
 
 {
   const repo = compareRepo('-diff attribute with the scannable diff', { 'app.py': 'M = "clean-model"\n', 'logo.png': 'x' })
   repo.write({ '.gitattributes': '*.py -diff\n', 'app.py': 'M = "clean-model"\nNEW = "retired-model"\n', 'logo.png': 'y' })
+  assert(addLargeBinary(repo), '-diff test stages the binary file')
   const result = runWithStats('-diff attribute with the scannable diff', repo.dir)
-  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].line === 2 && result.findings[0].changed?.reason === 'added-line' && result.stats?.diff_paths === 1 && result.stats.diff_fallback === false, '--changed still forces a -diff .py file to text when it diffs only scannable files')
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].line === 2 && result.findings[0].changed?.reason === 'added-line' && result.stats?.diff_mode === 'narrow' && result.stats.diff_paths === 1 && result.stats.diff_fallback === false, '--changed still forces a -diff .py file to text when it diffs only scannable files')
 }
 
 {
@@ -2047,11 +2073,11 @@ const sameAsFullDiff = (dir, includeDocs = false) => {
     const repo = compareRepo(label, { [from]: debt }, { 'diff.renames': 'false' })
     fs.rmSync(path.join(repo.dir, from))
     repo.write({ [to]: `${debt}NEW = "retired-model"\n` })
-    assert(repo.git(['add', '-A']).status === 0, `${label}: stages the rename`)
+    assert(repo.git(['add', '-A']).status === 0 && addLargeBinary(repo), `${label}: stages the rename`)
     return { ...runWithStats(label, repo.dir, extra), same: sameAsFullDiff(repo.dir, extra.includes('--include-docs')) }
   }
   const lines = result => result.findings.map(finding => `${path.basename(finding.file)}:${finding.line}:${finding.changed?.reason}`).join(',')
-  const paired = result => result.stats?.diff_paths === 2 && result.stats.diff_fallback === false && result.same
+  const paired = result => result.stats?.diff_mode === 'narrow' && result.stats.diff_paths === 2 && result.stats.diff_fallback === false && result.same
   const edited = renamed('edited rename of a scannable file', 'old/app.py', 'new/app.py')
   assert(edited.code === 1 && lines(edited) === 'app.py:14:added-line' && paired(edited), '--changed diffs both sides of an edited rename and keeps old debt out')
   const intoCode = renamed('rename from a text file to a .py file', 'a.txt', 'a.py')
@@ -2082,12 +2108,10 @@ const sameAsFullDiff = (dir, includeDocs = false) => {
       expected.push(`${long}/r${index}.py:12`)
     }
   }
-  fs.writeFileSync(path.join(repo.dir, long, 'weights.bin'), crypto.randomBytes(64 * 1024))
-  assert(repo.git(['add', '-A']).status === 0, 'chunked diff test stages the change')
+  assert(repo.git(['add', '-A']).status === 0 && addLargeBinary(repo), 'chunked diff test stages the change')
   const result = runWithStats('scannable diff in chunks', repo.dir)
-  const found = result.findings.map(finding => `${path.relative(fs.realpathSync(repo.dir), path.resolve(finding.file)).split(path.sep).join('/')}:${finding.line}:${finding.changed?.reason}`).sort()
-  assert(result.code === 1 && sameJson(found, expected.map(entry => `${entry}:added-line`).sort()), '--changed reports every added line across chunked diffs and keeps old debt out')
-  assert(result.stats?.diff_runs >= 3 && result.stats.diff_paths === 400 && result.stats.diff_fallback === false && sameAsFullDiff(repo.dir), '--changed splits long path lists into at least three diffs whose merged result matches the full diff')
+  assert(result.code === 1 && repoLines(repo, result) === expected.map(entry => `${entry}:added-line`).sort().join(','), '--changed reports every added line across chunked diffs and keeps old debt out')
+  assert(result.stats?.diff_mode === 'narrow' && result.stats.diff_runs >= 3 && result.stats.diff_paths === 400 && result.stats.diff_fallback === false && sameAsFullDiff(repo.dir), '--changed splits long path lists into at least three diffs whose merged result matches the full diff')
 }
 
 {
@@ -2109,13 +2133,52 @@ const sameAsFullDiff = (dir, includeDocs = false) => {
   fs.rmSync(path.join(repo.dir, 'p'), { recursive: true })
   fs.rmSync(path.join(repo.dir, 'q'), { recursive: true })
   repo.write({ 't/z.py': edit(2), 'r/x.py': edit(6) })
-  assert(repo.git(['add', '-A']).status === 0, 'pairing test stages the change')
+  assert(repo.git(['add', '-A']).status === 0 && addLargeBinary(repo), 'pairing test stages the change')
   const listed = args => repo.git(['diff', '--find-renames', '--name-status', 'HEAD', ...args]).stdout
   assert(/^R\d*\tp\/x\.py\tt\/z\.py$/m.test(listed([])), 'pairing test: the full listing pairs p/x.py with t/z.py')
   const narrowed = /^R\d*\tp\/x\.py\tr\/x\.py$/m.test(listed(['--', 'p/x.py', 't/z.py', 'r/x.py']))
   const result = runWithStats('rename pairing that a narrower diff changes', repo.dir)
-  const lines = result.findings.map(finding => `${path.relative(fs.realpathSync(repo.dir), path.resolve(finding.file)).split(path.sep).join('/')}:${finding.line}:${finding.changed?.reason}`).join(',')
-  assert(result.code === 1 && lines === 'r/x.py:20:added-line' && result.stats?.diff_fallback === narrowed && sameAsFullDiff(repo.dir), `--changed falls back to the full diff when the scannable diff pairs a rename differently (git pairs it differently: ${narrowed})`)
+  assert(result.code === 1 && repoLines(repo, result) === 'r/x.py:20:added-line' && result.stats?.diff_fallback === narrowed && sameAsFullDiff(repo.dir), `--changed falls back to the full diff when the scannable diff pairs a rename differently (git pairs it differently: ${narrowed})`)
+}
+
+{
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim()
+  const shim = path.join(tempRoot, 'git-pathspec-matches-nothing')
+  fs.mkdirSync(shim)
+  fs.writeFileSync(path.join(shim, 'git'), `#!/bin/sh\ncontent=0\nfor argument in "$@"; do\n  [ "$argument" = "--unified=0" ] && content=1\ndone\nif [ "$content" = 1 ]; then\n  for argument in "$@"; do\n    shift\n    [ "$argument" = "b.py" ] && argument=no-such-file.py\n    set -- "$@" "$argument"\n  done\nfi\nexec ${JSON.stringify(realGit)} "$@"\n`, { mode: 0o755 })
+  const repo = compareRepo('kept path missing from the scannable diff', { 'a.py': 'A = 1\n', 'b.py': 'B = 1\n' })
+  repo.write({ 'a.py': 'A = 1\nNEW = "retired-model"\n', 'b.py': 'B = 1\nNEW = "retired-model"\n' })
+  assert(addLargeBinary(repo), 'missing-path test stages the binary file')
+  const result = runWithStats('kept path missing from the scannable diff', repo.dir, [], { env: { ...process.env, PATH: `${shim}${path.delimiter}${process.env.PATH}` } })
+  assert(result.code === 1 && repoLines(repo, result) === 'a.py:2:added-line,b.py:2:added-line' && result.stats?.diff_mode === 'full' && result.stats.diff_fallback === true, '--changed falls back to the full diff when a kept path is missing from the scannable diff')
+}
+
+{
+  const nfd = 'café.py'
+  const repo = compareRepo('NFD name under core.precomposeUnicode', { [nfd]: 'A = "clean-model"\n' }, { 'core.precomposeUnicode': 'false' })
+  repo.git(['config', 'core.precomposeUnicode', 'true'])
+  fs.appendFileSync(path.join(repo.dir, '.git', 'info', 'exclude'), 'caf\u00e9.py\n')
+  fs.writeFileSync(path.join(repo.dir, nfd), 'A = "clean-model"\nNEW = "retired-model"\n')
+  assert(repo.git(['add', '-u']).status === 0 && addLargeBinary(repo), 'NFD test stages the change')
+  const result = runWithStats('NFD name under core.precomposeUnicode', repo.dir)
+  const found = result.findings.map(finding => `${finding.line}:${finding.changed?.reason}`).join(',')
+  assert(result.code === 1 && found === '2:added-line' && result.stats?.diff_fallback === (process.platform === 'darwin'), '--changed reports an added line in an NFD-named file that core.precomposeUnicode hides from a narrowed pathspec')
+}
+
+{
+  const repo = compareRepo('unreadable base blob of an unscanned file', { 'app.py': 'A = 1\n', 'logo.png': 'unique png content 12345' })
+  const oid = repo.git(['rev-parse', 'HEAD:logo.png']).stdout.trim()
+  repo.write({ 'app.py': 'A = 1\nNEW = "retired-model"\n', 'logo.png': 'zz' })
+  assert(repo.git(['add', '-A']).status === 0 && addLargeBinary(repo), 'unreadable base blob test stages the change')
+  fs.rmSync(path.join(repo.dir, '.git', 'objects', oid.slice(0, 2), oid.slice(2)))
+  const result = runWithStats('unreadable base blob of an unscanned file', repo.dir)
+  assert(result.code === 1 && repoLines(repo, result) === 'app.py:2:added-line' && result.stats?.diff_mode === 'narrow', '--changed does not read the base blob of a file the scanner never reads when it narrows the diff')
+  const small = compareRepo('unreadable base blob without narrowing', { 'app.py': 'A = 1\n', 'logo.png': 'other unique png content 67890' })
+  const smallOid = small.git(['rev-parse', 'HEAD:logo.png']).stdout.trim()
+  small.write({ 'app.py': 'A = 1\nNEW = "retired-model"\n', 'logo.png': 'zz' })
+  fs.rmSync(path.join(small.dir, '.git', 'objects', smallOid.slice(0, 2), smallOid.slice(2)))
+  const failed = runCompare('unreadable base blob without narrowing', small.dir, [], { json: false })
+  assert(failed.code === 2 && failed.err.includes('--changed failed'), '--changed still fails when the single full diff cannot read a base blob')
 }
 
 {
