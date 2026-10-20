@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,10 +8,10 @@ import { performance } from 'node:perf_hooks'
 
 import { parseCliArgs } from '../lib/cli.mjs'
 
-const usage = 'Usage: node scripts/e2e-changed.mjs --checker PATH/check.mjs --repo DIR [--repo DIR ...] [--commits N] [--synthetic] [--policy broad|config] [--timeout-seconds N] [--out FILE] [--keep]'
+const usage = 'Usage: node scripts/e2e-changed.mjs --checker PATH/check.mjs --repo DIR [--repo DIR ...] [--commits N] [--synthetic] [--mutations a,b,...] [--policy broad|config] [--feeds-source DIR] [--timeout-seconds N] [--out FILE] [--keep]'
 // broad pins every finding into view; config lets each tree's .model-eol.json decide days and scope.
 const POLICY_FLAGS = { broad: ['--json', '--days', '90', '--scope', 'all'], config: ['--json'] }
-const MUTATIONS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l']
+const MUTATIONS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n']
 // Config days and scope only reach the checker when the command line does not pin them; routed references are cloud or gateway, which only scope all checks.
 const MUTATION_POLICY = { a: 'config', i: 'config', j: 'broad' }
 const CODE_EXTENSIONS = new Set(['.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.go', '.rb', '.java', '.kt', '.rs', '.php', '.cs', '.swift', '.scala'])
@@ -21,9 +21,12 @@ const UNTRACKED_FILE = 'e2e_untracked.py'
 const SLOW_FACTOR = 3
 const SLOW_GRACE_MS = 2000
 const DEFAULT_TIMEOUT_SECONDS = 600
+const SIGNAL_EXIT = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 }
 
 const settings = { timeoutMs: DEFAULT_TIMEOUT_SECONDS * 1000 }
 const liveTempRoots = new Set()
+const running = new Map()
+let stopping = null
 
 class InterruptedError extends Error {
   constructor(signal) {
@@ -40,7 +43,7 @@ const usageError = message => {
 
 const cleanEnv = () => {
   const env = { ...process.env }
-  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_PREFIX']) delete env[name]
+  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_PREFIX', 'GIT_DIFF_OPTS', 'GIT_EXTERNAL_DIFF']) delete env[name]
   return env
 }
 
@@ -49,23 +52,62 @@ const gitEnv = () => ({ ...cleanEnv(), GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG
 
 const GIT_IDENTITY = ['-c', 'user.name=model-eol e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${os.devNull}`]
 
-const spawn = (command, args, options) => {
-  const result = spawnSync(command, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: 1024 * 1024 * 1024,
-    timeout: settings.timeoutMs,
-    killSignal: 'SIGKILL',
-    ...options,
-  })
-  if (result.signal === 'SIGINT' || result.signal === 'SIGTERM') throw new InterruptedError(result.signal)
-  return { ...result, timedOut: result.error?.code === 'ETIMEDOUT' }
+const killGroup = child => {
+  try {
+    process.kill(-child.pid, 'SIGKILL')
+  } catch {
+  }
 }
 
-const git = (cwd, args, { allowFail = false } = {}) => {
-  const result = spawn('git', [...GIT_IDENTITY, ...args], { cwd, env: gitEnv() })
-  if (!allowFail && (result.error || result.status !== 0)) {
-    const detail = result.timedOut ? `timed out after ${settings.timeoutMs / 1000}s` : result.error?.message || result.stderr?.trim() || `exit ${result.status}`
+// Each child leads its own process group, so a timeout or a signal to the harness kills its grandchildren too.
+const run = (command, args, { cwd, env }) => new Promise((resolve, reject) => {
+  if (stopping) {
+    reject(new InterruptedError(stopping))
+    return
+  }
+  const child = spawn(command, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+  const stdout = []
+  const stderr = []
+  let timedOut = false
+  let spawnError = null
+  const timer = setTimeout(() => {
+    timedOut = true
+    killGroup(child)
+  }, settings.timeoutMs)
+  const closed = new Promise(done => child.on('close', done))
+  running.set(child, closed)
+  child.stdout.on('data', chunk => stdout.push(chunk))
+  child.stderr.on('data', chunk => stderr.push(chunk))
+  child.on('error', error => {
+    spawnError = error
+  })
+  child.on('exit', () => {
+    if (timedOut || stopping) {
+      child.stdout.destroy()
+      child.stderr.destroy()
+    }
+  })
+  closed.then(status => {
+    clearTimeout(timer)
+    running.delete(child)
+    if (stopping) {
+      reject(new InterruptedError(stopping))
+      return
+    }
+    resolve({
+      status: spawnError || timedOut ? null : status,
+      stdout: Buffer.concat(stdout).toString('utf8'),
+      stderr: Buffer.concat(stderr).toString('utf8'),
+      error: spawnError,
+      timedOut,
+    })
+  })
+})
+
+const git = async (cwd, args, { allowFail = false } = {}) => {
+  const result = await run('git', [...GIT_IDENTITY, ...args], { cwd, env: gitEnv() })
+  if (!allowFail && (result.error || result.timedOut || result.status !== 0)) {
+    const detail = result.timedOut ? `timed out after ${settings.timeoutMs / 1000}s` : result.error?.message || result.stderr.trim() || `exit ${result.status}`
     throw new Error(`git ${args.join(' ')} failed: ${detail}`)
   }
   return result
@@ -104,8 +146,8 @@ const unquoteC = value => {
 
 // Maps each head line of FILE to { base: true, file, line } when git blame attributes it to BASE itself, else { base: false }.
 // --first-parent keeps lines a merge brings from its side branch on the merge, not on that branch's boundary.
-export const blameLineMap = (cwd, base, head, file) => {
-  const result = git(cwd, [
+export const blameLineMap = async (cwd, base, head, file) => {
+  const result = await git(cwd, [
     '-c', 'diff.algorithm=myers', '-c', 'diff.indentHeuristic=true', '-c', 'core.quotePath=false',
     'blame', '--line-porcelain', '--first-parent', `${base}..${head}`, '--', file,
   ])
@@ -140,11 +182,12 @@ const diffPath = (value, prefix) => {
   return name === '/dev/null' ? null : name.startsWith(prefix) ? name.slice(prefix.length) : name
 }
 
-// Parses git diff -U0 BASE HEAD into per-head-file records, independent of lib/scanner.mjs.
-export const diffFileRecords = (cwd, base, head) => {
-  const result = git(cwd, [
-    '-c', 'core.quotePath=false', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--find-renames',
-    '--diff-algorithm=myers', '--indent-heuristic', '--unified=0', '--src-prefix=a/', '--dst-prefix=b/', base, head,
+// Parses git diff -U0 BASE HEAD (or BASE against the working tree when HEAD is null) into per-head-file records, independent of lib/scanner.mjs.
+export const diffFileRecords = async (cwd, base, head = null) => {
+  const result = await git(cwd, [
+    '-c', 'core.quotePath=false', '-c', 'diff.relative=false', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--text',
+    '--find-renames', '--diff-algorithm=myers', '--indent-heuristic', '--inter-hunk-context=0', '--unified=0',
+    '--src-prefix=a/', '--dst-prefix=b/', base, ...(head ? [head] : []),
   ])
   const records = new Map()
   let header = null
@@ -191,16 +234,16 @@ export const diffLineMap = (records, file, line) => {
   return { base: true, file: record.basePath, line: line - offset }
 }
 
-const runChecker = ({ checker, cwd, args, env = {} }) => {
+const runChecker = async ({ checker, cwd, target = '.', args, env }) => {
   const started = performance.now()
-  const result = spawn(process.execPath, [checker, 'check', '.', ...args], { cwd, env: { ...cleanEnv(), ...env } })
+  const result = await run(process.execPath, [checker, 'check', target, ...args], { cwd, env })
   const ms = Math.round(performance.now() - started)
   let doc = null
   try {
     doc = JSON.parse(result.stdout)
   } catch {
   }
-  const code = result.error ? null : result.status
+  const code = result.status
   const usable = (code === 0 || code === 1) && Array.isArray(doc?.findings)
   const stderr = String(result.error?.message ?? result.stderr ?? '').trim()
   const error = usable ? null : result.timedOut
@@ -246,67 +289,85 @@ const retiredModel = (feedsDir, withoutVia = null) => feedModels(feedsDir)
   .filter(model => !withoutVia || !(model.distributions ?? []).some(distribution => distribution.via === withoutVia))
   .sort((a, b) => a.id.localeCompare(b.id))[0] ?? null
 
+// The checker's bundled feeds when it has them (bins resolve through their symlink), else --feeds-source, else this repository's feeds.
+const resolveFeedsSource = (checker, explicit) => {
+  if (explicit) return path.resolve(explicit)
+  let real = checker
+  try {
+    real = fs.realpathSync(checker)
+  } catch {
+  }
+  const bundled = path.join(path.dirname(real), 'feeds')
+  return fs.existsSync(bundled) ? bundled : path.join(import.meta.dirname, '..', 'feeds')
+}
+
 class RepoSession {
-  constructor({ source, tempRoot, checker, policy }) {
+  constructor({ source, tempRoot, checker, policy, feedsSource }) {
     this.source = source
     this.tempRoot = tempRoot
     this.checker = checker
     this.policy = policy
-    this.feedsDir = path.join(path.dirname(checker), 'feeds')
+    this.feedsDir = feedsSource
     this.clone = path.join(tempRoot, 'clone')
+    // The checker's own temp trees live under the harness root, so a killed checker never leaves them behind.
+    this.checkerTmp = path.join(tempRoot, 'tmp')
+    fs.mkdirSync(this.checkerTmp)
     this.worktrees = new Map()
     this.checks = new Map()
     this.counter = 0
   }
 
-  prepare() {
-    const cloned = git(this.tempRoot, ['clone', '-q', '--no-hardlinks', '--no-checkout', '--', this.source, this.clone], { allowFail: true })
+  checkerEnv(extra = {}) {
+    return { ...cleanEnv(), TMPDIR: this.checkerTmp, TMP: this.checkerTmp, TEMP: this.checkerTmp, ...extra }
+  }
+
+  async prepare() {
+    const cloned = await git(this.tempRoot, ['clone', '-q', '--no-hardlinks', '--no-checkout', '--', this.source, this.clone], { allowFail: true })
     if (cloned.error || cloned.status !== 0) return { failed: `clone failed: ${cloned.error?.message || cloned.stderr.trim()}` }
-    const sourceHead = git(this.source, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { allowFail: true }).stdout.trim()
-    const cloneHead = git(this.clone, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { allowFail: true }).stdout.trim()
-    const present = sourceHead && git(this.clone, ['cat-file', '-e', `${sourceHead}^{commit}`], { allowFail: true }).status === 0
+    const sourceHead = (await git(this.source, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { allowFail: true })).stdout.trim()
+    const cloneHead = (await git(this.clone, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { allowFail: true })).stdout.trim()
+    const present = sourceHead && (await git(this.clone, ['cat-file', '-e', `${sourceHead}^{commit}`], { allowFail: true })).status === 0
     this.head = present ? sourceHead : cloneHead
     if (!this.head) return { skipped: 'no commits' }
     this.headNote = present ? null : `source HEAD ${sourceHead} is not reachable from a branch; using the clone's HEAD`
     return {}
   }
 
-  worktree(commit) {
+  async worktree(commit) {
     if (!this.worktrees.has(commit)) {
       const directory = path.join(this.tempRoot, `wt-${this.counter++}`)
-      git(this.clone, ['worktree', 'add', '-q', '--detach', directory, commit])
-      this.worktrees.set(commit, directory)
+      this.worktrees.set(commit, git(this.clone, ['worktree', 'add', '-q', '--detach', directory, commit]).then(() => directory))
     }
     return this.worktrees.get(commit)
   }
 
   check(directory, flags) {
     const key = JSON.stringify([directory, flags])
-    if (!this.checks.has(key)) this.checks.set(key, runChecker({ checker: this.checker, cwd: directory, args: flags }))
+    if (!this.checks.has(key)) this.checks.set(key, runChecker({ checker: this.checker, cwd: directory, args: flags, env: this.checkerEnv() }))
     return this.checks.get(key)
   }
 
-  changed(directory, base, flags) {
+  async changed(directory, base, flags, target = '.') {
     const statsFile = path.join(this.tempRoot, `stats-${this.counter++}.json`)
-    const run = runChecker({ checker: this.checker, cwd: directory, args: ['--changed', base, ...flags], env: { MODEL_EOL_CHANGED_STATS: statsFile } })
+    const result = await runChecker({ checker: this.checker, cwd: directory, target, args: ['--changed', base, ...flags], env: this.checkerEnv({ MODEL_EOL_CHANGED_STATS: statsFile }) })
     if (fs.existsSync(statsFile)) {
       const text = fs.readFileSync(statsFile, 'utf8')
       try {
-        run.stats = JSON.parse(text)
+        result.stats = JSON.parse(text)
       } catch {
-        run.stats = { raw: text }
+        result.stats = { raw: text }
       }
     }
-    return run
+    return result
   }
 
-  historyPairs(count) {
-    const listed = git(this.clone, ['rev-list', '--first-parent', '--parents', `--max-count=${count + 1}`, this.head]).stdout
+  async historyPairs(count) {
+    const listed = (await git(this.clone, ['rev-list', '--first-parent', '--parents', `--max-count=${count + 1}`, this.head])).stdout
     return listed.split('\n').filter(Boolean)
       .map(line => line.split(' '))
       .filter(parts => parts.length > 1)
       .slice(0, count)
-      .map(([head, base]) => ({ base, head }))
+      .map(([head, base], index) => ({ base, head, probeSubdir: index === 0 }))
   }
 
   readConfig(directory) {
@@ -321,13 +382,15 @@ class RepoSession {
     }
   }
 
-  // Returns a pair spec for one synthetic mutation on top of HEAD, or { skipped } when the repository has no target for it.
-  mutate(mutation) {
+  // Returns the pair specs for one synthetic mutation on top of HEAD, or { skipped } when the repository has no target for it.
+  async mutate(mutation) {
     const policy = MUTATION_POLICY[mutation] ?? this.policy
-    const headCheck = this.check(this.worktree(this.head), POLICY_FLAGS[policy])
+    const headTree = await this.worktree(this.head)
+    let headCheck = await this.check(headTree, POLICY_FLAGS[policy])
+    if (headCheck.incomplete) headCheck = await this.check(headTree, [...POLICY_FLAGS[policy], '--allow-incomplete'])
     if (!headCheck.findings) return { skipped: `full check at HEAD is unusable: ${headCheck.error}` }
     const directory = path.join(this.tempRoot, `mut-${mutation}`)
-    git(this.clone, ['worktree', 'add', '-q', '--detach', directory, this.head])
+    await git(this.clone, ['worktree', 'add', '-q', '--detach', directory, this.head])
     const present = headCheck.findings
       .filter(finding => repoPath(finding.file) !== '.model-eol.json' && fs.existsSync(path.join(directory, repoPath(finding.file))))
       .sort((a, b) => repoPath(a.file).localeCompare(repoPath(b.file)) || a.line - b.line)
@@ -341,19 +404,32 @@ class RepoSession {
       lines.splice(Math.max(0, Math.min(index, lines.length)), 0, ...added)
       fs.writeFileSync(absolute, lines.join('\n'))
     }
-    const commit = message => {
-      git(directory, ['add', '-A'])
-      if (git(directory, ['diff', '--cached', '--quiet'], { allowFail: true }).status === 0) return null
-      git(directory, ['commit', '-q', '--no-verify', '-m', `e2e mutation ${mutation}: ${message}`])
-      return git(directory, ['rev-parse', 'HEAD']).stdout.trim()
+    const commit = async message => {
+      await git(directory, ['add', '-A'])
+      if ((await git(directory, ['diff', '--cached', '--quiet'], { allowFail: true })).status === 0) return null
+      await git(directory, ['commit', '-q', '--no-verify', '-m', `e2e mutation ${mutation}: ${message}`])
+      return (await git(directory, ['rev-parse', 'HEAD'])).stdout.trim()
     }
-    // Each step edits the mutation worktree; the last commit is the head, the one before it (or HEAD) the base.
+    const workingTree = description => ({ pairs: [{ base: this.head, head: this.head, headDir: directory, policy, mutation, description }] })
+    // Each step edits the mutation worktree and commits; consecutive commits form the pairs, the first against HEAD.
     const steps = []
     const step = (message, edit) => steps.push({ message, edit })
-    const spec = { policy }
+    let feeds = null
+    let pairSteps = 'last'
     const { config, bytes, error: configError } = this.readConfig(directory)
-    const needsConfig = ['a', 'b', 'f', 'h', 'i', 'j'].includes(mutation)
-    if (needsConfig && configError) return { skipped: configError }
+    if (['a', 'b', 'f', 'h', 'i', 'j', 'm'].includes(mutation) && configError) return { skipped: configError }
+    const toggleVia = () => {
+      if (config.via === 'aws-bedrock') {
+        const { via, ...rest } = config
+        return { message: 'drop config via aws-bedrock for the publisher clock', config: rest }
+      }
+      return { message: 'config via aws-bedrock', config: { ...config, via: 'aws-bedrock' } }
+    }
+    const removeIgnore = () => {
+      const ignore = config.ignore && typeof config.ignore === 'object' ? config.ignore : {}
+      const field = ['paths', 'models'].find(name => Array.isArray(ignore[name]) && ignore[name].length)
+      return field ? { message: `remove ignore.${field} ${JSON.stringify(ignore[field][0])}`, config: { ...config, ignore: { ...ignore, [field]: ignore[field].slice(1) } } } : null
+    }
 
     if (mutation === 'a') {
       // Only a firm future shutdown date turns retiring under a larger days threshold.
@@ -363,20 +439,16 @@ class RepoSession {
       const pattern = dir === '.' ? '**' : `${dir}/**`
       step(`override days 3650 for ${pattern}`, () => writeConfig({ ...config, overrides: [...(Array.isArray(config.overrides) ? config.overrides : []), { paths: [pattern], days: 3650 }] }))
     } else if (mutation === 'b') {
-      if (config.via === 'aws-bedrock') {
-        const { via, ...rest } = config
-        step('drop config via aws-bedrock for the publisher clock', () => writeConfig(rest))
-      } else {
-        step('config via aws-bedrock', () => writeConfig({ ...config, via: 'aws-bedrock' }))
-      }
+      const change = toggleVia()
+      step(change.message, () => writeConfig(change.config))
     } else if (mutation === 'c') {
       const target = notBad[0]
       if (!target) return { skipped: 'no reference that is not bad' }
       const file = repoPath(target.file)
       const moved = `e2e-moved/${file}`
-      step(`git mv ${file} ${moved}`, () => {
+      step(`git mv ${file} ${moved}`, async () => {
         fs.mkdirSync(path.dirname(path.join(directory, moved)), { recursive: true })
-        git(directory, ['mv', '--', file, moved])
+        await git(directory, ['mv', '--', file, moved])
       })
     } else if (mutation === 'd') {
       const target = notBad.find(finding => linesIn(repoPath(finding.file)).size > 1)
@@ -389,27 +461,27 @@ class RepoSession {
       const file = repoPath(target.file)
       step(`add a Bedrock signal two lines above ${file}:${target.line}`, () => insertLines(file, target.line - 2, [BEDROCK_LINE]))
     } else if (mutation === 'f') {
-      const ignore = config.ignore && typeof config.ignore === 'object' ? config.ignore : {}
-      const field = ['paths', 'models'].find(name => Array.isArray(ignore[name]) && ignore[name].length)
-      if (!field) return { skipped: 'config ignores no path or model' }
-      step(`remove ignore.${field} ${JSON.stringify(ignore[field][0])}`, () => writeConfig({ ...config, ignore: { ...ignore, [field]: ignore[field].slice(1) } }))
+      const change = removeIgnore()
+      if (!change) return { skipped: 'config ignores no path or model' }
+      step(change.message, () => writeConfig(change.config))
     } else if (mutation === 'g') {
-      if (!fs.existsSync(this.feedsDir)) return { skipped: `the checker has no feeds directory at ${this.feedsDir}` }
+      if (!fs.existsSync(this.feedsDir)) return { skipped: `no feeds directory at ${this.feedsDir}` }
       const ids = new Set(feedModels(this.feedsDir).map(({ model }) => model.id))
       const target = notBad.find(finding => ids.has(finding.id))
       if (!target) return { skipped: 'no reference that is not bad resolves to a feed entry' }
-      const feeds = path.join(directory, IN_REPO_FEEDS)
-      step(`copy the checker feeds into ${IN_REPO_FEEDS}`, () => fs.cpSync(this.feedsDir, feeds, { recursive: true }))
+      const inRepo = path.join(directory, IN_REPO_FEEDS)
+      step(`copy the feeds into ${IN_REPO_FEEDS}`, () => fs.cpSync(this.feedsDir, inRepo, { recursive: true }))
       step(`retire ${target.id} in ${IN_REPO_FEEDS}`, () => {
-        const { name } = feedModels(feeds).find(({ model }) => model.id === target.id)
-        const feed = JSON.parse(fs.readFileSync(path.join(feeds, name), 'utf8'))
+        const { name } = feedModels(inRepo).find(({ model }) => model.id === target.id)
+        const feed = JSON.parse(fs.readFileSync(path.join(inRepo, name), 'utf8'))
         const model = feed.models.find(entry => entry.id === target.id)
         Object.assign(model, { announced: '2020-01-01', shutdown: '2020-01-02' })
         delete model.date_precision
         delete model.distributions
-        fs.writeFileSync(path.join(feeds, name), `${JSON.stringify(feed, null, 2)}\n`)
+        fs.writeFileSync(path.join(inRepo, name), `${JSON.stringify(feed, null, 2)}\n`)
       })
-      spec.feeds = IN_REPO_FEEDS
+      feeds = IN_REPO_FEEDS
+      pairSteps = 'all'
     } else if (mutation === 'h') {
       if (Array.isArray(config.waivers) && config.waivers.length) {
         step(`remove waiver for ${config.waivers[0].model}`, () => writeConfig({ ...config, waivers: config.waivers.slice(1) }))
@@ -433,28 +505,43 @@ class RepoSession {
       const retired = fs.existsSync(this.feedsDir) ? retiredModel(this.feedsDir) : null
       if (!retired) return { skipped: 'no retired feed model' }
       fs.writeFileSync(path.join(directory, UNTRACKED_FILE), `MODEL = "${retired.id}"\n`)
-      return { base: this.head, head: this.head, headDir: directory, policy, description: `untracked ${UNTRACKED_FILE} referencing ${retired.id}` }
+      return workingTree(`untracked ${UNTRACKED_FILE} referencing ${retired.id}`)
     } else if (mutation === 'l') {
       step('make the config invalid JSON', () => fs.writeFileSync(path.join(directory, '.model-eol.json'), '{ "days": \n'))
       step('restore a valid config', () => fs.writeFileSync(path.join(directory, '.model-eol.json'), bytes && !configError ? bytes : '{}\n'))
+    } else if (mutation === 'm') {
+      const change = removeIgnore() ?? toggleVia()
+      writeConfig(change.config)
+      return workingTree(`uncommitted config edit: ${change.message}`)
+    } else if (mutation === 'n') {
+      const retired = fs.existsSync(this.feedsDir) ? retiredModel(this.feedsDir) : null
+      const tracked = new Set((await git(directory, ['ls-files', '-z'])).stdout.split('\0'))
+      const candidates = [...new Set(present.map(finding => repoPath(finding.file)))].filter(file => tracked.has(file))
+      const file = candidates.find(candidate => CODE_EXTENSIONS.has(path.posix.extname(candidate))) ?? candidates[0]
+      if (!retired || !file) return { skipped: retired ? 'no tracked file holds a reference' : 'no retired feed model' }
+      const absolute = path.join(directory, file)
+      const text = fs.readFileSync(absolute, 'utf8')
+      fs.writeFileSync(absolute, `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}E2E_DIRTY = "${retired.id}"\n`)
+      return workingTree(`uncommitted edit adds ${retired.id} to ${file}`)
     } else {
       return { skipped: `unknown mutation ${mutation}` }
     }
 
-    let base = this.head
-    let head = null
+    const commits = [this.head]
     for (const { message, edit } of steps) {
-      edit()
-      const commitSha = commit(message)
-      if (!commitSha) return { skipped: `step "${message}" changed nothing` }
-      base = head ?? base
-      head = commitSha
+      await edit()
+      const sha = await commit(message)
+      if (!sha) return { skipped: `step "${message}" changed nothing` }
+      commits.push(sha)
     }
-    this.worktrees.set(head, directory)
-    return { ...spec, base, head, description: steps.map(({ message }) => message).join('; ') }
+    this.worktrees.set(commits.at(-1), Promise.resolve(directory))
+    const description = steps.map(({ message }) => message).join('; ')
+    const spec = (base, head, label, text) => ({ base, head, policy, feeds, mutation: label, description: text })
+    if (pairSteps === 'all') return { pairs: commits.slice(1).map((head, index) => spec(commits[index], head, index === commits.length - 2 ? mutation : `${mutation}${index}`, steps[index].message)) }
+    return { pairs: [spec(commits.length > 2 ? commits.at(-2) : this.head, commits.at(-1), mutation, description)] }
   }
 
-  evaluatePair({ base, head, headDir = null, mutation = null, description = null, policy = this.policy, feeds = null }) {
+  async evaluatePair({ base, head, headDir = null, mutation = null, description = null, policy = this.policy, feeds = null, probeSubdir = false }) {
     const flags = [...POLICY_FLAGS[policy], ...(feeds ? ['--feeds', feeds] : [])]
     const pair = {
       repo: this.source,
@@ -478,6 +565,7 @@ class RepoSession {
       extra: [],
       oracle_errors: [],
       line_map_fallbacks: [],
+      subdir_check: null,
       inert: null,
       timings: null,
       stats: null,
@@ -486,30 +574,35 @@ class RepoSession {
       pair.result = 'fail'
       pair.reasons.push(reason)
     }
-    const baseDir = this.worktree(base)
-    const headTree = headDir ?? this.worktree(head)
-    let baseCheck = this.check(baseDir, flags)
-    let headCheck = this.check(headTree, flags)
-    let changedRun = this.changed(headTree, base, flags)
+    const baseDir = await this.worktree(base)
+    const headTree = headDir ?? await this.worktree(head)
+    let baseCheck = await this.check(baseDir, flags)
+    let headCheck = await this.check(headTree, flags)
+    let changedRun = await this.changed(headTree, base, flags)
     pair.exit = { changed: changedRun.code, base: baseCheck.code, head: headCheck.code }
-    for (const [label, run] of [['full base', baseCheck], ['full head', headCheck], ['--changed', changedRun]]) {
-      if (run.timedOut) fail(`crash: ${label} check timed out after ${settings.timeoutMs / 1000}s`)
+    for (const [label, result] of [['full base', baseCheck], ['full head', headCheck], ['--changed', changedRun]]) {
+      if (result.timedOut) fail(`crash: ${label} check timed out after ${settings.timeoutMs / 1000}s`)
     }
-    if (headCheck.code === 2 && changedRun.code !== 2 && !changedRun.timedOut) {
-      fail(headCheck.incomplete
-        ? `incomplete head coverage produced a --changed gate result (exit ${changedRun.code})`
-        : `full head check exited 2 but --changed exited ${changedRun.code}`)
+    if (!headCheck.findings && !headCheck.timedOut && !changedRun.timedOut) {
+      if (headCheck.code === 2 && changedRun.code !== 2) {
+        fail(headCheck.incomplete
+          ? `incomplete head coverage produced a --changed gate result (exit ${changedRun.code})`
+          : `full head check exited 2 but --changed exited ${changedRun.code}`)
+      } else if (headCheck.code !== 2 && changedRun.code === 0) {
+        fail(`full head check failed (exit ${headCheck.code}: ${headCheck.error}) but --changed exited 0`)
+      }
     }
+    const allowFlags = [...flags, '--allow-incomplete']
     if (headCheck.incomplete) {
       pair.allow_incomplete.head = true
-      headCheck = this.check(headTree, [...flags, '--allow-incomplete'])
-      changedRun = this.changed(headTree, base, [...flags, '--allow-incomplete'])
+      headCheck = await this.check(headTree, allowFlags)
+      changedRun = await this.changed(headTree, base, allowFlags)
       pair.exit.head_allow_incomplete = headCheck.code
       pair.exit.changed_allow_incomplete = changedRun.code
     }
     if (baseCheck.incomplete) {
       pair.allow_incomplete.base = true
-      baseCheck = this.check(baseDir, [...flags, '--allow-incomplete'])
+      baseCheck = await this.check(baseDir, allowFlags)
       pair.exit.base_allow_incomplete = baseCheck.code
     }
     pair.stats = changedRun.stats ?? null
@@ -545,28 +638,31 @@ class RepoSession {
 
     const baseIndex = new Map()
     for (const entry of withOccurrences(baseCheck.findings ?? [])) baseIndex.set(`${entry.key}#${entry.occurrence}`, entry.finding)
-    const untracked = headDir === null ? new Set() : new Set(git(headTree, ['ls-files', '-z', '--others', '--exclude-standard']).stdout.split('\0').filter(Boolean))
+    const untracked = headDir === null ? new Set() : new Set((await git(headTree, ['ls-files', '-z', '--others', '--exclude-standard'])).stdout.split('\0').filter(Boolean))
+    // A working-tree head has no commit to blame, so its lines map through this harness's own diff of BASE against the working tree.
+    const workingDiff = headDir === null ? null : await diffFileRecords(headTree, base)
     const lineMaps = new Map()
     let diffRecords = null
+    const prepareFile = async file => {
+      if (lineMaps.has(file) || untracked.has(file) || workingDiff) return
+      try {
+        const map = await blameLineMap(this.clone, base, head, file)
+        const foreign = [...map.values()].filter(entry => entry.boundary).length
+        if (foreign) {
+          // A line blamed to a boundary other than BASE is not proof of a change; map this file from the diff instead.
+          diffRecords ??= await diffFileRecords(this.clone, base, head)
+          pair.line_map_fallbacks.push({ file, foreign_boundary_lines: foreign })
+          lineMaps.set(file, { fallback: true })
+        } else {
+          lineMaps.set(file, map)
+        }
+      } catch (error) {
+        lineMaps.set(file, error)
+      }
+    }
     const mapLine = (file, line) => {
       if (untracked.has(file)) return { base: false }
-      if (base === head) return { base: true, file, line }
-      if (!lineMaps.has(file)) {
-        try {
-          const map = blameLineMap(this.clone, base, head, file)
-          const foreign = [...map.values()].filter(entry => entry.boundary).length
-          if (foreign) {
-            // A line blamed to a boundary other than BASE is not proof of a change; map this file from the diff instead.
-            diffRecords ??= diffFileRecords(this.clone, base, head)
-            pair.line_map_fallbacks.push({ file, foreign_boundary_lines: foreign })
-            lineMaps.set(file, { fallback: true })
-          } else {
-            lineMaps.set(file, map)
-          }
-        } catch (error) {
-          lineMaps.set(file, error)
-        }
-      }
+      if (workingDiff) return diffLineMap(workingDiff, file, line)
       const map = lineMaps.get(file)
       if (map instanceof Error) throw map
       if (map.fallback) return diffLineMap(diffRecords, file, line)
@@ -574,6 +670,7 @@ class RepoSession {
       if (!mapped) throw new Error(`git blame has no line ${line} for ${file}`)
       return mapped
     }
+    for (const file of new Set(headCheck.findings.map(finding => repoPath(finding.file)))) await prepareFile(file)
     const required = new Map()
     const oldDebt = new Map()
     let requiredChanged = 0
@@ -623,6 +720,14 @@ class RepoSession {
       if (match ? match.status !== finding.status || isBad(match) !== isBad(finding) : isBad(finding)) statusChanges++
     }
 
+    const missingFrom = (findings, requiredFindings) => {
+      const present = new Map()
+      for (const finding of findings.filter(isBad)) {
+        const key = keyOf(finding.file, finding.line, finding.id, finding.matched)
+        present.set(key, (present.get(key) ?? 0) + 1)
+      }
+      return [...requiredFindings].flatMap(([key, expected]) => expected.slice(present.get(key) ?? 0))
+    }
     const reported = new Map()
     let changedBad = 0
     for (const finding of changedRun.findings.filter(isBad)) {
@@ -660,6 +765,30 @@ class RepoSession {
       pair.reasons.push(`missing ${pair.missing.length} oracle-required finding(s)`)
       if (changedRun.code === 0) pair.reasons.push('false clean: --changed exited 0')
     }
+
+    if (probeSubdir) {
+      // One run per repository with a subdirectory target and a symbolic base ref, judged by the same oracle restricted to that directory.
+      const parent = (await git(headTree, ['rev-parse', '--verify', '--quiet', 'HEAD~1^{commit}'], { allowFail: true })).stdout.trim()
+      const subdir = [...pair.required, ...headCheck.findings.map(summarize)]
+        .map(finding => finding.file.split('/'))
+        .find(parts => parts.length > 1)?.[0]
+      if (parent !== base || !subdir) {
+        pair.notes.push(parent !== base ? 'subdirectory check skipped: HEAD~1 is not the base' : 'subdirectory check skipped: no subdirectory holds a finding')
+      } else {
+        const subRun = await this.changed(headTree, 'HEAD~1', pair.allow_incomplete.head ? allowFlags : flags, subdir)
+        const inSubdir = new Map([...required].map(([key, findings]) => [key, findings.filter(finding => finding.file.startsWith(`${subdir}/`))]).filter(([, findings]) => findings.length))
+        pair.subdir_check = { target: subdir, base_ref: 'HEAD~1', exit: subRun.code, required: [...inSubdir.values()].flat().length, missing: [] }
+        if (!subRun.findings) {
+          fail(`subdirectory check: --changed ${subRun.error}`)
+        } else {
+          const lost = missingFrom(subRun.findings, inSubdir)
+          pair.subdir_check.missing = lost
+          const subBad = subRun.findings.filter(isBad).length
+          if (subRun.code !== (subBad ? 1 : 0)) fail(`subdirectory check: exit mismatch: --changed exited ${subRun.code} with ${subBad} bad finding(s)`)
+          if (lost.length) fail(`subdirectory check: missing ${lost.length} oracle-required finding(s) under ${subdir}/`)
+        }
+      }
+    }
     return pair
   }
 }
@@ -669,11 +798,20 @@ const removeTempRoots = () => {
   liveTempRoots.clear()
 }
 
-const yieldToSignals = () => new Promise(resolve => setImmediate(resolve))
+// Kills every running child group, waits briefly for them to exit, then removes the temp roots.
+export const stopForSignal = async signal => {
+  if (stopping) return
+  stopping = signal
+  const closing = [...running.values()]
+  for (const child of running.keys()) killGroup(child)
+  await Promise.race([Promise.all(closing), new Promise(resolve => setTimeout(resolve, 3000))])
+  removeTempRoots()
+}
 
-export const runE2e = async ({ checker, repos, commits = 10, synthetic = false, policy = 'broad', keep = false, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, log = () => {} }) => {
+export const runE2e = async ({ checker, repos, commits = 10, mutations = [], policy = 'broad', feedsSource = null, keep = false, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, log = () => {} }) => {
   settings.timeoutMs = timeoutSeconds * 1000
-  const report = { schema: 'model-eol/e2e-changed@0', checker, policy, flags: POLICY_FLAGS[policy], commits, synthetic, timeout_seconds: timeoutSeconds, repos: [], pairs: [] }
+  const feeds = resolveFeedsSource(checker, feedsSource)
+  const report = { schema: 'model-eol/e2e-changed@0', checker, policy, flags: POLICY_FLAGS[policy], commits, mutations, feeds_source: feeds, timeout_seconds: timeoutSeconds, repos: [], pairs: [] }
   for (const repo of repos) {
     const source = path.resolve(repo)
     const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-e2e-changed-')))
@@ -681,8 +819,8 @@ export const runE2e = async ({ checker, repos, commits = 10, synthetic = false, 
     const entry = { repo: source, status: 'ok', reason: null, pairs: 0, temp: keep ? tempRoot : null, skipped_mutations: [] }
     report.repos.push(entry)
     try {
-      const session = new RepoSession({ source, tempRoot, checker, policy })
-      const prepared = fs.existsSync(source) ? session.prepare() : { failed: 'path does not exist' }
+      const session = new RepoSession({ source, tempRoot, checker, policy, feedsSource: feeds })
+      const prepared = fs.existsSync(source) ? await session.prepare() : { failed: 'path does not exist' }
       if (prepared.failed || prepared.skipped) {
         entry.status = prepared.failed ? 'failed' : 'skipped'
         entry.reason = prepared.failed ?? prepared.skipped
@@ -691,18 +829,14 @@ export const runE2e = async ({ checker, repos, commits = 10, synthetic = false, 
       }
       entry.head = session.head
       entry.note = session.headNote
-      const pairs = session.historyPairs(commits)
-      if (synthetic) {
-        for (const mutation of MUTATIONS) {
-          await yieldToSignals()
-          const result = session.mutate(mutation)
-          if (result.skipped) entry.skipped_mutations.push({ mutation, reason: result.skipped })
-          else pairs.push({ ...result, mutation })
-        }
+      const pairs = await session.historyPairs(commits)
+      for (const mutation of mutations) {
+        const result = await session.mutate(mutation)
+        if (result.skipped) entry.skipped_mutations.push({ mutation, reason: result.skipped })
+        else pairs.push(...result.pairs)
       }
       for (const pair of pairs) {
-        await yieldToSignals()
-        const evaluated = session.evaluatePair(pair)
+        const evaluated = await session.evaluatePair(pair)
         report.pairs.push(evaluated)
         entry.pairs++
         const label = evaluated.mutation ? `mutation ${evaluated.mutation}` : evaluated.head.slice(0, 12)
@@ -715,7 +849,7 @@ export const runE2e = async ({ checker, repos, commits = 10, synthetic = false, 
       entry.reason = error.message
       log(`error ${source}: ${error.message}`)
     } finally {
-      if (!keep) {
+      if (!keep && !stopping) {
         fs.rmSync(tempRoot, { recursive: true, force: true })
         liveTempRoots.delete(tempRoot)
       }
@@ -736,12 +870,15 @@ export const runE2e = async ({ checker, repos, commits = 10, synthetic = false, 
     oracle_errors: report.pairs.reduce((sum, pair) => sum + pair.oracle_errors.length, 0),
     crashes: reasonCount('crash'),
     exit_mismatches: reasonCount('exit mismatch'),
-    incomplete_gates: reasonCount('incomplete head coverage') + reasonCount('full head check exited 2'),
+    incomplete_gates: reasonCount('incomplete head coverage') + reasonCount('full head check exited 2') + reasonCount('full head check failed'),
+    subdir_checks: report.pairs.filter(pair => pair.subdir_check).length,
+    subdir_failures: reasonCount('subdirectory check'),
     incomplete: report.pairs.filter(pair => pair.result === 'incomplete').length,
     allow_incomplete: report.pairs.filter(pair => pair.allow_incomplete.base || pair.allow_incomplete.head).length,
     false_clean: reasonCount('false clean'),
     line_map_fallbacks: report.pairs.reduce((sum, pair) => sum + pair.line_map_fallbacks.length, 0),
     inert: report.pairs.filter(pair => pair.inert).map(pair => pair.mutation),
+    skipped_mutations: report.repos.flatMap(repo => repo.skipped_mutations.map(({ mutation }) => mutation)),
     slow: evaluated.filter(pair => pair.timings.slow).length,
     timing_ratio_median: ratios.length ? Number(median(ratios).toFixed(3)) : null,
     timing_ratio_max: ratios.length ? Number(Math.max(...ratios).toFixed(3)) : null,
@@ -755,13 +892,17 @@ export const formatSummary = report => {
   const lines = [
     `model-eol --changed e2e: ${s.repos} repo(s) (${s.repos_skipped} skipped, ${s.repos_failed} failed), ${s.pairs} pair(s), ${s.evaluated} evaluated, policy ${report.policy}`,
     `  missing ${s.missing}, extra ${s.extra}, crashes ${s.crashes}, exit mismatches ${s.exit_mismatches}, oracle errors ${s.oracle_errors}, incomplete gates ${s.incomplete_gates}, false clean ${s.false_clean}`,
-    `  incomplete ${s.incomplete}, compared with --allow-incomplete ${s.allow_incomplete}, diff line-map fallbacks ${s.line_map_fallbacks}, inert mutations ${s.inert.length ? s.inert.join(',') : 'none'}`,
+    `  incomplete ${s.incomplete}, compared with --allow-incomplete ${s.allow_incomplete}, diff line-map fallbacks ${s.line_map_fallbacks}, subdirectory checks ${s.subdir_checks} (${s.subdir_failures} failed)`,
+    `  inert mutations ${s.inert.length ? s.inert.join(',') : 'none'}`,
     `  timing --changed/full head: median ${s.timing_ratio_median ?? 'n/a'}x, max ${s.timing_ratio_max ?? 'n/a'}x, slow ${s.slow}`,
   ]
-  for (const repo of report.repos.filter(repo => repo.status !== 'ok')) lines.push(`  ${repo.status} ${repo.repo}: ${repo.reason}`)
+  for (const repo of report.repos) {
+    if (repo.status !== 'ok') lines.push(`  ${repo.status} ${repo.repo}: ${repo.reason}`)
+    for (const { mutation, reason } of repo.skipped_mutations) lines.push(`  skipped mutation ${mutation} in ${path.basename(repo.repo)}: ${reason}`)
+  }
   if (s.evaluated === 0) lines.push('  no pair was evaluated')
   for (const pair of report.pairs.filter(pair => pair.result !== 'pass')) {
-    lines.push(`  ${pair.result.toUpperCase()} ${pair.base.slice(0, 12)}..${pair.head.slice(0, 12)}${pair.mutation ? ` (mutation ${pair.mutation})` : ''}: ${pair.reasons.join('; ')}`)
+    lines.push(`  ${pair.result.toUpperCase()} ${pair.base.slice(0, 12)}..${pair.head.slice(0, 12)}${pair.working_tree ? '+worktree' : ''}${pair.mutation ? ` (mutation ${pair.mutation})` : ''}: ${pair.reasons.join('; ')}`)
     for (const finding of pair.missing.slice(0, 10)) lines.push(`    missing ${finding.file}:${finding.line} ${finding.id} (${finding.reason})`)
   }
   lines.push(report.ok ? 'result: PASS' : 'result: FAIL')
@@ -776,9 +917,11 @@ async function main(argv) {
       repo: { type: 'string', multiple: true },
       commits: { type: 'string' },
       synthetic: { type: 'boolean' },
+      mutations: { type: 'string' },
       out: { type: 'string' },
       keep: { type: 'boolean' },
       policy: { type: 'string' },
+      'feeds-source': { type: 'string' },
       'timeout-seconds': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -799,12 +942,17 @@ async function main(argv) {
   if (!Number.isInteger(commits) || commits < 0) throw usageError('--commits must be a non-negative integer')
   const timeoutSeconds = values['timeout-seconds'] === undefined ? DEFAULT_TIMEOUT_SECONDS : Number(values['timeout-seconds'])
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) throw usageError('--timeout-seconds must be a positive number')
+  const mutations = values.mutations !== undefined ? values.mutations.split(',').filter(Boolean) : values.synthetic ? MUTATIONS : []
+  const unknown = mutations.find(mutation => !MUTATIONS.includes(mutation))
+  if (unknown) throw usageError(`unknown mutation ${unknown}; known: ${MUTATIONS.join(',')}`)
+  if (values['feeds-source'] !== undefined && !fs.existsSync(values['feeds-source'])) throw usageError(`--feeds-source ${values['feeds-source']} does not exist`)
   const report = await runE2e({
     checker,
     repos: values.repo,
     commits,
-    synthetic: values.synthetic ?? false,
+    mutations,
     policy,
+    feedsSource: values['feeds-source'] ?? null,
     keep: values.keep ?? false,
     timeoutSeconds,
     log: line => console.error(line),
@@ -816,17 +964,20 @@ async function main(argv) {
 }
 
 if (path.resolve(process.argv[1] ?? '') === path.resolve(import.meta.filename)) {
-  for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
-    process.on(signal, () => {
-      removeTempRoots()
-      process.exit(code)
+  for (const signal of Object.keys(SIGNAL_EXIT)) {
+    process.on(signal, async () => {
+      await stopForSignal(signal)
+      process.exit(SIGNAL_EXIT[signal])
     })
   }
   try {
     process.exitCode = await main(process.argv.slice(2))
   } catch (error) {
+    if (error instanceof InterruptedError) {
+      await new Promise(() => {})
+    }
     removeTempRoots()
     console.error(`e2e-changed: ${error.message}`)
-    process.exitCode = error instanceof InterruptedError ? (error.signal === 'SIGINT' ? 130 : 143) : error.exitCode ?? 1
+    process.exitCode = error.exitCode ?? 1
   }
 }
