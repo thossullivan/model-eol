@@ -1943,6 +1943,22 @@ const retiredBase = { status: 'retired', via: 'publisher', usage: 'model-referen
 }
 
 {
+  for (const name of ['"x".py', '.env.x\r']) {
+    const repo = compareRepo(`hidden edit to ${JSON.stringify(name)}`, {
+      '.model-eol.json': { scope: 'all' },
+      [name]: 'M = "clean-model"\n',
+      x: 'M = "clean-model"\n',
+      '.env.x': 'M = "clean-model"\n',
+    })
+    assert(repo.git(['update-index', '--assume-unchanged', '--', name]).status === 0, `hidden edit test marks ${JSON.stringify(name)} assume-unchanged`)
+    fs.writeFileSync(path.join(repo.dir, name), 'M = "retired-model"\n')
+    repo.write({ '.model-eol.json': { scope: 'all', issues: { enabled: false } } })
+    const result = runCompare(`hidden edit to ${JSON.stringify(name)}`, repo.dir)
+    assert(result.code === 1 && result.findings.length === 1 && result.findings[0].file.endsWith(name), `--changed hashes ${JSON.stringify(name)} itself, not the file git hash-object --stdin-paths would read`)
+  }
+}
+
+{
   const repo = compareRepo('assume-unchanged file left alone', {
     '.model-eol.json': { scope: 'all', days: 30 },
     'c/s.py': 'M = "soon-model"\n',
