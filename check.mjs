@@ -479,7 +479,7 @@ if (incompleteNotes.length && (command === 'check' || command === 'plan')) {
   if (!ALLOW_INCOMPLETE) return 2
 }
 
-const evaluateBase = ({ treeRoot, files, configFile, feedsDir, classificationPathFor }) => {
+const loadBase = ({ configFile, feedsDir }) => {
   let config = repositoryConfig
   let baseFeeds = feedData
   try {
@@ -498,13 +498,18 @@ const evaluateBase = ({ treeRoot, files, configFile, feedsDir, classificationPat
   }
   const basePolicyError = policyError(config, baseFeeds, values.via)
   if (basePolicyError) throw new BaseUnavailableError(`base policy: ${basePolicyError}`)
+  return { config, feeds: baseFeeds }
+}
+
+const evaluateBase = ({ treeRoot, files, configFile, feedsDir, inputs, classificationPathFor }) => {
+  const { config, feeds } = inputs ?? loadBase({ configFile, feedsDir })
   try {
     const base = evaluateTargets({
       targets: files,
       config,
       roots: [treeRoot],
       ignoredFiles: configFile ? [configFile] : [],
-      feedData: baseFeeds,
+      feedData: feeds,
       overrides,
       includeDocs: INCLUDE_DOCS,
       noGit: true,
@@ -517,9 +522,10 @@ const evaluateBase = ({ treeRoot, files, configFile, feedsDir, classificationPat
 }
 
 let changedFindings = checkFindings
+let changedStats
 if (CHANGED_BASE !== null) {
   try {
-    changedFindings = selectChangedFindings({
+    const selection = selectChangedFindings({
       targets,
       baseRef: CHANGED_BASE,
       findings,
@@ -527,11 +533,23 @@ if (CHANGED_BASE !== null) {
       scannedFiles: scan.files,
       configFile: configLocation.file,
       feedsDir: FEEDS_DIR,
+      head: { config: repositoryConfig, feeds: feedData, overrides, repoPathFor: file => repoPathForFile(file, configLocation.roots) },
+      loadBase,
       evaluateBase,
     })
+    changedFindings = selection.findings
+    changedStats = selection.stats
   } catch (e) {
     console.error(`--changed failed: ${e.message}`)
     return 2
+  }
+  const statsFile = process.env.MODEL_EOL_CHANGED_STATS
+  if (statsFile) {
+    try {
+      fs.writeFileSync(statsFile, `${JSON.stringify({ schema: 'model-eol/changed-stats@0', ...changedStats, total_ms: Math.round(performance.now()) })}\n`)
+    } catch (e) {
+      console.error(printable(`model-eol: warning: could not write --changed stats to ${statsFile}: ${e.message}`))
+    }
   }
 }
 const bad = changedFindings.filter(isBad)
