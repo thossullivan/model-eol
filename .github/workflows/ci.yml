@@ -101,6 +101,55 @@ jobs:
         with:
           command: check
           paths: .action-uat/configured
+      - name: Create --changed consumer repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit_all() {
+            git -C "$1" add -A
+            git -C "$1" -c user.name='model-eol UAT' -c user.email=uat@example.invalid -c commit.gpgsign=false commit -q -m base
+          }
+          git init -q .action-uat/changed-config
+          printf '%s\n' 'MODEL = "claude-opus-4-1-20250805"' > .action-uat/changed-config/app.py
+          printf '%s\n' '{"ignore":{"models":["claude-opus-4-1-20250805"]}}' > .action-uat/changed-config/.model-eol.json
+          commit_all .action-uat/changed-config
+          printf '%s\n' '{}' > .action-uat/changed-config/.model-eol.json
+          git init -q .action-uat/changed-debt
+          printf '%s\n' 'MODEL = "claude-opus-4-1-20250805"' 'RETRIES = 1' > .action-uat/changed-debt/app.py
+          commit_all .action-uat/changed-debt
+          printf '%s\n' 'MODEL = "claude-opus-4-1-20250805"' 'RETRIES = 2' > .action-uat/changed-debt/app.py
+      - name: UAT changed gate fails on a config-only change that makes a reference bad
+        id: changed-config
+        continue-on-error: true
+        uses: ./
+        with:
+          command: check
+          paths: .action-uat/changed-config
+          changed: HEAD
+          json: 'true'
+          output-file: action-uat-changed-config.json
+      - name: Require the config-only change to fail the changed gate
+        shell: bash
+        env:
+          CHANGED_CONFIG_OUTCOME: ${{ steps.changed-config.outcome }}
+        run: |
+          if [ "$CHANGED_CONFIG_OUTCOME" != 'failure' ]; then
+            echo "expected the changed gate to fail on a newly actionable reference; outcome was $CHANGED_CONFIG_OUTCOME" >&2
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+          const report = JSON.parse(fs.readFileSync('action-uat-changed-config.json', 'utf8'))
+          if (!report.findings.some(finding => finding.matched === 'claude-opus-4-1-20250805' && finding.changed?.reason === 'newly-actionable')) {
+            throw new Error('the changed gate failed without reporting the newly actionable reference')
+          }
+          NODE
+      - name: UAT changed gate passes an edit next to old debt
+        uses: ./
+        with:
+          command: check
+          paths: .action-uat/changed-debt
+          changed: HEAD
       - name: Upload Action UAT inventory
         uses: actions/upload-artifact@v7
         with:

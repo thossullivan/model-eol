@@ -266,6 +266,49 @@ try {
     config: selectedConfig,
   }, { cwd: tempRoot })
   assert.equal(explicitConfig.code, 0, 'config input selects an explicit shared config')
+
+  const gitIn = (cwd, ...args) => {
+    const result = spawnSync('git', ['-c', 'user.name=model-eol test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' })
+    assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`)
+  }
+  const changedRepo = (name, files, edits) => {
+    const repo = path.join(tempRoot, name)
+    fs.mkdirSync(repo)
+    gitIn(repo, 'init', '-q')
+    for (const [file, content] of Object.entries(files)) fs.writeFileSync(path.join(repo, file), content)
+    gitIn(repo, 'add', '-A')
+    gitIn(repo, 'commit', '-q', '--no-verify', '-m', 'base')
+    for (const [file, content] of Object.entries(edits)) fs.writeFileSync(path.join(repo, file), content)
+  }
+  changedRepo('changed-config', {
+    'app.py': 'MODEL = "claude-opus-4-1-20250805"\n',
+    '.model-eol.json': '{"ignore":{"models":["claude-opus-4-1-20250805"]}}\n',
+  }, { '.model-eol.json': '{}\n' })
+  const changedConfig = runAction({ command: 'check', paths: 'changed-config', changed: 'HEAD' }, { cwd: tempRoot })
+  assert.equal(changedConfig.code, 1, `changed input fails a config-only change that makes an unchanged reference bad: ${changedConfig.err}`)
+  changedRepo('changed-debt', {
+    'app.py': 'MODEL = "claude-opus-4-1-20250805"\nRETRIES = 1\n',
+  }, { 'app.py': 'MODEL = "claude-opus-4-1-20250805"\nRETRIES = 2\n' })
+  const changedDebt = runAction({ command: 'check', paths: 'changed-debt', changed: 'HEAD' }, { cwd: tempRoot })
+  assert.equal(changedDebt.code, 0, `changed input passes an edit next to old debt: ${changedDebt.out}${changedDebt.err}`)
+
+  const ciSteps = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8').split(/\n(?=      - )/)
+  const ciStep = name => {
+    const matches = ciSteps.filter(step => step.startsWith(`      - name: ${name}\n`))
+    assert.equal(matches.length, 1, `CI has exactly one step named ${name}`)
+    return matches[0]
+  }
+  const mustFail = ciStep('UAT changed gate fails on a config-only change that makes a reference bad')
+  for (const line of ['id: changed-config', 'continue-on-error: true', 'uses: ./', 'paths: .action-uat/changed-config', 'changed: HEAD']) {
+    assert(mustFail.split('\n').some(stepLine => stepLine.trim() === line), `the must-fail changed step has ${line}`)
+  }
+  const outcomeCheck = ciStep('Require the config-only change to fail the changed gate')
+  assert(outcomeCheck.includes('${{ steps.changed-config.outcome }}') && outcomeCheck.includes("!= 'failure'") && outcomeCheck.includes("'newly-actionable'"), 'CI fails unless the config-only changed gate failed on a newly actionable reference')
+  const mustPass = ciStep('UAT changed gate passes an edit next to old debt')
+  for (const line of ['uses: ./', 'paths: .action-uat/changed-debt', 'changed: HEAD']) {
+    assert(mustPass.split('\n').some(stepLine => stepLine.trim() === line), `the must-pass changed step has ${line}`)
+  }
+  assert(!mustPass.includes('continue-on-error'), 'the must-pass changed step can fail the job')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }
