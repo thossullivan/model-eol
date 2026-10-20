@@ -292,9 +292,23 @@ try {
   const changedDebt = runAction({ command: 'check', paths: 'changed-debt', changed: 'HEAD' }, { cwd: tempRoot })
   assert.equal(changedDebt.code, 0, `changed input passes an edit next to old debt: ${changedDebt.out}${changedDebt.err}`)
 
-  const ciWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8')
-  assert.match(ciWorkflow, /id: changed-config\n\s+continue-on-error: true\n\s+uses: \.\/\n[\s\S]*?changed: HEAD/, 'CI runs the Action changed gate on a config-only change without stopping the job')
-  assert.match(ciWorkflow, /steps\.changed-config\.outcome/, 'CI fails unless the config-only changed gate failed')
+  const ciSteps = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8').split(/\n(?=      - )/)
+  const ciStep = name => {
+    const matches = ciSteps.filter(step => step.startsWith(`      - name: ${name}\n`))
+    assert.equal(matches.length, 1, `CI has exactly one step named ${name}`)
+    return matches[0]
+  }
+  const mustFail = ciStep('UAT changed gate fails on a config-only change that makes a reference bad')
+  for (const line of ['id: changed-config', 'continue-on-error: true', 'uses: ./', 'paths: .action-uat/changed-config', 'changed: HEAD']) {
+    assert(mustFail.split('\n').some(stepLine => stepLine.trim() === line), `the must-fail changed step has ${line}`)
+  }
+  const outcomeCheck = ciStep('Require the config-only change to fail the changed gate')
+  assert(outcomeCheck.includes('${{ steps.changed-config.outcome }}') && outcomeCheck.includes("!= 'failure'") && outcomeCheck.includes("'newly-actionable'"), 'CI fails unless the config-only changed gate failed on a newly actionable reference')
+  const mustPass = ciStep('UAT changed gate passes an edit next to old debt')
+  for (const line of ['uses: ./', 'paths: .action-uat/changed-debt', 'changed: HEAD']) {
+    assert(mustPass.split('\n').some(stepLine => stepLine.trim() === line), `the must-pass changed step has ${line}`)
+  }
+  assert(!mustPass.includes('continue-on-error'), 'the must-pass changed step can fail the job')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }
