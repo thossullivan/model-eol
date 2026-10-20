@@ -73,6 +73,11 @@ const run = (command, args, { cwd, env }) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => {
     timedOut = true
     killGroup(child)
+    // A descendant that left the group can hold the pipes open after the child exits.
+    if (child.exitCode !== null || child.signalCode !== null) {
+      child.stdout.destroy()
+      child.stderr.destroy()
+    }
   }, settings.timeoutMs)
   const closed = new Promise(done => child.on('close', done))
   running.set(child, closed)
@@ -301,6 +306,21 @@ const resolveFeedsSource = (checker, explicit) => {
   return fs.existsSync(bundled) ? bundled : path.join(import.meta.dirname, '..', 'feeds')
 }
 
+class UnsafeWrite extends Error {}
+
+// Refuses a path that is a symlink or lies under one, so a mutation never writes outside the clone.
+export const guardWrite = (root, relative) => {
+  const absolute = path.join(root, relative)
+  const realRoot = fs.realpathSync(root)
+  let ancestor = path.dirname(absolute)
+  while (!fs.existsSync(ancestor)) ancestor = path.dirname(ancestor)
+  const realAncestor = fs.realpathSync(ancestor)
+  if (fs.lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink() || (realAncestor !== realRoot && !realAncestor.startsWith(`${realRoot}${path.sep}`))) {
+    throw new UnsafeWrite(`${relative} is a symlink or lies under one`)
+  }
+  return absolute
+}
+
 class RepoSession {
   constructor({ source, tempRoot, checker, policy, feedsSource }) {
     this.source = source
@@ -397,9 +417,9 @@ class RepoSession {
     const notBad = present.filter(finding => !isBad(finding))
     const bad = present.filter(isBad)
     const linesIn = file => new Set(present.filter(finding => repoPath(finding.file) === file).map(finding => finding.line))
-    const writeConfig = config => fs.writeFileSync(path.join(directory, '.model-eol.json'), `${JSON.stringify(config, null, 2)}\n`)
+    const writeConfig = config => fs.writeFileSync(guardWrite(directory, '.model-eol.json'), `${JSON.stringify(config, null, 2)}\n`)
     const insertLines = (file, index, added) => {
-      const absolute = path.join(directory, file)
+      const absolute = guardWrite(directory, file)
       const lines = fs.readFileSync(absolute, 'utf8').split('\n')
       lines.splice(Math.max(0, Math.min(index, lines.length)), 0, ...added)
       fs.writeFileSync(absolute, lines.join('\n'))
@@ -470,7 +490,7 @@ class RepoSession {
       const target = notBad.find(finding => ids.has(finding.id))
       if (!target) return { skipped: 'no reference that is not bad resolves to a feed entry' }
       const inRepo = path.join(directory, IN_REPO_FEEDS)
-      step(`copy the feeds into ${IN_REPO_FEEDS}`, () => fs.cpSync(this.feedsDir, inRepo, { recursive: true }))
+      step(`copy the feeds into ${IN_REPO_FEEDS}`, () => fs.cpSync(this.feedsDir, guardWrite(directory, IN_REPO_FEEDS), { recursive: true }))
       step(`retire ${target.id} in ${IN_REPO_FEEDS}`, () => {
         const { name } = feedModels(inRepo).find(({ model }) => model.id === target.id)
         const feed = JSON.parse(fs.readFileSync(path.join(inRepo, name), 'utf8'))
@@ -478,7 +498,7 @@ class RepoSession {
         Object.assign(model, { announced: '2020-01-01', shutdown: '2020-01-02' })
         delete model.date_precision
         delete model.distributions
-        fs.writeFileSync(path.join(inRepo, name), `${JSON.stringify(feed, null, 2)}\n`)
+        fs.writeFileSync(guardWrite(directory, `${IN_REPO_FEEDS}/${name}`), `${JSON.stringify(feed, null, 2)}\n`)
       })
       feeds = IN_REPO_FEEDS
       pairSteps = 'all'
@@ -504,11 +524,11 @@ class RepoSession {
     } else if (mutation === 'k') {
       const retired = fs.existsSync(this.feedsDir) ? retiredModel(this.feedsDir) : null
       if (!retired) return { skipped: 'no retired feed model' }
-      fs.writeFileSync(path.join(directory, UNTRACKED_FILE), `MODEL = "${retired.id}"\n`)
+      fs.writeFileSync(guardWrite(directory, UNTRACKED_FILE), `MODEL = "${retired.id}"\n`)
       return workingTree(`untracked ${UNTRACKED_FILE} referencing ${retired.id}`)
     } else if (mutation === 'l') {
-      step('make the config invalid JSON', () => fs.writeFileSync(path.join(directory, '.model-eol.json'), '{ "days": \n'))
-      step('restore a valid config', () => fs.writeFileSync(path.join(directory, '.model-eol.json'), bytes && !configError ? bytes : '{}\n'))
+      step('make the config invalid JSON', () => fs.writeFileSync(guardWrite(directory, '.model-eol.json'), '{ "days": \n'))
+      step('restore a valid config', () => fs.writeFileSync(guardWrite(directory, '.model-eol.json'), bytes && !configError ? bytes : '{}\n'))
     } else if (mutation === 'm') {
       const change = removeIgnore() ?? toggleVia()
       writeConfig(change.config)
@@ -519,7 +539,7 @@ class RepoSession {
       const candidates = [...new Set(present.map(finding => repoPath(finding.file)))].filter(file => tracked.has(file))
       const file = candidates.find(candidate => CODE_EXTENSIONS.has(path.posix.extname(candidate))) ?? candidates[0]
       if (!retired || !file) return { skipped: retired ? 'no tracked file holds a reference' : 'no retired feed model' }
-      const absolute = path.join(directory, file)
+      const absolute = guardWrite(directory, file)
       const text = fs.readFileSync(absolute, 'utf8')
       fs.writeFileSync(absolute, `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}E2E_DIRTY = "${retired.id}"\n`)
       return workingTree(`uncommitted edit adds ${retired.id} to ${file}`)
@@ -775,7 +795,7 @@ class RepoSession {
       if (parent !== base || !subdir) {
         pair.notes.push(parent !== base ? 'subdirectory check skipped: HEAD~1 is not the base' : 'subdirectory check skipped: no subdirectory holds a finding')
       } else {
-        const subRun = await this.changed(headTree, 'HEAD~1', pair.allow_incomplete.head ? allowFlags : flags, subdir)
+        const subRun = await this.changed(headTree, 'HEAD~1', pair.allow_incomplete.head ? allowFlags : flags, `./${subdir}`)
         const inSubdir = new Map([...required].map(([key, findings]) => [key, findings.filter(finding => finding.file.startsWith(`${subdir}/`))]).filter(([, findings]) => findings.length))
         pair.subdir_check = { target: subdir, base_ref: 'HEAD~1', exit: subRun.code, required: [...inSubdir.values()].flat().length, missing: [] }
         if (!subRun.findings) {
@@ -799,13 +819,14 @@ const removeTempRoots = () => {
 }
 
 // Kills every running child group, waits briefly for them to exit, then removes the temp roots.
-export const stopForSignal = async signal => {
-  if (stopping) return
+let stopped = null
+export const stopForSignal = signal => {
+  if (stopped) return stopped
   stopping = signal
   const closing = [...running.values()]
   for (const child of running.keys()) killGroup(child)
-  await Promise.race([Promise.all(closing), new Promise(resolve => setTimeout(resolve, 3000))])
-  removeTempRoots()
+  stopped = Promise.race([Promise.all(closing), new Promise(resolve => setTimeout(resolve, 3000))]).then(removeTempRoots)
+  return stopped
 }
 
 export const runE2e = async ({ checker, repos, commits = 10, mutations = [], policy = 'broad', feedsSource = null, keep = false, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS, log = () => {} }) => {
@@ -831,7 +852,13 @@ export const runE2e = async ({ checker, repos, commits = 10, mutations = [], pol
       entry.note = session.headNote
       const pairs = await session.historyPairs(commits)
       for (const mutation of mutations) {
-        const result = await session.mutate(mutation)
+        let result
+        try {
+          result = await session.mutate(mutation)
+        } catch (error) {
+          if (!(error instanceof UnsafeWrite)) throw error
+          result = { skipped: error.message }
+        }
         if (result.skipped) entry.skipped_mutations.push({ mutation, reason: result.skipped })
         else pairs.push(...result.pairs)
       }
@@ -967,7 +994,7 @@ if (path.resolve(process.argv[1] ?? '') === path.resolve(import.meta.filename)) 
   for (const signal of Object.keys(SIGNAL_EXIT)) {
     process.on(signal, async () => {
       await stopForSignal(signal)
-      process.exit(SIGNAL_EXIT[signal])
+      process.exit(SIGNAL_EXIT[stopping])
     })
   }
   try {

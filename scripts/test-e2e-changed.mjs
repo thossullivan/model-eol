@@ -6,13 +6,27 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 
-import { blameLineMap, diffFileRecords, diffLineMap } from './e2e-changed.mjs'
+import { blameLineMap, diffFileRecords, diffLineMap, guardWrite } from './e2e-changed.mjs'
 import { lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const harness = path.join(root, 'scripts', 'e2e-changed.mjs')
 const checker = path.join(root, 'check.mjs')
 const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-e2e-changed-test-')))
+
+{
+  const clone = path.join(tempRoot, 'guard-clone')
+  const outside = path.join(tempRoot, 'guard-outside')
+  fs.mkdirSync(path.join(clone, 'sub'), { recursive: true })
+  fs.mkdirSync(outside)
+  fs.symlinkSync(path.join(outside, 'shared.json'), path.join(clone, '.model-eol.json'))
+  fs.symlinkSync(outside, path.join(clone, 'linked'))
+  assert.throws(() => guardWrite(clone, '.model-eol.json'), /symlink/, 'mutations refuse to write through a symlinked config')
+  assert.throws(() => guardWrite(clone, 'linked/new.json'), /symlink/, 'mutations refuse to write under a symlinked directory')
+  assert.equal(guardWrite(clone, 'sub/new/file.py'), path.join(clone, 'sub/new/file.py'), 'mutations write plain paths inside the clone')
+  assert.equal(fs.readdirSync(outside).length, 0, 'the guard writes nothing itself')
+  console.log('ok: mutation writes never follow a symlink out of the clone')
+}
 const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' }
 const RETIRED = 'claude-opus-4-1-20250805'
 
