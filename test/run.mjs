@@ -1226,11 +1226,15 @@ fs.writeFileSync(path.join(compareFeeds, 'openai.json'), compareFeed([
   { id: 'far-model', shutdown: '2099-01-01', distributions: [{ via: 'aws-bedrock', shutdown: '2020-06-01' }] },
   { id: 'clean-model' },
 ]))
+const SYMLINK = Symbol('symlink')
+const symlinkTo = target => ({ [SYMLINK]: target })
 const writeRepoFiles = (dir, files) => {
   for (const [relative, content] of Object.entries(files)) {
     const file = path.join(dir, relative)
     fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content))
+    if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) fs.rmSync(file)
+    if (content?.[SYMLINK]) fs.symlinkSync(content[SYMLINK], file)
+    else fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content))
   }
 }
 let compareRepoCount = 0
@@ -1246,8 +1250,8 @@ const compareRepo = (label, files, gitConfig = {}) => {
   assert(repoGit(['add', '-A']).status === 0 && repoGit(['commit', '-qm', 'base']).status === 0, `${label}: base commit created`)
   return { dir, git: repoGit, write: next => writeRepoFiles(dir, next) }
 }
-const runCompare = (label, dir, extra = [], { json = true } = {}) => {
-  const result = run(['check', dir, '--changed', 'HEAD', '--feeds', compareFeeds, ...(json ? ['--json'] : []), ...extra])
+const runCompare = (label, dir, extra = [], { json = true, target = dir, feeds = compareFeeds, env = process.env } = {}) => {
+  const result = run(['check', target, '--changed', 'HEAD', '--feeds', feeds, ...(json ? ['--json'] : []), ...extra], { env })
   if (!json) return result
   let document = null
   try {
@@ -1448,6 +1452,111 @@ const sameJson = (left, right) => JSON.stringify(left) === JSON.stringify(right)
   assert(result.code === 0 && result.findings.length === 0, '--changed matches repeated references on one unchanged line by occurrence')
 }
 
+const scheduledBase = { status: 'scheduled', via: 'publisher', usage: 'model-reference', threshold_days: 30, effective_scope: 'all' }
+{
+  const repo = compareRepo('config symlink', {
+    'configs/policy.json': { scope: 'all', days: 30 },
+    '.model-eol.json': symlinkTo('configs/policy.json'),
+    'app.py': 'MODEL = "soon-model"\n',
+  })
+  repo.write({ 'configs/policy.json': { scope: 'all', days: 90 } })
+  const result = runCompare('config symlink', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].status === 'retiring', '--changed sees an edit to the file a symlinked .model-eol.json points to')
+  assert(sameJson(result.findings[0]?.changed, { reason: 'newly-actionable', inputs: ['config'], base: scheduledBase }), '--changed judges the base with the symlinked config resolved inside the base tree')
+}
+
+{
+  const repo = compareRepo('unchanged config symlink', {
+    'configs/policy.json': { scope: 'direct' },
+    '.model-eol.json': symlinkTo('configs/policy.json'),
+    'svc.py': 'client = BedrockRuntime()\nMODEL = "retired-model"\n',
+  })
+  repo.write({ 'svc.py': 'from openai import OpenAI\nMODEL = "retired-model"\n' })
+  const result = runCompare('unchanged config symlink', repo.dir)
+  const finding = result.findings.find(item => item.id === 'retired-model')
+  assert(result.code === 1 && sameJson(finding?.changed?.inputs, ['file']), '--changed does not count an unchanged symlinked config as a changed input')
+}
+
+{
+  const repo = compareRepo('explicit config symlink', {
+    'configs/policy.json': { scope: 'all', days: 30 },
+    'configs/link.json': symlinkTo('policy.json'),
+    'app.py': 'MODEL = "soon-model"\n',
+  })
+  repo.write({ 'configs/policy.json': { scope: 'all', days: 90 } })
+  const result = runCompare('explicit config symlink', repo.dir, ['--config', path.join(repo.dir, 'configs/link.json')])
+  assert(result.code === 1 && result.findings.length === 1 && sameJson(result.findings[0].changed, { reason: 'newly-actionable', inputs: ['config'], base: scheduledBase }), '--changed sees an edit behind a symlinked --config file')
+}
+
+{
+  const repo = compareRepo('base config symlink to directory', {
+    'configs/notes.txt': 'notes\n',
+    '.model-eol.json': symlinkTo('configs'),
+    'app.py': 'MODEL = "retired-model"\n',
+  })
+  repo.write({ '.model-eol.json': { scope: 'all' } })
+  const result = runCompare('base config symlink to directory', repo.dir)
+  const changed = result.findings[0]?.changed
+  assert(result.code === 1 && result.findings.length === 1 && changed?.reason === 'base-unavailable' && changed.message.includes('base config .model-eol.json is a directory'), '--changed treats a base config link that does not resolve to a regular file as base-unavailable')
+}
+
+{
+  const repo = compareRepo('feeds symlink', {
+    'shared/openai.json': compareFeed([{ id: 'drift-model' }]),
+    'feeds/openai.json': symlinkTo('../shared/openai.json'),
+    'src/app.py': 'MODEL = "drift-model"\n',
+  })
+  repo.write({ 'shared/openai.json': compareFeed([{ id: 'drift-model', shutdown: '2020-01-01' }]) })
+  const result = runCompare('feeds symlink', repo.dir, [], { target: path.join(repo.dir, 'src'), feeds: path.join(repo.dir, 'feeds') })
+  assert(result.code === 1 && result.findings.length === 1 && sameJson(result.findings[0].changed, { reason: 'newly-actionable', inputs: ['feeds'], base: { status: 'ok', via: null, usage: 'model-reference', threshold_days: 90, effective_scope: 'all' } }), '--changed sees an edit behind a symlinked feed file and resolves it at base')
+}
+
+{
+  const repo = compareRepo('feeds at the git root', {
+    'openai.json': compareFeed([{ id: 'drift-model' }]),
+    'src/app.py': 'MODEL = "drift-model"\n',
+  })
+  repo.write({ 'openai.json': compareFeed([{ id: 'drift-model', shutdown: '2020-01-01' }]) })
+  const result = runCompare('feeds at the git root', repo.dir, [], { target: path.join(repo.dir, 'src'), feeds: repo.dir })
+  assert(result.code === 1 && result.findings.length === 1 && sameJson(result.findings[0].changed?.inputs, ['feeds']) && result.findings[0].changed.base?.status === 'ok', '--changed sees a feeds change when --feeds is the git root')
+}
+
+{
+  const before = 'A = 1\nB = 2\nMODEL = "retired-model"\nC = 3\nD = 4\n'
+  const after = 'A = 10\nB = 2\nMODEL = "retired-model"\nC = 3\nD = 40\n'
+  const merged = compareRepo('inter-hunk context', { 'app.py': before }, { 'diff.interHunkContext': '10' })
+  merged.write({ 'app.py': after })
+  const mergedResult = runCompare('inter-hunk context', merged.dir)
+  assert(mergedResult.code === 0 && mergedResult.findings.length === 0, '--changed ignores diff.interHunkContext when mapping unchanged lines between hunks')
+  const context = compareRepo('GIT_DIFF_OPTS context', { 'app.py': before })
+  context.write({ 'app.py': after })
+  const contextResult = runCompare('GIT_DIFF_OPTS context', context.dir, [], { env: { ...process.env, GIT_DIFF_OPTS: '--unified=3' } })
+  assert(contextResult.code === 0 && contextResult.findings.length === 0, '--changed ignores a GIT_DIFF_OPTS context override when mapping unchanged lines')
+}
+
+{
+  const repo = compareRepo('temporary directory inside the repository', {
+    '.model-eol.json': { scope: 'all', days: 30 },
+    'app.py': 'MODEL = "soon-model"\n',
+  })
+  repo.write({ '.model-eol.json': { scope: 'all', days: 90 } })
+  const insideTemp = path.join(repo.dir, 'scratch-temp')
+  fs.mkdirSync(insideTemp)
+  const result = run(['check', repo.dir, '--changed', 'HEAD', '--feeds', compareFeeds, '--json'], { env: { ...process.env, TMPDIR: insideTemp } })
+  assert(result.code === 2 && result.err.includes('--changed failed') && result.err.includes('TMPDIR') && fs.readdirSync(insideTemp).length === 0, '--changed refuses to materialize the base inside the repository and names TMPDIR')
+}
+
+{
+  const repo = compareRepo('pathspec magic target', {
+    ':foo/app.py': 'MODEL = "clean-model"\n',
+    'foo/app.py': 'MODEL = "clean-model"\n',
+  })
+  repo.write({ ':foo/app.py': 'MODEL = "clean-model"\nNEW = "retired-model"\n', ':foo/new.py': 'MODEL = "retired-model"\n' })
+  const result = runCompare('pathspec magic target', repo.dir, [], { target: path.join(repo.dir, ':foo') })
+  const reasons = result.findings.filter(finding => finding.id === 'retired-model').map(finding => `${path.basename(finding.file)}:${finding.changed?.reason}`).sort()
+  assert(result.code === 1 && sameJson(reasons, ['app.py:added-line', 'new.py:newly-actionable']), '--changed treats a target named like pathspec magic as a literal path')
+}
+
 {
   const output = formatCheck({
     findings: [{
@@ -1459,7 +1568,7 @@ const sameJson = (left, right) => JSON.stringify(left) === JSON.stringify(right)
     days: 90,
     scope: 'all',
   })
-  assert(output.includes('[newly actionable: base unavailable: bad\\nconfig\\x1b[31m]'), 'check human output escapes control characters in a base-unavailable message')
+  assert(output.includes('  [base unavailable: bad\\nconfig\\x1b[31m]') && !output.includes('newly actionable'), 'check human output labels base-unavailable plainly and escapes control characters in a base-unavailable message')
 }
 
 const missing = run(['inventory', path.join(tempRoot, 'does-not-exist'), path.join(root, 'test/fixture'), '--json'])
