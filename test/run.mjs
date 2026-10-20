@@ -1887,6 +1887,77 @@ const retiredBase = { status: 'retired', via: 'publisher', usage: 'model-referen
 }
 
 {
+  const routes = [{ paths: ['**'], via: 'aws-bedrock' }]
+  const repo = compareRepo('scope widened', {
+    '.model-eol.json': { scope: 'direct', routes },
+    'c/s.py': 'M = "far-model"\n',
+    'a/debt.py': 'OLD = "retired-model"\n',
+  })
+  repo.write({ '.model-eol.json': { scope: 'all', routes } })
+  const result = runWithStats('scope widened', repo.dir)
+  const far = result.findings.find(finding => finding.id === 'far-model')
+  assert(result.code === 1 && result.findings.length === 2 && sameJson(far?.changed, { reason: 'newly-actionable', inputs: ['config'], base: { status: 'retired', via: 'aws-bedrock', usage: 'cloud-provider', threshold_days: 90, effective_scope: 'direct' } }), '--changed reports routed cloud references a scope change from direct to all brings into scope')
+  assert(result.stats?.affected_by.config === 2, '--changed treats every file as affected by a global scope change')
+}
+
+{
+  const repo = compareRepo('assume-unchanged edit', {
+    '.model-eol.json': { scope: 'all' },
+    'c/s.py': 'M = "clean-model"\n',
+    'a/debt.py': 'OLD = "retired-model"\n',
+  })
+  assert(repo.git(['update-index', '--assume-unchanged', 'c/s.py']).status === 0, 'assume-unchanged test marks the file')
+  repo.write({ '.model-eol.json': { scope: 'all', issues: { enabled: false } }, 'c/s.py': 'M = "retired-model"\n' })
+  const result = runCompare('assume-unchanged edit', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].file.endsWith(path.join('c', 's.py')) && sameJson(result.findings[0].changed, { reason: 'newly-actionable', inputs: ['file'], base: null }), '--changed compares an assume-unchanged file that git diff does not show')
+  const skipped = compareRepo('skip-worktree edit', { 'b.py': 'M = "clean-model"\n' })
+  assert(skipped.git(['update-index', '--skip-worktree', 'b.py']).status === 0, 'skip-worktree test marks the file')
+  skipped.write({ 'b.py': 'M = "retired-model"\n' })
+  const skippedResult = runCompare('skip-worktree edit', skipped.dir)
+  assert(skippedResult.code === 1 && skippedResult.findings.length === 1 && sameJson(skippedResult.findings[0].changed, { reason: 'newly-actionable', inputs: ['file'], base: null }), '--changed compares a skip-worktree file that git diff does not show')
+}
+
+{
+  const repo = compareRepo('fsmonitor hides an edit', { 'app.py': 'M = "clean-model"\n' })
+  const hook = path.join(tempRoot, 'fsmonitor-reports-nothing')
+  fs.writeFileSync(hook, "#!/bin/sh\nprintf 'token\\0'\n", { mode: 0o755 })
+  repo.git(['config', 'core.fsmonitor', hook])
+  repo.git(['status', '--short'])
+  repo.git(['status', '--short'])
+  repo.write({ 'app.py': 'M = "retired-model"\n' })
+  assert(repo.git(['diff', 'HEAD', '--name-only']).stdout === '', 'fsmonitor test hook hides the edit from git diff')
+  const result = runCompare('fsmonitor hides an edit', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].changed?.reason === 'added-line', '--changed does not let an fsmonitor hook hide an edit')
+}
+
+{
+  const repo = compareRepo('diff larger than 1 MiB', { 'app.py': 'M = "clean-model"\n' })
+  const image = Buffer.alloc(2 * 1024 * 1024)
+  for (let index = 0; index < image.length; index++) image[index] = (index * 31) % 256
+  fs.mkdirSync(path.join(repo.dir, 'assets'))
+  fs.writeFileSync(path.join(repo.dir, 'assets', 'logo.png'), image)
+  repo.write({ 'app.py': 'M = "clean-model"\nNEW = "retired-model"\n' })
+  assert(repo.git(['add', '-A']).status === 0, 'large diff test stages the binary file')
+  const result = runCompare('diff larger than 1 MiB', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].changed?.reason === 'added-line', '--changed reads a diff larger than 1 MiB')
+}
+
+{
+  const headFeed = compareFeed([{ id: 'retired-model', shutdown: '2020-01-01' }, { id: 'clean-model' }])
+  const repo = compareRepo('base feed names differing in case', {
+    'feeds/openai.json': compareFeed([{ id: 'retired-model', shutdown: '2020-01-01' }]),
+    'src/app.py': 'M = "clean-model"\n',
+  })
+  const other = path.join(tempRoot, 'case-collision-feed.json')
+  fs.writeFileSync(other, compareFeed([{ id: 'other-model' }]))
+  const blob = repo.git(['hash-object', '-w', other]).stdout.trim()
+  assert(repo.git(['update-index', '--add', '--cacheinfo', `100644,${blob},feeds/OPENAI.json`]).status === 0 && repo.git(['commit', '-qm', 'case']).status === 0, 'case collision test commits a second feed name differing in case')
+  repo.write({ 'feeds/openai.json': headFeed, 'src/app.py': 'M = "clean-model"\nNEW = "retired-model"\n' })
+  const result = runCompare('base feed names differing in case', repo.dir, [], { target: path.join(repo.dir, 'src'), feeds: path.join(repo.dir, 'feeds') })
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].changed?.reason === 'added-line', '--changed falls back to every file affected when the early base inputs cannot be copied')
+}
+
+{
   const output = formatCheck({
     findings: [{
       file: 'app.py', line: 1, matched: 'retired-model', status: 'retired', shutdown: '2020-01-01', days: -10, threshold_days: 90, via: 'publisher',
