@@ -73,7 +73,7 @@ node check.mjs path/to/your/repo --days 90
 <summary><b>Every command</b> - PR gate, distributor clocks, SBOM, badges, migration plans</summary>
 
 ```sh
-# PR gate: flag only lines THIS change adds relative to the base ref
+# PR gate: report only findings THIS change adds or makes newly actionable
 node check.mjs check . --changed origin/main --days 90
 # the same repo judged by a distributor's clock instead of the publisher's
 node check.mjs path/to/your/repo --via aws-bedrock
@@ -144,9 +144,13 @@ the `v0` line:
     scope: direct
 ```
 
-This is the PR gate. It fails only when *this* change adds a model that is
-retired or retiring within the threshold. Add `via: aws-bedrock` (or
-`azure-ai-foundry`) to judge by a distributor's clock.
+This is the PR gate. It reports the findings *this* change adds or makes newly
+actionable, and fails when one is retired or retiring within the threshold: a
+model on an added line, or an unchanged reference the change makes bad (a
+`.model-eol.json` edit, nearby SDK or cloud code, a rename, an in-repo feeds
+change, an untracked file). References already bad at the base ref stay out of
+the way. Add `via: aws-bedrock` (or `azure-ai-foundry`) to judge by a
+distributor's clock.
 
 A copy-paste workflow with both gates, the PR diff and a weekly full-repository
 check, is in

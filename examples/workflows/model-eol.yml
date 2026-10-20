@@ -1,8 +1,9 @@
 # model-eol - copy this file to .github/workflows/model-eol.yml in YOUR repo.
 #
 # Two gates:
-#   - every PR: fail only if THIS change adds a model that is retired or
-#     retiring within the threshold (existing references stay out of the way)
+#   - every PR: fail only if THIS change adds or makes newly actionable a model
+#     that is retired or retiring within the threshold (references that were
+#     already bad at the base stay out of the way)
 #   - weekly: full-repository check, so legacy references surface on a schedule
 #     instead of in an outage
 #

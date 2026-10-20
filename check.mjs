@@ -48,7 +48,8 @@ import {
   formatInventoryCycloneDX,
   formatSchedule,
 } from './lib/reports.mjs'
-import { addedLinesForTargets, filterFindingsToChanged, gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
+import { BaseUnavailableError, inCheckScope, selectChangedFindings } from './lib/changed.mjs'
+import { gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
 import { DOCUMENT_TYPES, formatDocumentErrors, validateDocumentFile } from './lib/validate-document.mjs'
 import { SUPPORTED_RECEIPT_SCHEMAS, VERIFY_INPUTS, VerifyError, formatVerification, printable, verifyReceipt } from './lib/verify.mjs'
 
@@ -96,6 +97,76 @@ const repoPathForFile = (file, roots) => {
     .filter(({ relative }) => relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
     .sort((a, b) => b.root.length - a.root.length)
   return normalizeRepoPath(candidates[0]?.relative ?? absolute)
+}
+
+const policyError = (config, feedData, via) => {
+  const allowedVias = new Set([...BUILTIN_CHANNELS, ...feedData.vias])
+  const unknownVia = [via, ...configuredVias(config)]
+    .find(value => value && !allowedVias.has(value))
+  if (unknownVia) return `unknown lifecycle channel "${unknownVia}"; known values: ${[...allowedVias].sort().join(', ')}`
+  const unresolvedRoute = config.routes.find(route => route.model && !feedData.entries.has(route.model))
+  if (unresolvedRoute) return `configured route model "${unresolvedRoute.model}" is not present in loaded feeds`
+  return null
+}
+
+const evaluateTargets = ({ targets, config, roots, ignoredFiles, feedData, overrides, includeDocs, noGit = false, classificationPathFor = null }) => {
+  const policyCache = new Map()
+  const policyForFile = file => {
+    const absolute = path.resolve(file)
+    if (!policyCache.has(absolute)) {
+      const repoPath = repoPathForFile(absolute, roots)
+      policyCache.set(absolute, { ...configForRepoPath(config, repoPath), repoPath })
+    }
+    return policyCache.get(absolute)
+  }
+  const routeForReference = ({ file, matched, id }) => {
+    const policy = policyForFile(file)
+    return routeForRepoReference(config, policy.repoPath, { matched, id })
+  }
+  const mappedRoutesForFile = file => {
+    const policy = policyForFile(file)
+    return mappedRoutesForRepoPath(config, policy.repoPath)
+  }
+
+  const scan = scanTargets({
+    targets,
+    entries: feedData.entries,
+    keys: feedData.keys,
+    includeDocs,
+    ignoreRoots: roots,
+    ignoredFiles,
+    policyForFile,
+    routeForReference,
+    mappedRoutesForFile,
+    noGit,
+    classificationPathFor,
+  })
+
+  const findings = scan.modelRefs.map(ref => {
+    const policy = policyForFile(ref.file)
+    const route = routeForReference({ file: ref.file, matched: ref.matched, id: ref.id })
+    const days = overrides.days ?? policy.days
+    const scope = overrides.scope ?? policy.scope
+    const via = overrides.via ?? (route?.via ?? policy.via)
+    const finding = findingFromRef(ref, { days, via })
+    finding.effective_scope = scope
+    finding.requested_via = via
+    if (policy.override_indexes.length || route) {
+      finding.policy_provenance = {
+        override_indexes: policy.override_indexes,
+        route_index: route?.index ?? null,
+      }
+    }
+    return finding
+  })
+  for (const candidate of scan.candidateRefs) {
+    const policy = policyForFile(candidate.file)
+    candidate.effective_scope = overrides.scope ?? policy.scope
+    if (policy.override_indexes.length) {
+      candidate.policy_provenance = { override_indexes: policy.override_indexes, route_index: null }
+    }
+  }
+  return { scan, findings, checkFindings: findings.filter(inCheckScope) }
 }
 
 const main = () => {
@@ -168,8 +239,10 @@ Usage:
 
 Commands:
   check       Fail when tracked model IDs are retired or retiring within --days.
-              With --changed BASE_REF, answer the PR CI question: "this PR ADDS a
-              dependency on a model that already has a death date".
+              With --changed BASE_REF, report findings this change adds or makes newly
+              actionable: every reference on an added line, and unchanged references that
+              a config, feeds, rename, nearby-code, or untracked-file change made bad.
+              References already bad at BASE_REF are not reported.
   inventory   List tracked model references plus direct/cloud/gateway integration hints.
               --format json is the machine-readable default; --format cyclonedx emits a CycloneDX 1.6 ML-BOM.
   schedule    Show the retirement schedule for tracked references in the target.
@@ -366,50 +439,30 @@ if (feedData.entries.size === 0) {
   return 2
 }
 
-const allowedVias = new Set([...BUILTIN_CHANNELS, ...feedData.vias])
-const unknownVia = [values.via, ...configuredVias(repositoryConfig)]
-  .find(via => via && !allowedVias.has(via))
-if (unknownVia) {
-  console.error(`unknown lifecycle channel "${unknownVia}"; known values: ${[...allowedVias].sort().join(', ')}`)
-  return 2
-}
-const unresolvedRoute = repositoryConfig.routes.find(route => route.model && !feedData.entries.has(route.model))
-if (unresolvedRoute) {
-  console.error(`configured route model "${unresolvedRoute.model}" is not present in loaded feeds`)
+const headPolicyError = policyError(repositoryConfig, feedData, values.via)
+if (headPolicyError) {
+  console.error(headPolicyError)
   return 2
 }
 
-const policyCache = new Map()
-const policyForFile = file => {
-  const absolute = path.resolve(file)
-  if (!policyCache.has(absolute)) {
-    const repoPath = repoPathForFile(absolute, configLocation.roots)
-    policyCache.set(absolute, { ...configForRepoPath(repositoryConfig, repoPath), repoPath })
-  }
-  return policyCache.get(absolute)
+const overrides = {
+  days: values.days === undefined ? undefined : DAYS,
+  scope: values.scope === undefined ? undefined : SCOPE,
+  via: values.via === undefined ? undefined : VIA,
 }
-const routeForReference = ({ file, matched, id }) => {
-  const policy = policyForFile(file)
-  return routeForRepoReference(repositoryConfig, policy.repoPath, { matched, id })
-}
-const mappedRoutesForFile = file => {
-  const policy = policyForFile(file)
-  return mappedRoutesForRepoPath(repositoryConfig, policy.repoPath)
-}
-
 let scan
+let findings
+let checkFindings
 try {
-  scan = scanTargets({
+  ({ scan, findings, checkFindings } = evaluateTargets({
     targets,
-    entries: feedData.entries,
-    keys: feedData.keys,
-    includeDocs: INCLUDE_DOCS,
-    ignoreRoots: configLocation.roots,
+    config: repositoryConfig,
+    roots: configLocation.roots,
     ignoredFiles: configLocation.file ? [configLocation.file] : [],
-    policyForFile,
-    routeForReference,
-    mappedRoutesForFile,
-  })
+    feedData,
+    overrides,
+    includeDocs: INCLUDE_DOCS,
+  }))
 } catch (e) {
   console.error(`scan failed: ${e.message}`)
   return 2
@@ -426,36 +479,56 @@ if (incompleteNotes.length && (command === 'check' || command === 'plan')) {
   if (!ALLOW_INCOMPLETE) return 2
 }
 
-const findings = scan.modelRefs.map(ref => {
-  const policy = policyForFile(ref.file)
-  const route = routeForReference({ file: ref.file, matched: ref.matched, id: ref.id })
-  const days = values.days === undefined ? policy.days : DAYS
-  const scope = values.scope === undefined ? policy.scope : SCOPE
-  const via = values.via === undefined ? (route?.via ?? policy.via) : VIA
-  const finding = findingFromRef(ref, { days, via })
-  finding.effective_scope = scope
-  finding.requested_via = via
-  if (policy.override_indexes.length || route) {
-    finding.policy_provenance = {
-      override_indexes: policy.override_indexes,
-      route_index: route?.index ?? null,
-    }
+const evaluateBase = ({ treeRoot, files, configFile, feedsDir, classificationPathFor }) => {
+  let config = repositoryConfig
+  let baseFeeds = feedData
+  try {
+    if (configFile === null) config = normalizeConfig({}, { defaults: CLI_DEFAULT_CONFIG })
+    else if (configFile !== undefined) config = loadConfig(configFile, { defaults: DEFAULT_CONFIG, allowMissing: false })
+  } catch (e) {
+    throw new BaseUnavailableError(`failed to load base config: ${e.message}`)
   }
-  return finding
-})
-for (const candidate of scan.candidateRefs) {
-  const policy = policyForFile(candidate.file)
-  candidate.effective_scope = values.scope === undefined ? policy.scope : SCOPE
-  if (policy.override_indexes.length) {
-    candidate.policy_provenance = { override_indexes: policy.override_indexes, route_index: null }
+  if (feedsDir !== undefined) {
+    try {
+      baseFeeds = loadFeeds(feedsDir)
+    } catch (e) {
+      throw new BaseUnavailableError(`failed to load base feeds: ${e.message}`)
+    }
+    if (baseFeeds.entries.size === 0) throw new BaseUnavailableError('no feed entries loaded from base feeds')
+  }
+  const basePolicyError = policyError(config, baseFeeds, values.via)
+  if (basePolicyError) throw new BaseUnavailableError(`base policy: ${basePolicyError}`)
+  try {
+    const base = evaluateTargets({
+      targets: files,
+      config,
+      roots: [treeRoot],
+      ignoredFiles: configFile ? [configFile] : [],
+      feedData: baseFeeds,
+      overrides,
+      includeDocs: INCLUDE_DOCS,
+      noGit: true,
+      classificationPathFor,
+    })
+    return { findings: base.findings, notes: base.scan.notes }
+  } catch (e) {
+    throw new BaseUnavailableError(`base scan failed: ${e.message}`)
   }
 }
-const checkFindings = findings.filter(finding =>
-  finding.effective_scope !== 'direct' || finding.usage === 'direct-api' || finding.usage === 'model-reference')
+
 let changedFindings = checkFindings
 if (CHANGED_BASE !== null) {
   try {
-    changedFindings = filterFindingsToChanged(checkFindings, addedLinesForTargets(targets, CHANGED_BASE))
+    changedFindings = selectChangedFindings({
+      targets,
+      baseRef: CHANGED_BASE,
+      findings,
+      checkFindings,
+      scannedFiles: scan.files,
+      configFile: configLocation.file,
+      feedsDir: FEEDS_DIR,
+      evaluateBase,
+    })
   } catch (e) {
     console.error(`--changed failed: ${e.message}`)
     return 2
