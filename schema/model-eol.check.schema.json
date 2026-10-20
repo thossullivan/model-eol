@@ -49,9 +49,61 @@
         "requested_via": { "type": ["string", "null"], "minLength": 1 },
         "waiver": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/waiver" },
         "policy_provenance": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/policyProvenance" },
-        "mapped_from": { "type": "string", "minLength": 1 }
+        "mapped_from": { "type": "string", "minLength": 1 },
+        "changed": { "$ref": "#/definitions/changed" }
       },
       "additionalProperties": false
+    },
+    "changed": {
+      "description": "Present only with --changed: why the finding is reported for this change.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["reason"],
+          "properties": { "reason": { "const": "added-line" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["reason", "inputs", "base"],
+          "properties": {
+            "reason": { "const": "newly-actionable" },
+            "inputs": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "enum": ["config", "feeds", "rename", "file", "untracked"] }
+            },
+            "base": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["status", "via", "usage", "threshold_days", "effective_scope"],
+                  "properties": {
+                    "status": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/status" },
+                    "via": { "type": ["string", "null"], "minLength": 1 },
+                    "usage": { "$ref": "https://thossullivan.github.io/model-eol/schema/0.1/model-eol.inventory.schema.json#/definitions/usage" },
+                    "threshold_days": { "type": "integer", "minimum": 0 },
+                    "effective_scope": { "enum": ["all", "direct"] }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["reason", "message"],
+          "properties": {
+            "reason": { "const": "base-unavailable" },
+            "message": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }
