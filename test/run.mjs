@@ -1918,6 +1918,63 @@ const retiredBase = { status: 'retired', via: 'publisher', usage: 'model-referen
 }
 
 {
+  const stamp = new Date('2021-03-04T05:06:07Z')
+  const hideEdit = repo => {
+    const file = path.join(repo.dir, 'c', 's.py')
+    fs.utimesSync(file, stamp, stamp)
+    repo.git(['update-index', '--refresh'])
+    fs.writeFileSync(file, 'M="retired-model"\n')
+    fs.utimesSync(file, stamp, stamp)
+    return repo.git(['diff', 'HEAD', '--name-only']).stdout.includes('c/s.py')
+  }
+  const repo = compareRepo('stat-hidden edit', {
+    '.model-eol.json': { scope: 'all' },
+    'c/s.py': 'M = "clean-model"\n',
+    'a/debt.py': 'OLD = "retired-model"\n',
+  }, { 'core.trustctime': 'false' })
+  assert(!hideEdit(repo), 'stat-hidden test makes a same-size edit that git diff does not show')
+  repo.write({ '.model-eol.json': { scope: 'all', issues: { enabled: false } } })
+  const result = runCompare('stat-hidden edit', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && result.findings[0].file.endsWith(path.join('c', 's.py')) && sameJson(result.findings[0].changed, { reason: 'newly-actionable', inputs: ['file'], base: null }), '--changed compares content when index stat data hides an edit next to an unrelated config edit')
+  const alone = compareRepo('stat-hidden edit alone', { 'c/s.py': 'M = "clean-model"\n' }, { 'core.trustctime': 'false' })
+  assert(!hideEdit(alone), 'stat-hidden test hides the edit without a config change')
+  const aloneResult = runCompare('stat-hidden edit alone', alone.dir)
+  assert(aloneResult.code === 1 && aloneResult.findings.length === 1 && sameJson(aloneResult.findings[0].changed?.inputs, ['file']), '--changed compares content when index stat data hides the only edit')
+}
+
+{
+  const repo = compareRepo('assume-unchanged file left alone', {
+    '.model-eol.json': { scope: 'all', days: 30 },
+    'c/s.py': 'M = "soon-model"\n',
+  })
+  assert(repo.git(['update-index', '--assume-unchanged', 'c/s.py']).status === 0, 'unedited assume-unchanged test marks the file')
+  repo.write({ '.model-eol.json': { scope: 'all', days: 400 } })
+  const result = runCompare('assume-unchanged file left alone', repo.dir)
+  assert(result.code === 1 && result.findings.length === 1 && sameJson(result.findings[0].changed, { reason: 'newly-actionable', inputs: ['config'], base: scheduledBase }), '--changed does not list file for an assume-unchanged file nobody edited')
+  const ignoreStat = compareRepo('ignoreStat repository', {
+    '.model-eol.json': { scope: 'all', days: 30 },
+    'c/s.py': 'M = "soon-model"\n',
+  }, { 'core.ignoreStat': 'true' })
+  assert(ignoreStat.git(['rm', '-q', '--cached', '-r', '.']).status === 0 && ignoreStat.git(['add', '-A']).status === 0 && ignoreStat.git(['ls-files', '-v', 'c/s.py']).stdout.startsWith('h '), 'ignoreStat test marks every entry assume-unchanged')
+  ignoreStat.write({ '.model-eol.json': { scope: 'all', days: 400 } })
+  const ignoreStatResult = runCompare('ignoreStat repository', ignoreStat.dir)
+  assert(ignoreStatResult.code === 1 && ignoreStatResult.findings.length === 1 && sameJson(ignoreStatResult.findings[0].changed?.inputs, ['config']), '--changed does not list file for unedited files under core.ignoreStat')
+}
+
+{
+  const dir = path.join(tempRoot, 'long-listing-repo')
+  const deep = path.join(dir, ...['a', 'b', 'c'].map(letter => letter.repeat(200)))
+  fs.mkdirSync(deep, { recursive: true })
+  for (let index = 0; index < 1500; index++) fs.writeFileSync(path.join(deep, `${String(index).padStart(5, '0')}-${'n'.repeat(140)}.txt`), '')
+  fs.writeFileSync(path.join(dir, 'app.py'), 'M = "retired-model"\n')
+  const git = args => spawnSync('git', args, { cwd: dir, encoding: 'utf8', maxBuffer: 1 << 28 })
+  assert(git(['init', '-q']).status === 0 && git(['add', '-A']).status === 0, 'long listing test stages its files')
+  assert(git(['ls-files', '-z', '--stage']).stdout.length > 1024 * 1024, 'long listing test produces more than 1 MiB of ls-files output')
+  const result = run(['check', dir, '--feeds', compareFeeds, '--json'])
+  assert(result.code === 1 && JSON.parse(result.out || '{}').scan_notes?.length === 0, 'check lists a repository whose git file listing exceeds 1 MiB')
+}
+
+{
   const repo = compareRepo('fsmonitor hides an edit', { 'app.py': 'M = "clean-model"\n' })
   const hook = path.join(tempRoot, 'fsmonitor-reports-nothing')
   fs.writeFileSync(hook, "#!/bin/sh\nprintf 'token\\0'\n", { mode: 0o755 })
