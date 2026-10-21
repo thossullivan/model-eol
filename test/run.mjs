@@ -2060,6 +2060,29 @@ const repoLines = (repo, result) => result.findings.map(finding => `${path.relat
 }
 
 {
+  const files = {}
+  for (let index = 0; index < 600; index++) files[`src/m${index}.py`] = `A = ${index}\n`
+  const repo = compareRepo('many text files and a binary change', files)
+  for (let index = 0; index < 600; index++) files[`src/m${index}.py`] = `A = ${index}\nB = 1\n`
+  repo.write(files)
+  assert(addLargeBinary(repo), 'kept-count threshold test stages the binary file')
+  const result = runWithStats('many text files and a binary change', repo.dir)
+  assert(result.code === 0 && result.stats?.diff_mode === 'full' && result.stats.diff_dropped_bytes === largeBinary.length && result.stats.diff_runs === 1, '--changed runs the single full diff when the dropped bytes are small next to the kept path count')
+}
+
+{
+  const repo = compareRepo('symlink not sniffed', { 'app.py': 'M = "clean-model"\n' })
+  fs.symlinkSync('target.dat', path.join(repo.dir, 'link.bin'))
+  assert(repo.commitAll('link'), 'symlink sniff test commits a symlink')
+  fs.writeFileSync(path.join(repo.dir, 'target.dat'), Buffer.alloc(4096))
+  fs.rmSync(path.join(repo.dir, 'link.bin'))
+  fs.symlinkSync('./target.dat', path.join(repo.dir, 'link.bin'))
+  repo.write({ 'app.py': 'M = "clean-model"\nNEW = "retired-model"\n' })
+  const result = runWithStats('symlink not sniffed', repo.dir, ['--allow-incomplete'])
+  assert(result.code === 1 && result.findings.length === 1 && result.stats?.diff_dropped_bytes === 2, '--changed sizes a symlink by its link text and never opens its target')
+}
+
+{
   const lock = `${'x'.repeat(99)}\n`.repeat(95000)
   const repo = compareRepo('large text and binary files in the change', { 'app.py': 'A = 1\n', 'data/big.lock': lock, 'data/same.lock': `y${lock}` })
   fs.writeFileSync(path.join(repo.dir, 'data', 'weights.bin'), largeBinary)
