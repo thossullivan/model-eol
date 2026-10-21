@@ -310,7 +310,9 @@ pass(real([]))
   const timeoutTmp = path.join(tempRoot, 'timeout-tmp')
   fs.mkdirSync(timeoutTmp)
   const timeoutPids = path.join(tempRoot, 'timeout-pids')
-  const [passing, incomplete, dropping, droppingOne, lenientRun, phantomRun, odd, nothing, missingRepo, notGit, blindRun, misbehaving, timedOut] = await (async () => {
+  const traceDir = path.join(tempRoot, 'trace2')
+  fs.mkdirSync(traceDir)
+  const [passing, incomplete, dropping, droppingOne, lenientRun, phantomRun, odd, nothing, missingRepo, notGit, blindRun, misbehaving, timedOut, traced] = await (async () => {
     const jobs = [
       () => runHarness(checker, [repo, empty], { synthetic: true }),
       () => runHarness(checker, [incompleteRepo], { mutations: 'h,k' }),
@@ -325,6 +327,7 @@ pass(real([]))
       () => runHarness(shims.blind, [repo], { commits: 1, mutations: 'g,j,k,m,n' }),
       () => runHarness(shims.misbehaveOnMarkers, [oddRepo, slowRepo, brokenRepo], { commits: 1, policy: 'broad', extra: ['--timeout-seconds', '5'] }),
       () => runHarness(shims.hold, [oddRepo], { commits: 1, policy: 'broad', extra: ['--timeout-seconds', '5'], env: { TMPDIR: timeoutTmp, E2E_GRANDCHILD_PIDFILE: timeoutPids } }),
+      () => runHarness(checker, [repo], { commits: 0, mutations: 'b,h', env: { GIT_TRACE2_EVENT: traceDir } }),
     ]
     const results = new Array(jobs.length)
     let next = 0
@@ -441,6 +444,15 @@ pass(real([]))
   assert(timeoutGrandchildren.length === 1, 'the held --changed run started a grandchild')
   await waitFor(() => !timeoutGrandchildren.some(alive), 3000, 'a timeout kills the checker\'s grandchildren')
   console.log('ok: timeouts kill the whole process group and leave no temp trees')
+
+  assert.equal(traced.code, 0, `the traced mutation run passes:${detail(traced)}`)
+  const traceEvents = fs.readdirSync(traceDir).flatMap(name => fs.readFileSync(path.join(traceDir, name), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)))
+  const commands = traceEvents.filter(event => event.event === 'cmd_name').map(event => event.name)
+  const spawned = traceEvents.filter(event => event.event === 'child_start').map(event => event.argv ?? [])
+  assert(commands.filter(name => name === 'commit').length >= 2, 'the traced run records the harness\'s mutation commits')
+  assert.deepEqual(commands.filter(name => ['maintenance', 'gc', 'repack', 'prune', 'prune-packed'].includes(name)), [], 'harness commits start no auto maintenance in the clone')
+  assert(!spawned.some(argv => argv.includes('maintenance') || argv.includes('gc')), 'no git process spawns maintenance or gc')
+  console.log('ok: harness commits run no background maintenance that could delete commits in the clone')
 
   const signalRun = async (signal, code) => {
     const signalTmp = path.join(tempRoot, `signal-${signal}`)
