@@ -50,7 +50,8 @@ const cleanEnv = () => {
 // The harness's own git runs ignore user and system config so blame and commits are reproducible.
 const gitEnv = () => ({ ...cleanEnv(), GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' })
 
-const GIT_IDENTITY = ['-c', 'user.name=model-eol e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${os.devNull}`]
+// Auto maintenance after a commit repacks the clone in the background and can delete commits made while it runs.
+const GIT_IDENTITY = ['-c', 'user.name=model-eol e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${os.devNull}`, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0']
 
 const killGroup = child => {
   try {
