@@ -2060,6 +2060,45 @@ const repoLines = (repo, result) => result.findings.map(finding => `${path.relat
 }
 
 {
+  const lock = `${'x'.repeat(99)}\n`.repeat(95000)
+  const repo = compareRepo('large text and binary files in the change', { 'app.py': 'A = 1\n', 'data/big.lock': lock, 'data/same.lock': `y${lock}` })
+  fs.writeFileSync(path.join(repo.dir, 'data', 'weights.bin'), largeBinary)
+  assert(repo.commitAll('weights'), 'large file test commits a large binary file')
+  repo.write({ 'app.py': 'A = 1\nNEW = "retired-model"\n', 'data/big.lock': `changed\n${lock}` })
+  const edited = runWithStats('large text file edited by one line', repo.dir)
+  assert(edited.code === 1 && edited.findings.length === 1 && edited.stats?.diff_mode === 'full' && edited.stats.diff_dropped_bytes < 64, '--changed counts only the size change of a large text file edited by one line')
+  fs.mkdirSync(path.join(repo.dir, 'moved'))
+  assert(repo.commitAll('edit') && repo.git(['mv', 'data/big.lock', 'moved/other.lock']).status === 0 && repo.git(['mv', 'data/same.lock', 'moved/same.lock']).status === 0, 'move test moves the large text files')
+  repo.write({ 'app.py': 'A = 1\nNEW = "retired-model"\nNEXT = "retired-model"\n' })
+  const moved = runWithStats('large text files moved unchanged', repo.dir)
+  assert(moved.code === 1 && moved.findings.length === 1 && moved.stats?.diff_mode === 'full' && moved.stats.diff_dropped_bytes === 0, '--changed counts nothing for large files moved unchanged, with or without a new name')
+  assert(repo.commitAll('move'), 'binary edit test commits the move')
+  const weights = Buffer.from(largeBinary)
+  weights[weights.length - 1] ^= 1
+  repo.write({ 'app.py': 'A = 1\nNEW = "retired-model"\nNEXT = "retired-model"\nLAST = "retired-model"\n' })
+  fs.writeFileSync(path.join(repo.dir, 'data', 'weights.bin'), weights)
+  const binary = runWithStats('large binary file edited', repo.dir)
+  const deletedCode = compareRepo('large scannable file deleted', { 'app.py': 'A = 1\n', 'gen/big.py': lock })
+  assert(deletedCode.git(['rm', '-q', '-r', 'gen']).status === 0, 'deletion test removes the large scannable file')
+  deletedCode.write({ 'app.py': 'A = 1\nNEW = "retired-model"\n' })
+  const deletion = runWithStats('large scannable file deleted', deletedCode.dir)
+  assert(deletion.code === 1 && deletion.findings.length === 1 && deletion.stats?.diff_mode === 'full' && deletion.stats.diff_dropped_bytes === 0, '--changed counts nothing for a deleted file the scanner reads, as a rename source would be diffed anyway')
+  assert(binary.code === 1 && binary.findings.length === 1 && binary.stats?.diff_mode === 'narrow' && binary.stats.diff_dropped_bytes === 2 * largeBinary.length && binary.stats.diff_paths === 1, '--changed counts both sides of an edited binary file and narrows the diff')
+}
+
+{
+  const repo = compareRepo('gitlink named like a scannable file', { '.model-eol.json': { ignore: { paths: ['x.py'] } }, 'app.py': 'A = 1\n' }, { 'diff.submodule': 'log' })
+  const commit = () => repo.git(['rev-parse', 'HEAD']).stdout.trim()
+  assert(repo.git(['update-index', '--add', '--cacheinfo', `160000,${commit()},x.py`]).status === 0 && repo.git(['commit', '-qm', 'gitlink']).status === 0, 'gitlink test commits a gitlink named x.py')
+  assert(repo.git(['update-index', '--cacheinfo', `160000,${commit()},x.py`]).status === 0, 'gitlink test moves the gitlink to another commit')
+  fs.mkdirSync(path.join(repo.dir, 'x.py'))
+  repo.write({ 'app.py': 'A = 1\nNEW = "retired-model"\n' })
+  assert(addLargeBinary(repo) && /^:160000 160000 .* M\tx\.py$/m.test(repo.git(['diff', '--raw', 'HEAD']).stdout), 'gitlink test changes the gitlink and adds a large binary file')
+  const result = runWithStats('gitlink named like a scannable file', repo.dir)
+  assert(result.code === 1 && repoLines(repo, result) === 'app.py:2:added-line' && result.stats?.diff_mode === 'narrow' && result.stats.diff_paths === 1 && result.stats.diff_fallback === false, '--changed leaves a gitlink named like a scannable file out of the narrowed diff')
+}
+
+{
   const repo = compareRepo('-diff attribute with the scannable diff', { 'app.py': 'M = "clean-model"\n', 'logo.png': 'x' })
   repo.write({ '.gitattributes': '*.py -diff\n', 'app.py': 'M = "clean-model"\nNEW = "retired-model"\n', 'logo.png': 'y' })
   assert(addLargeBinary(repo), '-diff test stages the binary file')
