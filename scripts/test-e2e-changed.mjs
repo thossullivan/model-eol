@@ -450,8 +450,9 @@ pass(real([]))
   const commands = traceEvents.filter(event => event.event === 'cmd_name').map(event => event.name)
   const spawned = traceEvents.filter(event => event.event === 'child_start').map(event => event.argv ?? [])
   assert(commands.filter(name => name === 'commit').length >= 2, 'the traced run records the harness\'s mutation commits')
-  assert.deepEqual(commands.filter(name => ['maintenance', 'gc', 'repack', 'prune', 'prune-packed'].includes(name)), [], 'harness commits start no auto maintenance in the clone')
-  assert(!spawned.some(argv => argv.includes('maintenance') || argv.includes('gc')), 'no git process spawns maintenance or gc')
+  // Git before 2.29 still starts gc --auto after each commit; with gc.auto=0 it exits without repacking.
+  assert.deepEqual(commands.filter(name => ['maintenance', 'repack', 'prune', 'prune-packed'].includes(name)), [], 'harness commits start no auto maintenance in the clone')
+  assert(!spawned.some(argv => ['maintenance', 'repack', 'prune', 'prune-packed'].some(name => argv.includes(name))), 'no git process spawns maintenance, repack, or prune')
   console.log('ok: harness commits run no background maintenance that could delete commits in the clone')
 
   const signalRun = async (signal, code) => {
