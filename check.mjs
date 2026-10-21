@@ -528,6 +528,7 @@ if (CHANGED_BASE !== null) {
     const selection = selectChangedFindings({
       targets,
       baseRef: CHANGED_BASE,
+      includeDocs: INCLUDE_DOCS,
       findings,
       checkFindings,
       scannedFiles: scan.files,
