@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
 
-import { assertIsoDate, dateFromText, MODEL_ID_PATTERN, stripComments } from './providers.mjs'
+import { assertIsoDate, dateFromText, MODEL_ID_PATTERN, sectionProse, stripComments } from './providers.mjs'
 
 export { MAX_SOURCE_BODY_BYTES as MAX_DISTRIBUTOR_BODY_BYTES } from './fetch.mjs'
 
@@ -559,8 +559,8 @@ function vertexDate(cell, modelId) {
   return date
 }
 
-function vertexDatePrecision(html, text) {
-  return /earliest\s+possible|retirement\s+timelines?\s+may\s+be\s+extended|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i.test(`${plainText(html)} ${text}`)
+function vertexDatePrecision(sectionText, text) {
+  return /earliest\s+possible|retirement\s+timelines?\s+may\s+be\s+extended|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i.test(`${sectionText} ${text}`)
     ? 'earliest'
     : undefined
 }
@@ -570,6 +570,7 @@ export function parseVertexModelVersionsHtml(html) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('vertex-ai lifecycle page is empty')
 
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+  const governingProse = sectionProse(html)
   const records = []
   let recognisedTables = 0
   for (const table of tables) {
@@ -577,6 +578,7 @@ export function parseVertexModelVersionsHtml(html) {
     const headers = vertexHeaderIndexes(rows)
     if (!headers) continue
     recognisedTables++
+    const sectionText = governingProse(table.index)
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       if (!modelCell || !modelCell.text) continue
@@ -588,7 +590,7 @@ export function parseVertexModelVersionsHtml(html) {
       const record = { vertexId: modelId }
       if (shutdown) {
         record.shutdown = shutdown
-        const precision = vertexDatePrecision(html, retirementCell.text)
+        const precision = vertexDatePrecision(sectionText, retirementCell.text)
         if (precision) record.date_precision = precision
       }
       records.push(record)

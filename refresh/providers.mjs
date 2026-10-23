@@ -116,6 +116,32 @@ function plainText(fragment) {
     .trim()
 }
 
+const blankOut = match => ' '.repeat(match.length)
+
+// Maps a table offset to the prose of its section and each enclosing section, without table text
+export function sectionProse(html) {
+  const visible = String(html)
+    .replace(/<!--[\s\S]*?--!?>/g, blankOut)
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, blankOut)
+  const headings = [...visible.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)]
+    .map(match => ({ start: match.index, end: match.index + match[0].length, level: Number(match[1]), text: plainText(match[2]) }))
+  const prose = (from, to) => plainText(visible.slice(from, to).replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, ' '))
+  return tableStart => {
+    const preceding = headings.filter(heading => heading.end <= tableStart)
+    if (!preceding.length) return prose(0, tableStart)
+    const parts = []
+    for (let heading = preceding.at(-1); heading;) {
+      const next = headings.find(candidate => candidate.start >= heading.end)
+      parts.push(prose(heading.end, next?.start ?? visible.length))
+      // Dates under a retired heading are history; qualifiers above it describe available models.
+      if (/\bretired\b/i.test(heading.text)) break
+      const { level } = heading
+      heading = preceding.slice(0, preceding.indexOf(heading)).reverse().find(candidate => candidate.level < level)
+    }
+    return parts.join(' ')
+  }
+}
+
 function dateCandidates(text) {
   const normalised = plainText(text)
   const candidates = []
@@ -557,9 +583,11 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       const parsedModels = openAIModelIds(modelCell.html)
       if (!parsedModels) throw new Error('openai deprecations table contains a row without a model id')
       const modelTokens = parsedModels.flatMap(parsedModel => [parsedModel.id, ...parsedModel.aliases])
-      if (modelTokens.some(token => !MODEL_ID_PATTERN.test(token))) {
-        const invalid = modelTokens.find(token => !MODEL_ID_PATTERN.test(token))
-        skippedReasons.add(/[\s/]/.test(invalid) ? 'endpoint-or-product-row' : 'invalid-model-id')
+      const invalidTokens = modelTokens.filter(token => !MODEL_ID_PATTERN.test(token))
+      if (invalidTokens.length) {
+        const unclassified = invalidTokens.find(token => !/[\s/]/.test(token))
+        if (unclassified) throw new Error(`openai deprecations table refused row: invalid-model-id: ${unclassified}`)
+        skippedReasons.add('endpoint-or-product-row')
         continue
       }
 
@@ -899,8 +927,8 @@ function googleShutdown(text, id) {
   return parsed
 }
 
-function googleDatePrecision(html, shutdownText) {
-  return /earliest\s+possible|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i.test(`${plainText(html)} ${shutdownText}`)
+function googleDatePrecision(sectionText, shutdownText) {
+  return /earliest\s+possible|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i.test(`${sectionText} ${shutdownText}`)
     ? 'earliest'
     : undefined
 }
@@ -915,6 +943,7 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
   }
 
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
+  const governingProse = sectionProse(html)
   const records = []
   const skippedReasons = new Set()
   let recognisedTables = 0
@@ -927,6 +956,7 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
       continue
     }
     recognisedTables++
+    const sectionText = governingProse(table.index)
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       const shutdownCell = row.cells[headers.date]
@@ -942,7 +972,7 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
       const item = { id, source: sourceUrl }
       if (shutdown) {
         item.shutdown = shutdown
-        const precision = googleDatePrecision(html, shutdownText)
+        const precision = googleDatePrecision(sectionText, shutdownText)
         if (precision) item.date_precision = precision
       }
       const replacementCell = row.cells[headers.recommended]

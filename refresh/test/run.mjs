@@ -3428,6 +3428,41 @@ reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown'
   strictAssert.equal(record.replacement, 'gemini-3.8-flash')
   strictAssert.throws(() => parseGoogleDeprecations('<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>N/A soon</td><td>---</td></tr></table>'), /unrecognised shutdown date: N\/A soon/)
 })
+const precisionGoogleTable = (id, date) => `<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>${id}</code></td><td>January 1, 2026</td><td>${date}</td><td><code>gemini-next</code></td></tr></table>`
+const googlePrecisions = html => Object.fromEntries(parseGoogleDeprecations(html).map(record => [record.id, record.date_precision ?? 'exact']))
+reviewTest('Scoped precision: Google applies the page note to every model section below it', () => {
+  const html = `<h1>Gemini deprecations</h1><p>Note: The shutdown dates listed in the table indicate the earliest possible dates on which a model might be retired.</p><h2>Gemini 3 models</h2>${precisionGoogleTable('gemini-a', 'May 7, 2027')}<h2>Embedding models</h2>${precisionGoogleTable('gemini-b', 'May 14, 2028')}`
+  strictAssert.deepEqual(googlePrecisions(html), { 'gemini-a': 'earliest', 'gemini-b': 'earliest' })
+})
+reviewTest('Scoped precision: Google ignores a precision phrase in an unrelated section', () => {
+  const html = `<h1>Gemini deprecations</h1><h2>Gemini 3 models</h2>${precisionGoogleTable('gemini-a', 'May 7, 2027')}<h2>Pricing</h2><p>Batch discounts apply to requests made on or later than June 1, 2026.</p>`
+  strictAssert.deepEqual(googlePrecisions(html), { 'gemini-a': 'exact' })
+})
+reviewTest('Scoped precision: Google keeps a sibling section qualifier and script text out of other tables', () => {
+  const html = `<h1>Gemini deprecations</h1><h2>Gemini 3 models</h2><p>These dates are no sooner than listed.</p>${precisionGoogleTable('gemini-a', 'May 7, 2027')}<h2>Embedding models</h2>${precisionGoogleTable('gemini-b', 'May 14, 2028')}<script>const hint = "earliest possible"</script>`
+  strictAssert.deepEqual(googlePrecisions(html), { 'gemini-a': 'earliest', 'gemini-b': 'exact' })
+})
+const precisionVertexTable = (...rows) => `<table><tr><th>Model ID</th><th>Release date</th><th>Retirement date</th><th>Replacement model ID</th></tr>${rows.map(([id, date]) => `<tr><td><code>${id}</code></td><td>May 1, 2025</td><td>${date}</td><td></td></tr>`).join('')}</table>`
+const vertexPrecisions = html => Object.fromEntries(parseVertexModelVersionsHtml(html).map(record => [record.vertexId, record.date_precision ?? 'exact']))
+reviewTest('Scoped precision: Vertex applies the available-models statement but not to its retired section', () => {
+  const html = `<h1>Model versions and lifecycle</h1><h2>Latest available models</h2><p>The following tables list the available models and their retirement dates. While retirement timelines may be extended, they won't be moved to an earlier date than what is listed.</p><h3>Models available for at least 12 months after release</h3><p>The following table lists the models that will be available for at least 12 months after initial release:</p><section><h3>Gemini models</h3>${precisionVertexTable(['gemini-a', 'May 19, 2027 or later'], ['gemini-b', 'October 20, 2026'])}</section><h3>Embeddings models</h3>${precisionVertexTable(['text-embedding-a', 'April 1, 2027'])}<h3>Retired models</h3><div><h4>The following table lists the retired models (click to expand)</h4>${precisionVertexTable(['gemini-old', 'April 21, 2025'], ['gemini-old-floor', 'June 30, 2026 or later'])}</div><h2>Migrate to a latest available model</h2><p>Update your application to point to the recommended upgrades.</p>`
+  strictAssert.deepEqual(vertexPrecisions(html), { 'gemini-a': 'earliest', 'gemini-b': 'earliest', 'text-embedding-a': 'earliest', 'gemini-old': 'exact', 'gemini-old-floor': 'earliest' })
+})
+reviewTest('Scoped precision: Vertex ignores a precision phrase in an unrelated section or a sibling table', () => {
+  const html = `<h2>Latest available models</h2><h3>Gemini models</h3>${precisionVertexTable(['gemini-a', 'May 19, 2027 or later'])}<h3>Embeddings models</h3>${precisionVertexTable(['gemini-b', 'October 20, 2026'])}<h2>What's next</h2><p>Quotas may be raised for projects created on or later than 2026.</p>`
+  strictAssert.deepEqual(vertexPrecisions(html), { 'gemini-a': 'earliest', 'gemini-b': 'exact' })
+})
+const openAIValidTable = '<h2>2026-10-15: Other</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>January 14, 2027</td><td><code>gpt-4.1-2025-04-14</code></td><td><code>gpt-6-luna</code></td></tr></table>'
+reviewTest('OpenAI fails closed on a grammar-invalid model token instead of skipping its row', () => {
+  for (const [cell, token] of [['<code>gpt-4o*</code>', 'gpt-4o\\*'], ['<code>gpt-4o-2024-08-06</code> <code>gpt-4o:latest</code>', 'gpt-4o:latest'], ['<code>/v1/foo</code> <code>gpt-4o*</code>', 'gpt-4o\\*']]) {
+    strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage(cell) + openAIValidTable), new RegExp(`refused row: invalid-model-id: ${token}$`), cell)
+  }
+})
+reviewTest('OpenAI still skips endpoint and product rows inside a lifecycle table', () => {
+  for (const cell of ['Videos API', '<code>OpenAI-Beta: realtime=v1</code>', '<code>/v1/audio/translations</code>']) {
+    strictAssert.deepEqual(parseOpenAIDeprecations(shapesOpenAIPage(cell) + openAIValidTable).map(record => record.id), ['gpt-4.1-2025-04-14'], cell)
+  }
+})
 
 fs.rmSync(outputDir, { recursive: true, force: true })
 fs.rmSync(mixedDistributorOut, { recursive: true, force: true })
