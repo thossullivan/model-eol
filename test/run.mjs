@@ -247,6 +247,60 @@ assert(cyclonedx.metadata?.properties?.some(item => item.name === 'model-eol:gen
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-test-'))
 
+// Repository file names, scanned strings, and waiver text are untrusted in every human report.
+const escapeDir = path.join(tempRoot, 'escape-names')
+fs.mkdirSync(path.join(escapeDir, 'waived'), { recursive: true })
+for (const name of ['x\n## injected\n![p](https:example.com).py', 'esc\x1b[2Kok.py', path.join('waived', 'tick`code`.py')]) {
+  fs.writeFileSync(path.join(escapeDir, name), 'MODEL = "o3-deep-research"\n')
+}
+fs.writeFileSync(path.join(escapeDir, 'candidate.py'), 'model = "a` <img src=https://example.com/c.png> `b"\n')
+fs.writeFileSync(path.join(escapeDir, '.model-eol.json'), JSON.stringify({
+  waivers: [{ model: 'o3-deep-research', paths: ['waived/**'], owner: '<img src=x>', reason: 'see [link](https://example.com)\n# heading', expires: '2099-01-01' }],
+}))
+assert(spawnSync('git', ['init', '-q'], { cwd: escapeDir }).status === 0, 'escape fixture initializes a git root')
+const outsideCodeSpans = line => {
+  let rest = ''
+  let index = 0
+  while (index < line.length) {
+    const open = line.slice(index).match(/`+/)
+    if (!open) return rest + line.slice(index)
+    const start = index + open.index
+    const fence = open[0]
+    let close = -1
+    for (let probe = start + fence.length; probe < line.length;) {
+      const next = line.slice(probe).match(/`+/)
+      if (!next) break
+      if (next[0].length === fence.length) {
+        close = probe + next.index
+        break
+      }
+      probe += next.index + next[0].length
+    }
+    if (close < 0) return rest + line.slice(index)
+    rest += line.slice(index, start)
+    index = close + fence.length
+  }
+  return rest
+}
+const escapeMarkdown = run(['alert', escapeDir, '--format', 'markdown', '--scope', 'all'], { env: colorEnv })
+const escapeMarkdownLines = escapeMarkdown.out.split('\n')
+assert(escapeMarkdownLines.filter(line => line.startsWith('#')).join('|') === '# model-eol alert|## Errors|## Warnings', 'markdown alert file names cannot add headings or lines')
+assert(escapeMarkdownLines.filter(line => line.startsWith('- ') && !/^- (Errors|Warnings): /.test(line)).length === 4, 'markdown alert keeps one list line per crafted finding')
+assert(escapeMarkdownLines.every(line => !/[<]|!\[|\]\(/.test(outsideCodeSpans(line))), 'markdown alert keeps paths, matched strings, and waiver text inside code spans')
+assert(escapeMarkdown.out.includes('``') && escapeMarkdown.out.includes('waived/tick`code`.py:1``'), 'markdown alert fences a backtick path with a longer run')
+assert(escapeMarkdown.out.includes('by `<img src=x>`: `see [link](https://example.com)\\n# heading`'), 'markdown alert code-spans waiver owner and reason')
+assert(!escapeMarkdown.out.includes('\x1b'), 'markdown alert shows control characters as escapes')
+for (const command of ['check', 'inventory', 'schedule']) {
+  const human = run([command, escapeDir, '--scope', 'all', ...(command === 'inventory' ? ['--format', 'text'] : [])], { env: colorEnv })
+  const lines = human.out.split('\n')
+  assert(!human.out.includes('\x1b') && !lines.some(line => /^(## injected|!\[p\]|# heading)/.test(line)), `${command} text shows control characters in names and waiver text as escapes`)
+}
+const noteDir = path.join(tempRoot, 'escape-note')
+fs.mkdirSync(noteDir)
+fs.writeFileSync(path.join(noteDir, 'bad\n::warning::forged.py'), Buffer.from([0xff, 0xfe, 0x0a]))
+const noteCheck = run(['check', noteDir], { env: colorEnv })
+assert(noteCheck.code === 2 && noteCheck.err.includes('bad\\n::warning::forged.py') && !noteCheck.err.split('\n').some(line => line.startsWith('::')), 'incomplete-scan notes cannot start a workflow command line')
+
 const anthropicAliasConsumerDir = path.join(tempRoot, 'anthropic-alias-consumer')
 const anthropicAliasConsumerFeeds = path.join(tempRoot, 'anthropic-alias-feeds')
 fs.mkdirSync(anthropicAliasConsumerDir)

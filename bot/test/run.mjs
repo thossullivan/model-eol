@@ -433,6 +433,9 @@ const tentativeBotResult = await runBot({
 assert(tentativeBotResult.plan.items.length === 0 && tentativeBotResult.decisions.length === 0, 'tentative-floor models produce no migration item or bot work')
 
 assert(markdownCode('custom_hub') === '`custom_hub`' && markdownCode('a`b``c') === '`abc`' && markdownCode('x\r\ny') === '`x y`' && markdownCode('') === '` `' && markdownCode(null) === '` `', 'code spans keep underscores literal and never contain backticks or line breaks')
+const hostileMetadata = { schema: 'model-eol.bot/0.1', id: 'o3-deep-research-2025-06-26', publisher: 'openai', shutdown: '2026-07-23', head_sha: null, feed_digest: 'd', replacement_note: 'a --!><img src=https://example.com/p.png> b --> c' }
+const hostileLine = metadataLine(hostileMetadata)
+assert(!/[<>]/.test(hostileLine.slice('<!--'.length, -'-->'.length)) && parseMetadata(hostileLine)?.replacement_note === hostileMetadata.replacement_note, 'metadata comments carry no raw angle bracket that could close them early and still round-trip')
 const clockDigestFeeds = path.join(tempRoot, 'clock-digest-feeds')
 fs.mkdirSync(clockDigestFeeds)
 const clockDigestRows = status => [

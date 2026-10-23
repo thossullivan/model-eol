@@ -474,7 +474,7 @@ if (incompleteNotes.length && (command === 'check' || command === 'plan')) {
   console.error(`model-eol: ${label}; ${incompleteNotes.length} coverage-loss note(s) recorded`)
   for (const note of incompleteNotes) {
     const location = note.file ? ` (${note.file})` : ''
-    console.error(`  ${note.reason}${location}${note.message ? `: ${note.message}` : ''}`)
+    console.error(printable(`  ${note.reason}${location}${note.message ? `: ${note.message}` : ''}`))
   }
   if (!ALLOW_INCOMPLETE) return 2
 }

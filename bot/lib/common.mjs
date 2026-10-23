@@ -25,7 +25,8 @@ export const daysRemaining = (shutdown, now = new Date()) => {
   return Math.ceil((new Date(`${shutdown}T00:00:00Z`) - now) / 86400000)
 }
 
-export const metadataLine = metadata => `<!-- model-eol ${JSON.stringify(metadata).replaceAll('-->', '\\u002d\\u002d\\u003e')} -->`
+// HTML also closes a comment at --!>, so no raw angle bracket may reach the body
+export const metadataLine = metadata => `<!-- model-eol ${JSON.stringify(metadata).replaceAll('-->', '\\u002d\\u002d\\u003e').replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')} -->`
 
 export const hasMetadataMarker = body => String(body ?? '').includes('<!-- model-eol')
 
