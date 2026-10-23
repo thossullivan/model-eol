@@ -52,6 +52,7 @@ import {
   stripComments,
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
+import { SOURCE_FETCH_DEADLINE_MS } from '../fetch.mjs'
 import { parseRefreshArgs, usage, validateGeneratedFeeds } from '../refresh.mjs'
 import { validateFeed } from '../../lib/validate-feed.mjs'
 import { lifecycleFor } from '../../lib/feeds.mjs'
@@ -2554,7 +2555,7 @@ const anthropicKeyless = await loadProviderSources(PROVIDERS.anthropic, {
   },
 })
 assert(anthropicKeyless.currentIds === null && !anthropicKeyless.endpointAvailable && JSON.stringify(anthropicKeyless.currentModels) === JSON.stringify(anthropicPageModels) && anthropicKeylessRequests.length === 15, 'keyless Anthropic refresh reads the index and every unique model page')
-assert(anthropicKeylessRequests.slice(1).every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en' && !options.headers['x-api-key']), 'Anthropic index and page requests use bounded fetches without credentials')
+assert(anthropicKeylessRequests.every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en' && !options.headers['x-api-key']), 'Anthropic index and page requests use bounded fetches without credentials')
 for (const [index, expectedPages, diagnostic] of [
   [[...anthropicCapUrls, ...anthropicCapUrls].join('\n'), 100, undefined],
   [[...anthropicCapUrls, anthropicTestUrl].join('\n'), 0, 'cap of 100 pages'],
@@ -2588,6 +2589,81 @@ for (const failure of ['HTTP', 'empty', 'oversized-header', 'oversized-stream'])
     },
   }), error => error.message.includes(anthropicTestUrl) && /HTTP 503|empty response|exceeds/.test(error.message))
   assert(true, `Anthropic page loading fails closed on ${failure}`)
+}
+const boundedPublishers = {
+  openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiHtml, credential: 'Authorization' },
+  anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key' }, html: anthropicHtml, credential: 'x-api-key' },
+  google: { env: { GEMINI_API_KEY: 'fixture-key' }, html: googleHtml, credential: 'x-goog-api-key' },
+  mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralHtml, credential: 'Authorization' },
+  cohere: { env: { COHERE_API_KEY: 'fixture-key' }, html: cohereHtml, credential: 'Authorization' },
+}
+const isModelsUrl = (publisher, url) => {
+  const expected = new URL(PROVIDERS[publisher].modelsUrl)
+  const actual = new URL(url)
+  return actual.origin === expected.origin && actual.pathname === expected.pathname
+}
+const boundedResponse = (publisher, url, override) => {
+  const page = isModelsUrl(publisher, url) ? 'models' : url === PROVIDERS[publisher].deprecationsUrl ? 'deprecations' : 'anthropic-page'
+  if (override?.[page]) return override[page]()
+  if (page === 'models') return new Response(fs.readFileSync(path.join(fixtures, `${publisher}-models.json`), 'utf8'))
+  if (page === 'deprecations') return new Response(boundedPublishers[publisher].html)
+  return new Response(url === PROVIDERS.anthropic.aliasesUrl ? anthropicIndex : anthropicModelMarkdown(url))
+}
+const loadBounded = (publisher, fetchImpl) => loadProviderSources(PROVIDERS[publisher], { env: boundedPublishers[publisher].env, notice: () => {}, fetchImpl })
+for (const publisher of Object.keys(boundedPublishers)) {
+  const requests = []
+  const result = await loadBounded(publisher, async (url, options) => {
+    requests.push({ url, options })
+    return boundedResponse(publisher, url)
+  })
+  const { credential } = boundedPublishers[publisher]
+  const models = requests.filter(request => isModelsUrl(publisher, request.url))
+  assert(result.endpointAvailable && models.length >= 1 && requests.some(request => request.url === PROVIDERS[publisher].deprecationsUrl), `${publisher} bounded refresh still reads its models endpoint and deprecations page`)
+  assert(requests.every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en'), `${publisher} models and deprecations requests carry an abort deadline and request English`)
+  assert(models.every(({ options }) => options.headers[credential]?.includes('fixture-key')) && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => !Object.hasOwn(options.headers, credential)), `${publisher} bounded fetch sends ${credential} only to the models endpoint`)
+}
+const oversizedBody = () => new Response(Buffer.alloc(MAX_DISTRIBUTOR_BODY_BYTES + 1, 0x20))
+const oversizedHeader = () => new Response('{}', { headers: { 'content-length': String(MAX_DISTRIBUTOR_BODY_BYTES + 1) } })
+const paddedModels = publisher => () => new Response(fs.readFileSync(path.join(fixtures, `${publisher}-models.json`), 'utf8') + ' '.repeat(MAX_DISTRIBUTOR_BODY_BYTES))
+for (const publisher of Object.keys(boundedPublishers)) {
+  for (const [label, override] of [
+    ['a streamed oversized deprecations page', { deprecations: oversizedBody }],
+    ['an advertised oversized deprecations page', { deprecations: oversizedHeader }],
+    ['valid models JSON padded past the cap', { models: paddedModels(publisher) }],
+    ['an advertised oversized models response', { models: oversizedHeader }],
+  ]) {
+    let reason = ''
+    try { await loadBounded(publisher, async url => boundedResponse(publisher, url, override)) } catch (error) { reason = error.message }
+    assert(reason.includes(`exceeds ${MAX_DISTRIBUTOR_BODY_BYTES} bytes`), `${publisher} refresh fails closed on ${label}`)
+  }
+}
+let googleOversizedPages = 0
+let googleOversizedReason = ''
+try {
+  await loadBounded('google', async url => {
+    if (!isModelsUrl('google', url)) return boundedResponse('google', url)
+    googleOversizedPages++
+    return googleOversizedPages === 1 ? new Response(JSON.stringify({ models: [{ name: 'models/google-page-one' }], nextPageToken: 'two' })) : oversizedBody()
+  })
+} catch (error) { googleOversizedReason = error.message }
+assert(googleOversizedPages === 2 && googleOversizedReason.includes('pageToken=two') && googleOversizedReason.includes('exceeds'), 'Google pagination fails closed when a later page exceeds the body cap')
+let unauthorizedReason = ''
+try { await loadBounded('openai', async url => boundedResponse('openai', url, { models: () => new Response('invalid api key', { status: 401 }) })) } catch (error) { unauthorizedReason = error.message }
+assert(unauthorizedReason.includes('HTTP 401 - invalid api key'), 'models endpoint HTTP errors keep the response detail')
+const realSetTimeout = globalThis.setTimeout
+for (const page of ['deprecations', 'models']) {
+  const deadlines = []
+  let reason = ''
+  globalThis.setTimeout = (callback, ms, ...args) => { deadlines.push(ms); return realSetTimeout(callback, ms === SOURCE_FETCH_DEADLINE_MS ? 0 : ms, ...args) }
+  try {
+    await loadBounded('openai', async (url, options) => {
+      const target = isModelsUrl('openai', url) ? 'models' : 'deprecations'
+      if (target !== page) return boundedResponse('openai', url)
+      if (!options.signal) throw new Error('request has no deadline signal')
+      return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+    })
+  } catch (error) { reason = error.message } finally { globalThis.setTimeout = realSetTimeout }
+  assert(deadlines.includes(SOURCE_FETCH_DEADLINE_MS) && reason.includes(`exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline`), `a stalled ${page} request fails at the source fetch deadline`)
 }
 const cohereRequests = []
 const cohereLiveNotices = []
