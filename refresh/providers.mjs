@@ -1714,15 +1714,33 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     index = identityIndex(models)
   }
 
+  const lifecycleFields = ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']
+  const lifecycleKey = record => JSON.stringify(lifecycleFields.map(field => record[field] ?? null))
+  const lifecycleApplied = new Map()
+  const noteLifecycle = (model, record, family) => {
+    const previous = lifecycleApplied.get(model)
+    if (previous && (previous.family || family) && previous.key !== lifecycleKey(record)) {
+      throw new Error(`deprecation rows give ${model.id} conflicting lifecycles via ${previous.recordId} and ${record.id}`)
+    }
+    lifecycleApplied.set(model, { key: lifecycleKey(record), family, recordId: record.id })
+  }
+  const familyAliasOf = (snapshot, alias) => provider.publisher === 'openai'
+    && /-(?:19|20)\d{2}-\d{2}-\d{2}$/.test(snapshot) && snapshot.slice(0, -11) === alias
+
   for (const record of deprecations) {
     let target = locate(record.id)
     if (!target) target = add({ id: record.id })
 
     const canonicalId = target.id
     const aliases = new Set(target.aliases ?? [])
+    const familyAliases = []
     for (const alias of [record.id, ...(record.aliases ?? [])]) {
       if (!alias || alias === canonicalId) continue
       const owner = locate(alias)
+      if (owner && owner !== target && owner.id === alias && familyAliasOf(record.id, alias)) {
+        familyAliases.push(owner)
+        continue
+      }
       if (committedIds.has(alias) || (owner && owner !== target && owner.id === alias)) {
         throw new Error(`deprecation alias ${alias} for ${canonicalId} conflicts with a canonical model id`)
       }
@@ -1754,8 +1772,19 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     Object.assign(target, clone(record), { id: canonicalId })
     if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
     else delete target.aliases
+    noteLifecycle(target, record, false)
     confirmed.add(target.id)
     deprecationConfirmed.add(target.id)
+    // An OpenAI row naming a snapshot and its undated family id dates both entries and joins neither.
+    for (const family of familyAliases) {
+      noteLifecycle(family, record, true)
+      for (const field of lifecycleFields) delete family[field]
+      for (const [field, value] of Object.entries(clone(record))) {
+        if (field !== 'id' && field !== 'aliases') family[field] = value
+      }
+      confirmed.add(family.id)
+      deprecationConfirmed.add(family.id)
+    }
     index = identityIndex(models)
   }
 

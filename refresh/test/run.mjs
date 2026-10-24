@@ -3559,6 +3559,74 @@ reviewTest('Month-day snapshots: OpenAI picks the snapshot as the canonical ID o
   strictAssert.deepEqual(openAISnapshots('gpt-4-0613-completions', 'gpt-4-0613'), [['gpt-4-0613', ['gpt-4-0613-completions']]])
   strictAssert.deepEqual(openAISnapshots('gpt-4', 'gpt-4-turbo'), [['gpt-4', ['gpt-4-turbo']]])
 })
+const familyPage = (...rows) => `<h2>2026-10-01: Family deprecations</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr>${rows.map(([shutdown, cell, replacement = 'gpt-next']) => `<tr><td>${shutdown}</td><td>${cell}</td><td><code>${replacement}</code></td></tr>`).join('')}</table>`
+const familyCell = (...ids) => ids.map(id => `<code>${id}</code>`).join(' | ')
+const familyFeed = models => ({ ...minimalCommitted, models })
+const familyMerge = (models, page, extra = {}) => mergeFeed(familyFeed(models), { deprecations: parseOpenAIDeprecations(page), currentIds: null, generated: '2026-10-23T00:00:00Z', provider: PROVIDERS.openai, notice: () => {}, ...extra })
+const familyLifecycle = model => model && [model.announced, model.shutdown, model.replacement ?? model.replacement_options?.join(), model.source, model.aliases]
+const familyDated = ['2026-10-01', '2027-04-01', 'gpt-next', PROVIDERS.openai.deprecationsUrl, undefined]
+const familyDistribution = { via: 'azure-ai-foundry', shutdown: '2027-09-21', status: 'active', source: 'https://example.test/azure' }
+reviewTest('Family alias: an OpenAI row naming a committed alias and its committed snapshot dates both and joins neither', () => {
+  const committed = [{ id: 'gpt-fam-2026-03-17', distributions: [familyDistribution] }, { id: 'gpt-fam' }]
+  const page = familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')])
+  const before = structuredClone(committed)
+  const merged = familyMerge(committed, page)
+  strictAssert.deepEqual(committed, before)
+  strictAssert.deepEqual(merged.feed.models.map(model => model.id), ['gpt-fam-2026-03-17', 'gpt-fam'])
+  for (const model of merged.feed.models) strictAssert.deepEqual(familyLifecycle(model), familyDated, model.id)
+  strictAssert.deepEqual(merged.feed.models[0].distributions, [familyDistribution])
+  strictAssert.deepEqual(merged.unconfirmedIds, [])
+  const reversed = familyMerge(committed, familyPage(['Apr 1, 2027', familyCell('gpt-fam-2026-03-17', 'gpt-fam')]))
+  strictAssert.deepEqual(reversed.feed, merged.feed)
+})
+reviewTest('Family alias: endpoint presence keeps the page lifecycle on both entries', () => {
+  const merged = familyMerge([{ id: 'gpt-fam-2026-03-17' }, { id: 'gpt-fam' }], familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')]), { currentIds: ['gpt-fam', 'gpt-fam-2026-03-17'] })
+  for (const model of merged.feed.models) strictAssert.deepEqual(familyLifecycle(model), familyDated, model.id)
+})
+reviewTest('Family alias: a committed alias with a new snapshot adds the snapshot as its own dated entry', () => {
+  const merged = familyMerge([{ id: 'gpt-fam' }], familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')]))
+  strictAssert.deepEqual(merged.feed.models.map(model => [model.id, ...familyLifecycle(model)]), [['gpt-fam', ...familyDated], ['gpt-fam-2026-03-17', ...familyDated]])
+})
+reviewTest('Family alias: an uncommitted alias still binds to its snapshot as before', () => {
+  const merged = familyMerge([{ id: 'gpt-fam-2026-03-17' }], familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')]))
+  strictAssert.deepEqual(merged.feed.models.map(model => [model.id, model.aliases]), [['gpt-fam-2026-03-17', ['gpt-fam']]])
+})
+reviewTest('Family alias: one alias listed with two snapshots on the same lifecycle dates the alias once', () => {
+  const page = familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')])
+  const merged = familyMerge([{ id: 'gpt-fam-2025-03-20' }, { id: 'gpt-fam-2025-12-15' }, { id: 'gpt-fam' }], page)
+  for (const model of merged.feed.models) strictAssert.deepEqual(familyLifecycle(model), familyDated, model.id)
+})
+reviewTest('Family alias: fails closed when two snapshot rows give the alias different lifecycles', () => {
+  const committed = [{ id: 'gpt-fam-2025-03-20' }, { id: 'gpt-fam-2025-12-15' }, { id: 'gpt-fam' }]
+  for (const rows of [[['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Jun 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')]],
+    [['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15'), 'gpt-other-next']]]) {
+    strictAssert.throws(() => familyMerge(committed, familyPage(...rows)), /gpt-fam conflicting lifecycles/)
+  }
+})
+reviewTest('Family alias: fails closed when the alias has its own row with a different lifecycle, in either order', () => {
+  const committed = [{ id: 'gpt-fam-2026-03-17' }, { id: 'gpt-fam' }]
+  const familyRow = ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')]
+  const ownRow = ['Jun 1, 2027', familyCell('gpt-fam')]
+  for (const rows of [[familyRow, ownRow], [ownRow, familyRow]]) {
+    strictAssert.throws(() => familyMerge(committed, familyPage(...rows)), /gpt-fam conflicting lifecycles/)
+  }
+  const merged = familyMerge(committed, familyPage(familyRow, ['Apr 1, 2027', familyCell('gpt-fam')]))
+  for (const model of merged.feed.models) strictAssert.deepEqual(familyLifecycle(model), familyDated, model.id)
+})
+reviewTest('Family alias: a committed canonical alias outside the snapshot family still throws', () => {
+  for (const [alias, snapshot] of [['gpt-other', 'gpt-fam-2026-03-17'], ['gpt-fam-mini', 'gpt-fam-2026-03-17'], ['gpt-fa', 'gpt-fam-2026-03-17'], ['gpt-fam', 'gpt-fam-mini-2026-03-17'], ['gpt-fam', 'gpt-fam-0613'], ['gpt-fam', 'gpt-fam-2026-03-17-completions']]) {
+    strictAssert.throws(() => familyMerge([{ id: snapshot }, { id: alias }], familyPage(['Apr 1, 2027', familyCell(alias, snapshot)])), /conflicts with (?:a )?canonical model id/, `${alias} | ${snapshot}`)
+  }
+})
+reviewTest('Family alias: an alias owned by a third committed entry still throws', () => {
+  strictAssert.throws(() => familyMerge([{ id: 'gpt-fam-2026-03-17' }, { id: 'gpt-third', aliases: ['gpt-fam'] }], familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')])), /conflicts with canonical model id gpt-third/)
+})
+reviewTest('Family alias: the rule is OpenAI-only; other publishers still refuse a committed canonical alias', () => {
+  strictAssert.throws(() => mergeFeed({ ...anthropicFeed, models: [{ id: 'claude-x-2026-03-17' }, { id: 'claude-x' }] }, {
+    deprecations: [{ id: 'claude-x-2026-03-17', aliases: ['claude-x'], announced: '2026-10-01', shutdown: '2027-04-01' }],
+    currentIds: null, provider: PROVIDERS.anthropic, notice: () => {},
+  }), /deprecation alias claude-x for claude-x-2026-03-17 conflicts with a canonical model id/)
+})
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
   strictAssert.equal(record.id, 'gemini-3.7-flash')
