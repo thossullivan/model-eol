@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { assertValidFeed } from '../../lib/validate-feed.mjs'
+import { logWarning } from './common.mjs'
 
 const responseText = async response => {
   if (typeof response?.text === 'function') return response.text()
@@ -16,7 +17,7 @@ export const downloadFeeds = async ({
   fetchImpl = globalThis.fetch,
   vendoredDir,
   allowVendoredFallback = false,
-  warn = console.error,
+  warn = logWarning,
 }) => {
   if (!urls.length) return { dir: vendoredDir, cleanup: () => {} }
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-feeds-'))

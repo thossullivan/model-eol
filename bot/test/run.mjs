@@ -17,9 +17,11 @@ import {
   runBot,
   runPlan,
 } from '../bot.mjs'
-import { branchFor, itemDigest, markdownCode, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
+import { branchFor, itemDigest, markdownCode, markdownText, metadataLine, parseMetadata, slugFor, staleWorkComment } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
+import { GitHubClient } from '../lib/github.mjs'
+import * as botModule from '../bot.mjs'
 import { capReport, readReportCapped, reportForBody, runEvalHook } from '../lib/eval.mjs'
 import { cloneRepository, deleteRemoteBranch, gitAuthentication, originFor } from '../lib/git.mjs'
 import { assertValidEvalResults } from '../../lib/receipts.mjs'
@@ -433,6 +435,79 @@ const tentativeBotResult = await runBot({
 assert(tentativeBotResult.plan.items.length === 0 && tentativeBotResult.decisions.length === 0, 'tentative-floor models produce no migration item or bot work')
 
 assert(markdownCode('custom_hub') === '`custom_hub`' && markdownCode('a`b``c') === '`abc`' && markdownCode('x\r\ny') === '`x y`' && markdownCode('') === '` `' && markdownCode(null) === '` `', 'code spans keep underscores literal and never contain backticks or line breaks')
+const hostileMetadata = { schema: 'model-eol.bot/0.1', id: 'o3-deep-research-2025-06-26', publisher: 'openai', shutdown: '2026-07-23', head_sha: null, feed_digest: 'd', replacement_note: 'a --!><img src=https://example.com/p.png> b --> c' }
+const hostileLine = metadataLine(hostileMetadata)
+assert(!/[<>]/.test(hostileLine.slice('<!--'.length, -'-->'.length)) && parseMetadata(hostileLine)?.replacement_note === hostileMetadata.replacement_note, 'metadata comments carry no raw angle bracket that could close them early and still round-trip')
+const lineSeparator = String.fromCharCode(0x2028)
+const separatorMetadata = { ...hostileMetadata, replacement_note: `a${lineSeparator}b${String.fromCharCode(0x2029)}c` }
+const separatorLine = metadataLine(separatorMetadata)
+assert(!separatorLine.includes(lineSeparator) && parseMetadata(separatorLine)?.replacement_note === separatorMetadata.replacement_note, 'metadata comments encode U+2028 and U+2029 so the metadata line still parses')
+const hostileText = markdownText('azure/x\n---\n@thossullivan see https://evil.example www.evil.example |a|b| \x1b[2K')
+assert(!/[\n\r|\x1b]|@(?!&#8203;)|:\/\/|www\.(?!&#8203;)/i.test(hostileText) && hostileText.includes('@&#8203;thossullivan') && hostileText.includes('&#124;'), 'markdown text stays on one line and neutralizes mentions, table pipes, autolinks, and controls')
+const referenceText = markdownText('ping @thossullivan about #1, owner/repo#1, and user@example.com')
+assert(referenceText === 'ping @&#8203;thossullivan about #&#8203;1, owner/&#8203;repo#&#8203;1, and user@&#8203;example.com', 'markdown text breaks mentions, issue references, and emails with a zero-width space, which GitHub does not resolve through')
+const issuePathText = markdownText('see octocat/Hello-World/issues/1, https://github.com/o/r/pull/2, /issues/3, GH-4, and www.evil.example')
+assert(!/\/(?!&#8203;)|www(?!&#8203;)|gh-/i.test(issuePathText), 'markdown text breaks issue paths, GH- references, and www. links before GitHub can link them')
+for (const [block, rendered] of [['---', '&#45;--'], ['   ---', '&#45;--'], ['+', '&#43;'], ['1. one', '1&#46; one'], ['    code', 'code'], ['===', '&#61;==']]) {
+  assert(markdownText(block) === rendered, `markdown text cannot start a block element: ${JSON.stringify(block)}`)
+}
+const spoofedSource = buildIssueBody({
+  group: {
+    kind: 'issue',
+    id: 'o3-deep-research-2025-06-26',
+    subject: 'o3-deep-research-2025-06-26',
+    publisher: 'openai',
+    shutdown: '2026-07-23',
+    via: null,
+    root: '.',
+    feedDigest: 'd',
+    context: { announced: null, notes: [], entry: null },
+    issues: [{ file: 'a.py', line: 1, reason: 'not-direct-api', status: 'retired', matched: 'o3-deep-research', sources: ['https://evil.example\\@github.com/advisory'] }],
+  },
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+assert(spoofedSource.includes('- [https://evil.example/@&#8203;github.com/advisory](https://evil.example/@github.com/advisory)'),'source link labels show the normalized URL the link actually opens')
+const hostileIssue = buildIssueBody({
+  group: {
+    kind: 'issue',
+    id: 'o3-deep-research-2025-06-26',
+    subject: 'o3-deep-research-2025-06-26',
+    publisher: 'openai',
+    shutdown: '2026-07-23',
+    via: null,
+    root: '.',
+    feedDigest: 'd',
+    context: { announced: null, notes: [], entry: null },
+    issues: [{ file: 'azure/x\n---\n@thossullivan see https://evil.example now.py', line: 3, reason: 'not-direct-api', status: 'retired', matched: 'o3-deep-research' }],
+  },
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const hostileIssueLines = hostileIssue.split('\n')
+const evidenceLines = hostileIssueLines.slice(hostileIssueLines.indexOf('## Evidence') + 1, hostileIssueLines.indexOf('## Sources') - 1)
+assert(evidenceLines.length === 1 && evidenceLines[0] === '- `azure/x --- @thossullivan see https:/evil.example now.py:3` - not-direct-api (`o3-deep-research`)' && !hostileIssueLines.includes('---'), 'issue evidence code-spans repository paths so they cannot add rules, mentions, or links')
+const waivedComment = staleWorkComment('issue', { expires: '2099-01-01', owner: '@thossullivan', reason: 'see [x](https://evil.example)\n# h' })
+assert(waivedComment.includes('owned by `@thossullivan`') && waivedComment.includes('records: `see [x](https://evil.example) # h`') && !waivedComment.includes('\n'), 'stale-work comments code-span waiver owner and reason')
+const decisionLog = formatDecisions([{ action: 'create', group: { kind: 'issue', publisher: 'openai', subject: 'x\n::error::forged' }, body: 'line\n::warning title=forged::x\n  ##[error]legacy\n\x1b[2K' }])
+assert(decisionLog.startsWith('model-eol decision table\n') && !decisionLog.split('\n').some(line => line.trimStart().startsWith('::') || line.includes('##[') || line.includes('\x1b')), 'dry-run decision tables cannot open workflow commands')
+const opensWorkflowCommand = text => String(text).split('\n').some(line => line.trimStart().startsWith('::') || line.includes('##['))
+const evalLines = botModule.evalResultLines?.([{ status: 'pass', publisher: 'p\n::warning title=forged::eval', id: 'x ##[error]y' }]) ?? []
+assert(evalLines.length === 1 && !opensWorkflowCommand(evalLines.join('\n')), 'evaluate result lines escape plan publisher and id')
+const capturedWarnings = []
+const originalConsoleError = console.error
+console.error = (...values) => capturedWarnings.push(values.join(' '))
+try {
+  await downloadFeeds({
+    urls: ['https://feeds.invalid/forged.json'],
+    vendoredDir: path.join(root, 'feeds'),
+    allowVendoredFallback: true,
+    fetchImpl: async () => ({ status: 200, ok: true, text: async () => JSON.stringify({ spec: 'x\n::warning title=forged::feed', publisher: 'p', generated: '2026-08-01T00:00:00Z', models: [] }) }),
+  })
+  const labelClient = new GitHubClient({ repo: 'example/repo', token: 't', transport: async () => ({ status: 500, ok: false, data: 'x\n::warning title=forged::api ##[error]y' }) })
+  await labelClient.ensureModelEolLabel()
+} finally {
+  console.error = originalConsoleError
+}
+assert(capturedWarnings.length === 2 && capturedWarnings.every(message => message.includes('forged') && !opensWorkflowCommand(message)), 'default feed and GitHub API warnings cannot open workflow commands')
 const clockDigestFeeds = path.join(tempRoot, 'clock-digest-feeds')
 fs.mkdirSync(clockDigestFeeds)
 const clockDigestRows = status => [

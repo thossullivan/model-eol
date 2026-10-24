@@ -52,6 +52,7 @@ import { BaseUnavailableError, inCheckScope, selectChangedFindings } from './lib
 import { gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
 import { DOCUMENT_TYPES, formatDocumentErrors, validateDocumentFile } from './lib/validate-document.mjs'
 import { SUPPORTED_RECEIPT_SCHEMAS, VERIFY_INPUTS, VerifyError, formatVerification, printable, verifyReceipt } from './lib/verify.mjs'
+import { logSafeJson, printableLines } from './lib/printable.mjs'
 
 const rootForTarget = target => {
   const absolute = path.resolve(target)
@@ -330,7 +331,7 @@ if (command === 'verify') {
       : `model-eol verify: unexpected error, nothing was checked: ${error?.message ?? error}`))
     return 2
   }
-  console.log(AS_JSON ? JSON.stringify(report, null, 2) : formatVerification(report))
+  console.log(AS_JSON ? logSafeJson(JSON.stringify(report, null, 2)) : formatVerification(report))
   if (report.result === 'mismatch') return 1
   return report.result === 'partial' && values['require-all'] ? 1 : 0
 }
@@ -349,7 +350,7 @@ if (command === 'apply') {
     const result = applyPlan({ planPath: PLAN_FILE, dryRun: DRY_RUN, rootDir: process.cwd() })
     return result.failed ? 1 : 0
   } catch (e) {
-    console.error(`failed to apply plan ${PLAN_FILE}: ${e.message}`)
+    console.error(printableLines(`failed to apply plan ${PLAN_FILE}: ${e.message}`))
     return 2
   }
 }
@@ -371,13 +372,13 @@ if (command === 'validate') {
     try {
       const result = validateDocumentFile(file, { type: values.type ?? null })
       if (result.errors.length) {
-        for (const error of formatDocumentErrors(result.errors)) console.error(`${file}: ${error}`)
+        for (const error of formatDocumentErrors(result.errors)) console.error(printableLines(`${file}: ${error}`))
         failed = true
         continue
       }
       console.log(`${file}: valid ${result.type} document`)
     } catch (error) {
-      console.error(`${file}: validation failed: ${error.message}`)
+      console.error(printableLines(`${file}: validation failed: ${error.message}`))
       failed = true
     }
   }
@@ -397,7 +398,7 @@ try {
     ? loadConfig(configLocation.file, { defaults: DEFAULT_CONFIG, allowMissing: false })
     : normalizeConfig({}, { defaults: CLI_DEFAULT_CONFIG })
 } catch (e) {
-  console.error(`failed to load repository config: ${e.message}`)
+  console.error(printable(`failed to load repository config: ${e.message}`))
   return 2
 }
 
@@ -431,7 +432,7 @@ let feedData
 try {
   feedData = loadFeeds(FEEDS_DIR)
 } catch (e) {
-  console.error(`failed to load feeds from ${FEEDS_DIR}: ${e.message}`)
+  console.error(printableLines(`failed to load feeds from ${FEEDS_DIR}: ${e.message}`))
   return 2
 }
 if (feedData.entries.size === 0) {
@@ -441,7 +442,7 @@ if (feedData.entries.size === 0) {
 
 const headPolicyError = policyError(repositoryConfig, feedData, values.via)
 if (headPolicyError) {
-  console.error(headPolicyError)
+  console.error(printable(headPolicyError))
   return 2
 }
 
@@ -464,7 +465,7 @@ try {
     includeDocs: INCLUDE_DOCS,
   }))
 } catch (e) {
-  console.error(`scan failed: ${e.message}`)
+  console.error(printableLines(`scan failed: ${e.message}`))
   return 2
 }
 
@@ -474,7 +475,7 @@ if (incompleteNotes.length && (command === 'check' || command === 'plan')) {
   console.error(`model-eol: ${label}; ${incompleteNotes.length} coverage-loss note(s) recorded`)
   for (const note of incompleteNotes) {
     const location = note.file ? ` (${note.file})` : ''
-    console.error(`  ${note.reason}${location}${note.message ? `: ${note.message}` : ''}`)
+    console.error(printable(`  ${note.reason}${location}${note.message ? `: ${note.message}` : ''}`))
   }
   if (!ALLOW_INCOMPLETE) return 2
 }
@@ -541,7 +542,7 @@ if (CHANGED_BASE !== null) {
     changedFindings = selection.findings
     changedStats = selection.stats
   } catch (e) {
-    console.error(`--changed failed: ${e.message}`)
+    console.error(printableLines(`--changed failed: ${e.message}`))
     return 2
   }
   const statsFile = process.env.MODEL_EOL_CHANGED_STATS
@@ -559,21 +560,21 @@ const schedule = () => buildSchedule(inventory())
 const alert = () => buildAlert(schedule())
 
 if (command === 'plan') {
-  console.log(JSON.stringify(buildPlan({
+  console.log(logSafeJson(JSON.stringify(buildPlan({
     scan,
     findings,
     entries: feedData.entries,
     days: DAYS,
     via: VIA,
     scope: SCOPE,
-  }), null, 2))
+  }), null, 2)))
   return 0
 }
 
 if (command === 'check') {
   if (AS_JSON) {
     // capture stays out of the 0.1 document until the contract grows; the human line and the bot carry it
-    console.log(JSON.stringify({ schema: 'model-eol/check@0.1', threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings.map(({ capture, ...finding }) => finding) }, null, 2))
+    console.log(logSafeJson(JSON.stringify({ schema: 'model-eol/check@0.1', threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings.map(({ capture, ...finding }) => finding) }, null, 2)))
   } else {
     console.log(formatCheck({ findings: changedFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
   }
@@ -584,9 +585,9 @@ if (command === 'inventory') {
   const inv = inventory()
   const inventoryFormat = FORMAT ?? 'json'
   if (inventoryFormat === 'cyclonedx') {
-    console.log(JSON.stringify(formatInventoryCycloneDX(inv), null, 2))
+    console.log(logSafeJson(JSON.stringify(formatInventoryCycloneDX(inv), null, 2)))
   } else if (AS_JSON || inventoryFormat === 'json') {
-    console.log(JSON.stringify(inv, null, 2))
+    console.log(logSafeJson(JSON.stringify(inv, null, 2)))
   } else {
     console.log(formatInventory(inv, DAYS))
   }
@@ -596,7 +597,7 @@ if (command === 'inventory') {
 if (command === 'schedule') {
   const sched = schedule()
   if (AS_JSON) {
-    console.log(JSON.stringify(sched, null, 2))
+    console.log(logSafeJson(JSON.stringify(sched, null, 2)))
   } else {
     console.log(formatSchedule(sched, DAYS))
   }
@@ -606,9 +607,9 @@ if (command === 'schedule') {
 if (command === 'alert') {
   const payload = alert()
   if (AS_JSON || FORMAT === 'json') {
-    console.log(JSON.stringify(payload, null, 2))
+    console.log(logSafeJson(JSON.stringify(payload, null, 2)))
   } else if (FORMAT === 'badge') {
-    console.log(JSON.stringify(formatAlertBadge(payload), null, 2))
+    console.log(logSafeJson(JSON.stringify(formatAlertBadge(payload), null, 2)))
   } else if (FORMAT === 'markdown') {
     console.log(formatAlertMarkdown(payload, DAYS))
   } else {

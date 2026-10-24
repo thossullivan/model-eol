@@ -1,3 +1,5 @@
+import { logWarning } from './common.mjs'
+
 const linkFor = (headers, relation) => {
   const value = headers?.get?.('link') || headers?.get?.('Link') || headers?.link || headers?.Link || ''
   const match = value.split(',').map(part => part.trim()).find(part => part.endsWith(`rel="${relation}"`))
@@ -32,7 +34,7 @@ const MODEL_EOL_LABEL = {
 }
 
 export class GitHubClient {
-  constructor({ repo, apiUrl = 'https://api.github.com', token, transport = globalThis.fetch, warn = console.error }) {
+  constructor({ repo, apiUrl = 'https://api.github.com', token, transport = globalThis.fetch, warn = logWarning }) {
     this.repo = repo
     this.apiUrl = apiUrl.replace(/\/$/, '')
     this.token = token
