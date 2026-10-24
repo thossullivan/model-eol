@@ -62,8 +62,10 @@ export async function fetchBoundedBody(url, source, fetchImpl = globalThis.fetch
     controller.abort()
     const deadline = `exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline`
     const cause = error.cause?.message ? ` (${String(error.cause.message).replace(/\s+/g, ' ')})` : ''
-    const reason = timedOut ? (errorStatus === undefined ? deadline : `HTTP ${errorStatus}, then ${deadline} reading the body`) : `${error.message}${cause}`
-    throw new Error(`${source} fetch failed for ${url}: ${reason}`)
+    let reason = timedOut ? (errorStatus === undefined ? deadline : `HTTP ${errorStatus}, then ${deadline} reading the body`) : `${error.message}${cause}`
+    // Node echoes a rejected header value, which may be a credential, in its error message.
+    for (const value of Object.values(headers)) if (String(value).length >= 8) reason = reason.split(String(value)).join('[redacted]')
+    throw new Error(`${source} fetch failed for ${url}: ${reason.replace(/\s+/g, ' ')}`)
   } finally {
     clearTimeout(timeout)
   }

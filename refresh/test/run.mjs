@@ -52,7 +52,7 @@ import {
   stripComments,
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
-import { SOURCE_FETCH_DEADLINE_MS } from '../fetch.mjs'
+import { SOURCE_FETCH_DEADLINE_MS, fetchBoundedBody } from '../fetch.mjs'
 import { parseRefreshArgs, usage, validateGeneratedFeeds } from '../refresh.mjs'
 import { validateFeed } from '../../lib/validate-feed.mjs'
 import { lifecycleFor } from '../../lib/feeds.mjs'
@@ -2678,6 +2678,13 @@ try {
   })
 } catch (error) { redirectReason = error.message }
 assert(redirectReason.includes('fetch failed (unexpected redirect)'), 'a refused models endpoint redirect names its cause')
+let rejectedHeaderReason = ''
+try {
+  await fetchBoundedBody('https://api.example.test/v1/models', 'openai', async () => {
+    throw new TypeError('Headers.append: "Bearer sk-test-secret-value\nabc" is an invalid header value.')
+  }, { headers: { authorization: 'Bearer sk-test-secret-value\nabc' } })
+} catch (error) { rejectedHeaderReason = error.message }
+assert(rejectedHeaderReason.includes('[redacted]') && !rejectedHeaderReason.includes('sk-test-secret-value') && !/[\r\n]/.test(rejectedHeaderReason), 'a rejected credential header is redacted and the error stays on one line')
 let bomModels = null
 try {
   bomModels = await loadBounded('openai', async url => isModelsUrl('openai', url)
