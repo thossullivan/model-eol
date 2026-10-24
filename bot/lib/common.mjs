@@ -1,5 +1,5 @@
 import { sha256 } from '../../lib/digests.mjs'
-import { printable } from '../../lib/printable.mjs'
+import { printable, printableLines } from '../../lib/printable.mjs'
 
 export { matchesAnyGlob, matchesGlob } from '../../lib/glob.mjs'
 export { activeWaiver, itemDigest, repoPath, sha256, sortedJsonDigest, stableJson } from '../../lib/digests.mjs'
@@ -72,12 +72,12 @@ const entityMap = new Map([
   [']', '&#93;'],
   ['(', '&#40;'],
   [')', '&#41;'],
-  ['#', '&#35;'],
+  ['#', '#&#8203;'],
   ['*', '&#42;'],
   ['_', '&#95;'],
   ['~', '&#126;'],
   ['!', '&#33;'],
-  ['@', '&#64;'],
+  ['@', '@&#8203;'],
   ['|', '&#124;'],
 ])
 
@@ -87,8 +87,8 @@ const markdownInline = value => printable(String(value ?? '').replace(/\r\n|[\r\
 
 // one line of text: no block structure, table cells, or bare autolinks
 export const markdownText = value => markdownInline(value)
-  .replace(/(www)\./gi, '$1&#46;')
-  .replaceAll('://', '&#58;//')
+  .replace(/(www)\./gi, '$1.&#8203;')
+  .replaceAll('://', ':&#8203;//')
 
 // code spans show entities literally, so drop backticks and line breaks instead of escaping
 export const markdownCode = value => {
@@ -102,10 +102,12 @@ export const markdownLink = (label, value) => {
     const url = new URL(text)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return markdownText(text)
     const href = url.toString().replaceAll('\\', '%5C').replaceAll('(', '%28').replaceAll(')', '%29')
-    return `[${markdownInline(label)}](${href})`
+    return `[${markdownInline(label === text ? href : label)}](${href})`
   } catch {
     return markdownText(text)
   }
 }
 
 export const markdownFenceText = value => String(value ?? '').replaceAll('`', '')
+
+export const logWarning = message => console.error(printableLines(message))

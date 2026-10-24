@@ -20,6 +20,8 @@ import {
 import { branchFor, itemDigest, markdownCode, markdownText, metadataLine, parseMetadata, slugFor, staleWorkComment } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
+import { GitHubClient } from '../lib/github.mjs'
+import * as botModule from '../bot.mjs'
 import { capReport, readReportCapped, reportForBody, runEvalHook } from '../lib/eval.mjs'
 import { cloneRepository, deleteRemoteBranch, gitAuthentication, originFor } from '../lib/git.mjs'
 import { assertValidEvalResults } from '../../lib/receipts.mjs'
@@ -441,7 +443,25 @@ const separatorMetadata = { ...hostileMetadata, replacement_note: `a${lineSepara
 const separatorLine = metadataLine(separatorMetadata)
 assert(!separatorLine.includes(lineSeparator) && parseMetadata(separatorLine)?.replacement_note === separatorMetadata.replacement_note, 'metadata comments encode U+2028 and U+2029 so the metadata line still parses')
 const hostileText = markdownText('azure/x\n---\n@thossullivan see https://evil.example www.evil.example |a|b| \x1b[2K')
-assert(!/[\n\r@|\x1b]|:\/\/|www\./i.test(hostileText) && hostileText.includes('&#64;thossullivan') && hostileText.includes('&#124;'), 'markdown text stays on one line and neutralizes mentions, table pipes, autolinks, and controls')
+assert(!/[\n\r|\x1b]|@(?!&#8203;)|:\/\/|www\.(?!&#8203;)/i.test(hostileText) && hostileText.includes('@&#8203;thossullivan') && hostileText.includes('&#124;'), 'markdown text stays on one line and neutralizes mentions, table pipes, autolinks, and controls')
+const referenceText = markdownText('ping @thossullivan about #1, owner/repo#1, and user@example.com')
+assert(referenceText === 'ping @&#8203;thossullivan about #&#8203;1, owner/repo#&#8203;1, and user@&#8203;example.com', 'markdown text breaks mentions, issue references, and emails with a zero-width space, which GitHub does not resolve through')
+const spoofedSource = buildIssueBody({
+  group: {
+    kind: 'issue',
+    id: 'o3-deep-research-2025-06-26',
+    subject: 'o3-deep-research-2025-06-26',
+    publisher: 'openai',
+    shutdown: '2026-07-23',
+    via: null,
+    root: '.',
+    feedDigest: 'd',
+    context: { announced: null, notes: [], entry: null },
+    issues: [{ file: 'a.py', line: 1, reason: 'not-direct-api', status: 'retired', matched: 'o3-deep-research', sources: ['https://evil.example\\@github.com/advisory'] }],
+  },
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+assert(spoofedSource.includes('- [https://evil.example/@&#8203;github.com/advisory](https://evil.example/@github.com/advisory)'),'source link labels show the normalized URL the link actually opens')
 const hostileIssue = buildIssueBody({
   group: {
     kind: 'issue',
@@ -464,6 +484,25 @@ const waivedComment = staleWorkComment('issue', { expires: '2099-01-01', owner: 
 assert(waivedComment.includes('owned by `@thossullivan`') && waivedComment.includes('records: `see [x](https://evil.example) # h`') && !waivedComment.includes('\n'), 'stale-work comments code-span waiver owner and reason')
 const decisionLog = formatDecisions([{ action: 'create', group: { kind: 'issue', publisher: 'openai', subject: 'x\n::error::forged' }, body: 'line\n::warning title=forged::x\n  ##[error]legacy\n\x1b[2K' }])
 assert(decisionLog.startsWith('model-eol decision table\n') && !decisionLog.split('\n').some(line => line.trimStart().startsWith('::') || line.includes('##[') || line.includes('\x1b')), 'dry-run decision tables cannot open workflow commands')
+const opensWorkflowCommand = text => String(text).split('\n').some(line => line.trimStart().startsWith('::') || line.includes('##['))
+const evalLines = botModule.evalResultLines?.([{ status: 'pass', publisher: 'p\n::warning title=forged::eval', id: 'x ##[error]y' }]) ?? []
+assert(evalLines.length === 1 && !opensWorkflowCommand(evalLines.join('\n')), 'evaluate result lines escape plan publisher and id')
+const capturedWarnings = []
+const originalConsoleError = console.error
+console.error = (...values) => capturedWarnings.push(values.join(' '))
+try {
+  await downloadFeeds({
+    urls: ['https://feeds.invalid/forged.json'],
+    vendoredDir: path.join(root, 'feeds'),
+    allowVendoredFallback: true,
+    fetchImpl: async () => ({ status: 200, ok: true, text: async () => JSON.stringify({ spec: 'x\n::warning title=forged::feed', publisher: 'p', generated: '2026-08-01T00:00:00Z', models: [] }) }),
+  })
+  const labelClient = new GitHubClient({ repo: 'example/repo', token: 't', transport: async () => ({ status: 500, ok: false, data: 'x\n::warning title=forged::api ##[error]y' }) })
+  await labelClient.ensureModelEolLabel()
+} finally {
+  console.error = originalConsoleError
+}
+assert(capturedWarnings.length === 2 && capturedWarnings.every(message => message.includes('forged') && !opensWorkflowCommand(message)), 'default feed and GitHub API warnings cannot open workflow commands')
 const clockDigestFeeds = path.join(tempRoot, 'clock-digest-feeds')
 fs.mkdirSync(clockDigestFeeds)
 const clockDigestRows = status => [

@@ -12,6 +12,7 @@ import {
   branchFor,
   daysRemaining,
   hasMetadataMarker,
+  logWarning,
   markdownCode,
   markdownLink,
   markdownText,
@@ -165,7 +166,7 @@ const validateRepo = repo => {
   return repo
 }
 
-const spawnPlan = ({ workDir, config, configPath = null, feedsDir, checkerPath = CHECKER, warn = console.error }) => {
+const spawnPlan = ({ workDir, config, configPath = null, feedsDir, checkerPath = CHECKER, warn = logWarning }) => {
   const args = [checkerPath, 'plan', '.']
   if (configPath) args.push('--config', configPath)
   else {
@@ -741,7 +742,7 @@ export const evaluatePlan = async ({
   fetchImpl = globalThis.fetch,
   checkerPath = CHECKER,
   vendoredFeeds = VENDORED_FEEDS,
-  warn = message => console.error(message),
+  warn = logWarning,
   now = new Date(),
 } = {}) => {
   if (!planFile) throw new Error('--plan-file is required for evaluate')
@@ -1349,7 +1350,7 @@ export const runBot = async ({
   evalResultsFile = null,
   evalCommandOverride = null,
   now = new Date(),
-  warn = message => console.error(message),
+  warn = logWarning,
 } = {}) => {
   if (deprecatedInlineEval || evalEnabled) {
     throw new Error('inline --eval was removed because publication is write-capable; run `model-eol-bot evaluate` in a read-only job and pass its manifest with MODEL_EOL_EVAL_RESULTS_FILE')
@@ -1489,6 +1490,8 @@ export const runBot = async ({
   }
 }
 
+export const evalResultLines = results => results.map(item => printable(`${item.status} ${item.publisher}/${item.id}`))
+
 export const main = async (argv = process.argv.slice(2), env = process.env) => {
   if (argv[0] === 'evaluate') {
     const options = parseEvaluateArgs(argv.slice(1))
@@ -1505,7 +1508,7 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
       commandOverride: env.MODEL_EOL_EVAL_COMMAND || null,
     })
     appendEvalSummary(env.GITHUB_STEP_SUMMARY, result.artifact)
-    for (const item of result.artifact.results) console.log(`${item.status} ${item.publisher}/${item.id}`)
+    for (const line of evalResultLines(result.artifact.results)) console.log(line)
     return 0
   }
   const options = parseArgs(argv)

@@ -52,7 +52,7 @@ import { BaseUnavailableError, inCheckScope, selectChangedFindings } from './lib
 import { gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
 import { DOCUMENT_TYPES, formatDocumentErrors, validateDocumentFile } from './lib/validate-document.mjs'
 import { SUPPORTED_RECEIPT_SCHEMAS, VERIFY_INPUTS, VerifyError, formatVerification, printable, verifyReceipt } from './lib/verify.mjs'
-import { printableLines } from './lib/printable.mjs'
+import { logSafeJson, printableLines } from './lib/printable.mjs'
 
 const rootForTarget = target => {
   const absolute = path.resolve(target)
@@ -331,7 +331,7 @@ if (command === 'verify') {
       : `model-eol verify: unexpected error, nothing was checked: ${error?.message ?? error}`))
     return 2
   }
-  console.log(AS_JSON ? JSON.stringify(report, null, 2) : formatVerification(report))
+  console.log(AS_JSON ? logSafeJson(JSON.stringify(report, null, 2)) : formatVerification(report))
   if (report.result === 'mismatch') return 1
   return report.result === 'partial' && values['require-all'] ? 1 : 0
 }
@@ -560,21 +560,21 @@ const schedule = () => buildSchedule(inventory())
 const alert = () => buildAlert(schedule())
 
 if (command === 'plan') {
-  console.log(JSON.stringify(buildPlan({
+  console.log(logSafeJson(JSON.stringify(buildPlan({
     scan,
     findings,
     entries: feedData.entries,
     days: DAYS,
     via: VIA,
     scope: SCOPE,
-  }), null, 2))
+  }), null, 2)))
   return 0
 }
 
 if (command === 'check') {
   if (AS_JSON) {
     // capture stays out of the 0.1 document until the contract grows; the human line and the bot carry it
-    console.log(JSON.stringify({ schema: 'model-eol/check@0.1', threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings.map(({ capture, ...finding }) => finding) }, null, 2))
+    console.log(logSafeJson(JSON.stringify({ schema: 'model-eol/check@0.1', threshold_days: DAYS, distributor: VIA, scope: SCOPE, scan_notes: scan.notes, findings: changedFindings.map(({ capture, ...finding }) => finding) }, null, 2)))
   } else {
     console.log(formatCheck({ findings: changedFindings, bad, scannedFiles: scan.files.length, days: DAYS, scope: SCOPE }))
   }
@@ -585,9 +585,9 @@ if (command === 'inventory') {
   const inv = inventory()
   const inventoryFormat = FORMAT ?? 'json'
   if (inventoryFormat === 'cyclonedx') {
-    console.log(JSON.stringify(formatInventoryCycloneDX(inv), null, 2))
+    console.log(logSafeJson(JSON.stringify(formatInventoryCycloneDX(inv), null, 2)))
   } else if (AS_JSON || inventoryFormat === 'json') {
-    console.log(JSON.stringify(inv, null, 2))
+    console.log(logSafeJson(JSON.stringify(inv, null, 2)))
   } else {
     console.log(formatInventory(inv, DAYS))
   }
@@ -597,7 +597,7 @@ if (command === 'inventory') {
 if (command === 'schedule') {
   const sched = schedule()
   if (AS_JSON) {
-    console.log(JSON.stringify(sched, null, 2))
+    console.log(logSafeJson(JSON.stringify(sched, null, 2)))
   } else {
     console.log(formatSchedule(sched, DAYS))
   }
@@ -607,9 +607,9 @@ if (command === 'schedule') {
 if (command === 'alert') {
   const payload = alert()
   if (AS_JSON || FORMAT === 'json') {
-    console.log(JSON.stringify(payload, null, 2))
+    console.log(logSafeJson(JSON.stringify(payload, null, 2)))
   } else if (FORMAT === 'badge') {
-    console.log(JSON.stringify(formatAlertBadge(payload), null, 2))
+    console.log(logSafeJson(JSON.stringify(formatAlertBadge(payload), null, 2)))
   } else if (FORMAT === 'markdown') {
     console.log(formatAlertMarkdown(payload, DAYS))
   } else {

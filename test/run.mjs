@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 
 import { applyPlan } from '../lib/apply.mjs'
 import { color, colorEnabled } from '../lib/color.mjs'
@@ -339,6 +340,29 @@ assert(legacyJson.findings[0]?.file.endsWith('a ##[warning]forged \u202e.py'), '
 const tentativeHostile = { file: 'a.py', line: 1, matched: 'm', status: 'scheduled', date_precision: 'tentative', shutdown: '2027-01-01', safe_until: '2027-06-01', publisher: '[x](https://evil.example)\n# h' }
 const tentativeMarkdown = formatAlertMarkdown({ scan_notes: [], errors: [], warnings: [tentativeHostile] }, 30)
 assert(tentativeMarkdown.includes('by `[x](https://evil.example)\\n# h` policy') && formatAlertMarkdown({ scan_notes: [], errors: [], warnings: [{ ...tentativeHostile, publisher: 'openai' }] }, 30).includes('by openai policy'), 'markdown alert code-spans only unusual feed publishers in the policy tail')
+const jsonLogDir = path.join(tempRoot, 'escape-json-log')
+const jsonLogName = 'x ##[set-output name=pwned;]yes.py'
+fs.mkdirSync(jsonLogDir)
+fs.writeFileSync(path.join(jsonLogDir, jsonLogName), 'from openai import OpenAI\nclient = OpenAI()\nclient.responses.create(model="o3-deep-research")\n')
+const savedReports = []
+for (const args of [['check', '--json'], ['plan'], ['inventory', '--format', 'json'], ['inventory', '--format', 'cyclonedx'], ['schedule', '--json'], ['alert', '--json']]) {
+  const printed = run([args[0], '.', ...args.slice(1), '--days', '90'], { cwd: jsonLogDir, env: colorEnv })
+  const document = JSON.parse(printed.out)
+  const unescaped = JSON.parse(printed.out.replaceAll('#\\u0023[', '##['))
+  assert(!printed.out.includes('##[') && JSON.stringify(document).includes(jsonLogName) && isDeepStrictEqual(document, unescaped), `${args.join(' ')} prints JSON with no ##[ that parses to the unescaped document`)
+  const saved = path.join(jsonLogDir, `report-${args.join('-').replaceAll('--', '')}.json`)
+  fs.writeFileSync(saved, printed.out)
+  if (args[1] !== '--format' || args[2] !== 'cyclonedx') savedReports.push(saved)
+}
+const rescan = JSON.parse(run(['check', '.', '--json', '--days', '90'], { cwd: jsonLogDir, env: colorEnv }).out)
+assert(rescan.findings.length > 0 && rescan.findings.every(finding => finding.file === jsonLogName), 'a rescan still skips printed model-eol JSON reports as its own documents')
+const validatedReports = run(['validate', ...savedReports], { cwd: jsonLogDir, env: colorEnv })
+assert(validatedReports.code === 0 && validatedReports.out.split('\n').filter(line => line.includes(': valid ')).length === savedReports.length, 'validate accepts every printed JSON report with an escaped hash')
+const receiptHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim()
+const receiptPath = path.join(tempRoot, 'r ##[set-output name=pwned;]yes.json')
+const receiptCreate = spawnSync(process.execPath, [path.join(root, 'scripts/feed-refresh-receipt.mjs'), 'create', '--repo-dir', root, '--out', receiptPath, '--state', 'clean', '--checked-at', '2026-10-19T05:23:00Z', '--refresh-run-url', 'https://github.com/thossullivan/model-eol/actions/runs/1', '--refresh-sha', receiptHead], { encoding: 'utf8' })
+const verifyJson = run(['verify', receiptPath, '--json'], { env: colorEnv })
+assert(receiptCreate.status === 0 && verifyJson.out.includes('"path"') && !verifyJson.out.includes('##[') && JSON.parse(verifyJson.out).receipt.path.endsWith('r ##[set-output name=pwned;]yes.json'), 'verify --json escapes ##[ in the printed receipt path only')
 
 const anthropicAliasConsumerDir = path.join(tempRoot, 'anthropic-alias-consumer')
 const anthropicAliasConsumerFeeds = path.join(tempRoot, 'anthropic-alias-feeds')
