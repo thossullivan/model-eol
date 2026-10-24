@@ -16,7 +16,10 @@ next patch on npm and move the `v0` Action tag.
 model-eol has no runtime dependencies, so the attack surface is its own code:
 
 - **The scanner reads untrusted repository content.** Path handling and output
-  escaping (GitHub annotations, badge JSON) are in scope.
+  escaping are in scope: text output and stderr (no Actions workflow commands),
+  JSON printed to logs, Markdown alerts, GitHub annotations, badge JSON, and the
+  bot's PR and issue bodies (no live mentions, references, or links from
+  repository, config, or feed text).
 - **Feed integrity.** The feeds are generated from provider pages, and a
   poisoned feed changes CI results for everyone downstream. Feeds are not
   signed yet.
