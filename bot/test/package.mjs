@@ -177,6 +177,7 @@ try {
     'bot/lib/git.mjs',
     'bot/lib/github.mjs',
     'examples/model-eol-eval.mjs',
+    'lib/fetch-bounded.mjs',
     'lib/receipts.mjs',
     'lib/digests.mjs',
     'lib/verify.mjs',
