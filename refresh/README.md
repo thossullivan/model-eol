@@ -25,10 +25,10 @@ nothing:
 - A page on which no lifecycle table is recognized stops the run.
 - A missing fixture page stops an offline run. It is never treated as empty.
 
-The parsers apply this unevenly today, and the sections below say where. Some
-rows are skipped rather than stopping the run (OpenAI grammar failures, Gemini
-cells without a usable ID, Vertex IDs with whitespace), and a Cohere section
-with only prose yields nothing without stopping.
+A few rows are skipped rather than stopping the run, and the sections below
+say which: OpenAI endpoint and product rows, Gemini cells without a usable ID,
+and Vertex IDs with whitespace. A Cohere section with only prose yields nothing
+without stopping.
 
 How strictly tables are identified also differs. Mistral, Cohere, the Bedrock
 model cards, and Azure check lifecycle headers exactly and stop on drift.
@@ -36,9 +36,11 @@ OpenAI, the Gemini API, the Bedrock legacy table, and Vertex AI find columns by
 label patterns: tables without a matching header are skipped, and extra columns
 are accepted.
 
-Crawled pages (Anthropic model pages, Bedrock cards) and distributor pages are
-fetched with a 30-second deadline and an 8 MiB limit. Publisher deprecation
-pages and models endpoints are fetched without those limits. Paged models
+Every fetch has a 30-second deadline over the request and body, and an 8 MiB
+body limit (`fetch.mjs`). Requests that carry an API key (the models endpoints)
+refuse redirects, so a key never follows a redirect to another origin; page
+fetches follow redirects. Error messages include at most 300 characters of the
+error body on one line, with request header values redacted. Paged models
 endpoints stop the run if they still have more pages after 20; Mistral's is
 read in one request.
 
@@ -89,8 +91,9 @@ replacement column, each under a heading that carries its announcement date.
   record ID. The other tokens become its aliases.
 - A cell with two or more snapshots plus an undated ID stops the run, because
   the alias can't be assigned to one snapshot.
-- A row whose tokens fail the ID grammar is skipped. It doesn't stop the run,
-  and the reason is shown only when the page yields no rows at all.
+- A row is skipped only when every token is endpoint- or product-shaped
+  (`/vN/...`, `Name API`, `OpenAI-Beta: name=vN`). Any other token that fails
+  the ID grammar, or a real model ID beside an endpoint token, stops the run.
 - Every row needs a shutdown date no earlier than the announcement. OpenAI
   records never set `date_precision`.
 - Replacement cells: `-`, `N/A`, and `none` give nothing. One code token becomes
@@ -99,8 +102,14 @@ replacement column, each under a heading that carries its announcement date.
   it resolves to an ID or alias in the feed; otherwise it becomes a one-item
   `replacement_options`.
 - Duplicate rows for one ID: identical dates merge aliases and replacements;
-  different announcement dates keep the later announcement; the same
+  different announcement dates keep the later announcement, unless the dropped
+  row names an alias the kept row doesn't, which stops the run; the same
   announcement with different shutdown dates stops the run.
+- A row listed as `alias | snapshot`, where the snapshot ends in `-YYYY-MM-DD`
+  and the alias is that ID without the date, gives both committed entries the
+  row's lifecycle and merges neither. Two rows giving the alias different
+  dates, precision, or replacement targets stop the run, and so does a row
+  whose replacement is the alias or the alias's own newer snapshot.
 - The models endpoint (`https://api.openai.com/v1/models`, `OPENAI_API_KEY`) is
   paged for up to 20 pages. A repeated ID or a cursor that doesn't advance stops
   the run. Without the key, committed current-model entries are kept.
@@ -126,9 +135,10 @@ replacement column. The page has no announcement dates.
 - An empty, `N/A`, dash, or "No shutdown date (announced)" cell gives no
   shutdown. Any other text must contain a date or the run stops.
 - `date_precision` is `earliest` when "earliest possible", "not moved to an
-  earlier date", "or later", or "no sooner than" appears in the page text or
-  the shutdown cell. The whole page is tested, so one such note marks every
-  dated row `earliest`.
+  earlier date", "or later", or "no sooner than" appears in the shutdown cell,
+  or in the prose of the table's section or any enclosing section (tables,
+  comments, and scripts excluded). The page's single note sits under the h1, so
+  today it covers every table.
 - Replacement cells follow the OpenAI rules.
 - Duplicate rows for one ID must agree on shutdown, precision, and replacement,
   or the run stops.
@@ -205,6 +215,10 @@ Card parsing:
   as a whole label ignoring case and colon, stops the run.
 - A standalone Model EOL date counts as lifecycle data. `N/A` and
   `Not announced` count as no date.
+- The feed has no Region dimension, so a card whose lifecycle reads `Legacy in
+  <regions>; Active in other Regions` is legacy, with the EOL date given as
+  `<date> (<regions> only)`. The two Region lists must match. Every other
+  region-qualified form stops the run.
 - Cards with no lifecycle fields or no day-precision date are listed under
   "Model cards without lifecycle fields" and emit notices.
 - Links from the card index resolve inside the index's directory after the
@@ -234,8 +248,15 @@ only with `--distributor vertex-ai`.
   `none`, "not available", "not applicable", and "no shutdown (or retirement)
   date announced" cells give no date. Any other
   text must contain a date or the run stops.
-- `date_precision` is `earliest` under the same whole-page test as the Gemini
-  API, plus "retirement timelines may be extended".
+- `date_precision` is `earliest` under the same section-scoped test as the
+  Gemini API, plus "retirement timelines may be extended". The walk up the
+  sections stops at the retired-models archive (an `id` of `retired-models`, or
+  a heading reading "Retired models" or "The following table lists the retired
+  models"), so archive rows keep plain dates. Any other heading mentioning
+  retirement beneath a qualifier stops the run.
+- A model listed with the same date in an available table and the archive keeps
+  the available row's precision. Any other conflict stops the run and names
+  both rows.
 - A `publishers/<name>/models/` prefix is stripped, and its namespace binds the
   row to that publisher's feed. A bare ID binds to whichever feed has it as an
   ID or alias. An ID shared by two feeds stops the run.
