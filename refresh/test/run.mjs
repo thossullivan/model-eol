@@ -3627,6 +3627,41 @@ reviewTest('Family alias: the rule is OpenAI-only; other publishers still refuse
     currentIds: null, provider: PROVIDERS.anthropic, notice: () => {},
   }), /deprecation alias claude-x for claude-x-2026-03-17 conflicts with a canonical model id/)
 })
+const familyTable = (heading, shutdown, cell) => `<h2>${heading}</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>${shutdown}</td><td>${cell}</td><td><code>gpt-next</code></td></tr></table>`
+reviewTest('PR 128 review 1: OpenAI refuses a later announcement that drops an alias the earlier row named, in either order', () => {
+  const earlier = familyTable('2026-06-01: Earlier', 'Dec 1, 2026', familyCell('gpt-fam', 'gpt-fam-2026-03-17'))
+  const later = familyTable('2026-10-01: Later', 'Jun 1, 2027', familyCell('gpt-fam-2026-03-17'))
+  for (const page of [earlier + later, later + earlier]) {
+    strictAssert.throws(() => parseOpenAIDeprecations(page), /conflicting rows for gpt-fam-2026-03-17/)
+    strictAssert.throws(() => familyMerge([{ id: 'gpt-fam-2026-03-17' }, { id: 'gpt-fam' }], page), /conflicting rows for gpt-fam-2026-03-17/)
+  }
+})
+reviewTest('PR 128 review 1: OpenAI still keeps a later announcement that adds the alias itself', () => {
+  const earlier = familyTable('2026-06-01: Earlier', 'Dec 1, 2026', familyCell('gpt-fam-2026-03-17'))
+  const later = familyTable('2026-10-01: Later', 'Jun 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17'))
+  for (const page of [earlier + later, later + earlier]) {
+    strictAssert.deepEqual(parseOpenAIDeprecations(page).map(record => [record.id, record.announced, record.shutdown, record.aliases]), [['gpt-fam-2026-03-17', '2026-10-01', '2027-06-01', ['gpt-fam']]])
+  }
+})
+reviewTest('PR 128 review 2: the family rule refuses a row whose replacement is the family alias itself', () => {
+  const committed = [{ id: 'gpt-fam-2026-03-17' }, { id: 'gpt-fam' }]
+  strictAssert.throws(() => familyMerge(committed, familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17'), 'gpt-fam'])), /names its family alias gpt-fam as the replacement/)
+  const options = familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')]).replace('<code>gpt-next</code>', '<code>gpt-next</code> or <code>gpt-fam</code>')
+  strictAssert.throws(() => familyMerge(committed, options), /names its family alias gpt-fam as the replacement/)
+})
+reviewTest('PR 128 review 3: a row reaching its target through an alias cannot silently override an earlier lifecycle, in either order', () => {
+  const familyRow = ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')]
+  const aliasRow = ['Jun 1, 2027', familyCell('gpt-fam')]
+  for (const rows of [[familyRow, aliasRow], [aliasRow, familyRow]]) {
+    strictAssert.throws(() => familyMerge([{ id: 'gpt-fam-2026-03-17' }], familyPage(...rows)), /conflicting lifecycles/)
+  }
+  const committedAlias = [{ id: 'gpt-fam-2026-03-17', aliases: ['gpt-fam'] }]
+  for (const rows of [[aliasRow, ['Apr 1, 2027', familyCell('gpt-fam-2026-03-17')]], [['Apr 1, 2027', familyCell('gpt-fam-2026-03-17')], aliasRow]]) {
+    strictAssert.throws(() => familyMerge(committedAlias, familyPage(...rows)), /conflicting lifecycles/)
+  }
+  const agreeing = familyMerge([{ id: 'gpt-fam-2026-03-17' }], familyPage(familyRow, ['Apr 1, 2027', familyCell('gpt-fam')]))
+  strictAssert.deepEqual(agreeing.feed.models.map(model => [model.id, ...familyLifecycle(model)]), [['gpt-fam-2026-03-17', '2026-10-01', '2027-04-01', 'gpt-next', PROVIDERS.openai.deprecationsUrl, ['gpt-fam']]])
+})
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
   strictAssert.equal(record.id, 'gemini-3.7-flash')

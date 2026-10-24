@@ -680,6 +680,10 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       if (!previous.aliases.length) delete previous.aliases
       continue
     }
+    const [kept, dropped] = record.announced > previous.announced ? [record, previous] : [previous, record]
+    if (record.announced !== previous.announced && (dropped.aliases ?? []).some(alias => !(kept.aliases ?? []).includes(alias))) {
+      throw new Error(`openai deprecations page has conflicting rows for ${record.id}: an earlier announcement names aliases the later one does not`)
+    }
     if (record.announced > previous.announced) {
       record.aliases = [...new Set([...(record.aliases ?? []), ...(previous.aliases ?? [])])]
         .filter(alias => alias !== record.id)
@@ -1717,12 +1721,12 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
   const lifecycleFields = ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']
   const lifecycleKey = record => JSON.stringify(lifecycleFields.map(field => record[field] ?? null))
   const lifecycleApplied = new Map()
-  const noteLifecycle = (model, record, family) => {
+  const noteLifecycle = (model, record, indirect) => {
     const previous = lifecycleApplied.get(model)
-    if (previous && (previous.family || family) && previous.key !== lifecycleKey(record)) {
+    if (previous && (previous.indirect || indirect) && previous.key !== lifecycleKey(record)) {
       throw new Error(`deprecation rows give ${model.id} conflicting lifecycles via ${previous.recordId} and ${record.id}`)
     }
-    lifecycleApplied.set(model, { key: lifecycleKey(record), family, recordId: record.id })
+    lifecycleApplied.set(model, { key: lifecycleKey(record), indirect: indirect || previous?.indirect, recordId: record.id })
   }
   const familyAliasOf = (snapshot, alias) => provider.publisher === 'openai'
     && /-(?:19|20)\d{2}-\d{2}-\d{2}$/.test(snapshot) && snapshot.slice(0, -11) === alias
@@ -1738,6 +1742,9 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
       if (!alias || alias === canonicalId) continue
       const owner = locate(alias)
       if (owner && owner !== target && owner.id === alias && familyAliasOf(record.id, alias)) {
+        if (record.replacement === alias || record.replacement_options?.includes(alias)) {
+          throw new Error(`deprecation row for ${record.id} names its family alias ${alias} as the replacement`)
+        }
         familyAliases.push(owner)
         continue
       }
@@ -1772,7 +1779,7 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     Object.assign(target, clone(record), { id: canonicalId })
     if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
     else delete target.aliases
-    noteLifecycle(target, record, false)
+    noteLifecycle(target, record, record.id !== target.id)
     confirmed.add(target.id)
     deprecationConfirmed.add(target.id)
     // An OpenAI row naming a snapshot and its undated family id dates both entries and joins neither.
