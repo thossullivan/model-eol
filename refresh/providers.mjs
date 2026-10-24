@@ -147,9 +147,8 @@ export function sectionProse(html, qualifier) {
     cursor = end
   }
   outside += visible.slice(cursor)
-  const insideTable = index => spans.some(([start, end]) => index >= start && index < end)
-  const headings = [...visible.matchAll(/<h([1-6])\b([^>]*)>([\s\S]*?)<\/h\1>/gi)]
-    .filter(match => !insideTable(match.index))
+  // Headings are matched with tables blanked, so an unclosed heading in a table can't swallow the next one.
+  const headings = [...outside.matchAll(/<h([1-6])\b([^>]*)>([\s\S]*?)<\/h\1>/gi)]
     .map(match => ({ start: match.index, end: match.index + match[0].length, level: Number(match[1]), attrs: match[2], text: plainText(match[3]) }))
   const own = headings.map((heading, index) => plainText(outside.slice(heading.end, headings[index + 1]?.start ?? outside.length)))
   const root = plainText(outside.slice(0, headings[0]?.start ?? outside.length))
@@ -590,7 +589,7 @@ function openAIModelIds(fragment) {
 
 const openAIReplacement = extractReplacementFields
 
-const OPENAI_NON_MODEL_TOKEN = /^\/v\d+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*$|^[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* API$|^OpenAI-Beta: [a-z_]+=v\d+$/
+const OPENAI_NON_MODEL_TOKEN = /^\/v\d+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*$|^[A-Z][A-Za-z-]*(?: [A-Z][A-Za-z-]*)* API$|^OpenAI-Beta: [a-z_]+=v\d+$/
 
 /** Parse the OpenAI docs page, whose announcement date is a section heading. */
 export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl) {

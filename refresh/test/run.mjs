@@ -3483,6 +3483,13 @@ reviewTest('PR 126 review: Vertex refuses a retirement-worded section beneath a 
 reviewTest('PR 126 review: Vertex recognises the retired-models archive by its anchor id', () => {
   strictAssert.deepEqual(vertexPrecisions(qualifiedVertexPage(`<h3 id="retired-models">Archive</h3>${precisionVertexTable(['gemini-old', 'April 21, 2025'])}`)), { 'gemini-old': 'exact' })
 })
+reviewTest('PR 126 late review: an unclosed heading inside a table does not swallow the archive heading after it', () => {
+  const html = qualifiedVertexPage(`<table><tr><td><h3>Note</td></tr></table><h3>Retired models</h3>${precisionVertexTable(['gemini-old', 'April 21, 2025'])}`)
+  strictAssert.deepEqual(vertexPrecisions(html), { 'gemini-old': 'exact' })
+})
+reviewTest('PR 126 late review: OpenAI skips a hyphenated product name such as Fine-tuning API', () => {
+  strictAssert.deepEqual(parseOpenAIDeprecations(shapesOpenAIPage('Fine-tuning API') + openAIValidTable).map(record => record.id), ['gpt-4.1-2025-04-14'])
+})
 reviewTest('PR 126 review: Vertex keeps the available row when the archive repeats it with the same date', () => {
   for (const [first, second] of [['available', 'archive'], ['archive', 'available']]) {
     const tables = { available: `<h3>Embeddings models</h3>${precisionVertexTable(['text-embedding-a', 'April 1, 2027'])}`, archive: `<h3 id="retired-models">Retired models</h3>${precisionVertexTable(['text-embedding-a', 'April 1, 2027'])}` }
