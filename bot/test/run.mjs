@@ -445,7 +445,12 @@ assert(!separatorLine.includes(lineSeparator) && parseMetadata(separatorLine)?.r
 const hostileText = markdownText('azure/x\n---\n@thossullivan see https://evil.example www.evil.example |a|b| \x1b[2K')
 assert(!/[\n\r|\x1b]|@(?!&#8203;)|:\/\/|www\.(?!&#8203;)/i.test(hostileText) && hostileText.includes('@&#8203;thossullivan') && hostileText.includes('&#124;'), 'markdown text stays on one line and neutralizes mentions, table pipes, autolinks, and controls')
 const referenceText = markdownText('ping @thossullivan about #1, owner/repo#1, and user@example.com')
-assert(referenceText === 'ping @&#8203;thossullivan about #&#8203;1, owner/repo#&#8203;1, and user@&#8203;example.com', 'markdown text breaks mentions, issue references, and emails with a zero-width space, which GitHub does not resolve through')
+assert(referenceText === 'ping @&#8203;thossullivan about #&#8203;1, owner/&#8203;repo#&#8203;1, and user@&#8203;example.com', 'markdown text breaks mentions, issue references, and emails with a zero-width space, which GitHub does not resolve through')
+const issuePathText = markdownText('see octocat/Hello-World/issues/1, https://github.com/o/r/pull/2, /issues/3, GH-4, and www.evil.example')
+assert(!/\/(?!&#8203;)|www(?!&#8203;)|gh-/i.test(issuePathText), 'markdown text breaks issue paths, GH- references, and www. links before GitHub can link them')
+for (const [block, rendered] of [['---', '&#45;--'], ['   ---', '&#45;--'], ['+', '&#43;'], ['1. one', '1&#46; one'], ['    code', 'code'], ['===', '&#61;==']]) {
+  assert(markdownText(block) === rendered, `markdown text cannot start a block element: ${JSON.stringify(block)}`)
+}
 const spoofedSource = buildIssueBody({
   group: {
     kind: 'issue',

@@ -80,15 +80,19 @@ const entityMap = new Map([
   ['@', '@&#8203;'],
   ['|', '&#124;'],
 ])
+const leadingMarker = new Map([['-', '&#45;'], ['+', '&#43;'], ['=', '&#61;']])
 
 const markdownInline = value => printable(String(value ?? '').replace(/\r\n|[\r\n]/g, ' '))
   .replace(/[&<>`\\[\]()#*_~!@|]/g, character => entityMap.get(character))
-  .replace(/^(\s*)([-+>]\s|\d+\.\s)/, '$1&#45; ')
+  .replace(/^\s+/, '')
+  .replace(/^[-+=]/, character => leadingMarker.get(character))
+  .replace(/^(\d+)\./, '$1&#46;')
 
-// one line of text: no block structure, table cells, or bare autolinks
+// one line of text: no block structure, table cells, bare autolinks, or issue references
 export const markdownText = value => markdownInline(value)
-  .replace(/(www)\./gi, '$1.&#8203;')
-  .replaceAll('://', ':&#8203;//')
+  .replace(/(www)\./gi, '$1&#8203;.')
+  .replaceAll('/', '/&#8203;')
+  .replace(/\b(gh)(?=-\d)/gi, '$1&#8203;')
 
 // code spans show entities literally, so drop backticks and line breaks instead of escaping
 export const markdownCode = value => {
