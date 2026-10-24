@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-10-18T18:39:55.065Z",
+  "generated": "2026-10-24T17:31:21.229Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -1360,7 +1360,11 @@
       ]
     },
     {
-      "id": "gpt-4o-mini-tts"
+      "id": "gpt-4o-mini-tts",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "announced": "2026-10-01",
+      "shutdown": "2027-01-06",
+      "replacement": "gpt-realtime-2.1-mini"
     },
     {
       "id": "gpt-4.1-2025-04-14",
@@ -1417,13 +1421,25 @@
       ]
     },
     {
-      "id": "gpt-5"
+      "id": "gpt-5",
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol"
     },
     {
-      "id": "gpt-5-mini"
+      "id": "gpt-5-mini",
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-terra"
     },
     {
-      "id": "gpt-5-nano"
+      "id": "gpt-5-nano",
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-luna"
     },
     {
       "id": "gpt-audio-2025-08-28",
@@ -1434,7 +1450,11 @@
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
-      ]
+      ],
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
     },
     {
       "id": "gpt-realtime-2025-08-28",
@@ -1445,10 +1465,19 @@
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
-      ]
+      ],
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-2.1"
     },
     {
-      "id": "gpt-5-pro"
+      "id": "gpt-5-pro",
+      "announced": "2026-06-11",
+      "shutdown": "2026-12-11",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-5.6-sol",
+      "replacement_note": "reasoning.mode: pro"
     },
     {
       "id": "gpt-5-search-api"
@@ -1465,7 +1494,11 @@
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
-      ]
+      ],
+      "announced": "2026-10-01",
+      "shutdown": "2027-04-01",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-6-sol"
     },
     {
       "id": "gpt-5.1",
@@ -1503,6 +1536,13 @@
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
+      ],
+      "announced": "2026-08-26",
+      "shutdown": "2027-02-26",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement_options": [
+        "gpt-live-transcribe",
+        "gpt-transcribe"
       ]
     },
     {
@@ -1529,7 +1569,11 @@
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
-      ]
+      ],
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-realtime-2.1-mini"
     },
     {
       "id": "gpt-audio-mini-2025-12-15",
@@ -1540,7 +1584,11 @@
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
-      ]
+      ],
+      "announced": "2026-07-20",
+      "shutdown": "2027-01-20",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-audio-1.5"
     },
     {
       "id": "gpt-5.3-codex",
@@ -1628,7 +1676,11 @@
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
-      ]
+      ],
+      "announced": "2026-10-01",
+      "shutdown": "2027-04-01",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement": "gpt-6-luna"
     },
     {
       "id": "gpt-5.4-nano",
@@ -1703,6 +1755,7 @@
       "distributions": [
         {
           "via": "azure-ai-foundry",
+          "shutdown": "2027-01-20",
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
@@ -1797,6 +1850,24 @@
           "date_precision": "tentative",
           "status": "active",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html"
+        }
+      ]
+    },
+    {
+      "id": "gpt-image-1.5-2025-12-16",
+      "announced": "2026-06-02",
+      "shutdown": "2026-12-01",
+      "source": "https://developers.openai.com/api/docs/deprecations",
+      "replacement_options": [
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare"
+      ],
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2026-12-16",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ]
     }
