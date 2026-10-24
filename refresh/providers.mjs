@@ -1854,23 +1854,8 @@ export function findFixture(dir, provider, kind) {
   throw new Error(`missing ${provider} ${kind} fixture in ${dir}`)
 }
 
-async function fetchBody(url, headers, provider, fetchImpl = globalThis.fetch) {
-  if (typeof fetchImpl !== 'function') throw new Error('this Node runtime has no built-in fetch')
-  let response
-  try {
-    // Providers geo-localize without Accept-Language; the date parsers are English-only.
-    response = await fetchImpl(url, { headers: { 'accept-language': 'en', ...headers } })
-  } catch (error) {
-    throw new Error(`${provider} fetch failed for ${url}: ${error.message}`)
-  }
-  if (!response.ok) {
-    let detail = ''
-    try { detail = (await response.text()).trim().slice(0, 300) } catch {}
-    throw new Error(`${provider} fetch failed for ${url}: HTTP ${response.status}${detail ? ` - ${detail}` : ''}`)
-  }
-  const body = await response.text()
-  if (!body.trim()) throw new Error(`${provider} fetch returned an empty response for ${url}`)
-  return body
+function fetchBody(url, headers, provider, fetchImpl = globalThis.fetch) {
+  return fetchBoundedBody(url, provider, fetchImpl, { headers })
 }
 
 /** Load and parse both source classes for one provider. */
