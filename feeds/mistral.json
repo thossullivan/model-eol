@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "mistral",
-  "generated": "2026-10-18T18:39:55.066Z",
+  "generated": "2026-10-24T17:31:21.230Z",
   "source": "https://docs.mistral.ai/models",
   "models": [
     {
@@ -144,8 +144,8 @@
       "distributions": [
         {
           "via": "azure-ai-foundry",
-          "shutdown": "2026-12-09",
-          "status": "active",
+          "shutdown": "2027-02-15",
+          "status": "legacy",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
