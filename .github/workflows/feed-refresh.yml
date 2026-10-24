@@ -1,5 +1,5 @@
 # Weekly feed refresh - regenerates feeds/ from the live provider pages and the
-# AWS Bedrock and Google Vertex AI lifecycle pages, updates the README freshness
+# AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, updates the README freshness
 # line, and opens a PR with the semantic diff for human review. Never pushes to
 # main directly. PR reuse is ownership-checked and protected by an exact lease.
 #

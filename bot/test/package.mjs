@@ -60,15 +60,15 @@ try {
     assert(source.match(/node-version: 22/g)?.length === count, `${file} pins every composite Action job to Node 22`)
     assert(source.match(/package-manager-cache: false/g)?.length === count, `${file} disables package-manager caching for every composite Action job`)
   }
-  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
+  const botDoc = fs.readFileSync(path.join(root, 'docs', 'BOT.md'), 'utf8')
   assert(
-    readme.includes('repo="$(pwd -P)"')
-      && readme.includes('cd "$tmp"')
-      && readme.match(/MODEL_EOL_UAT_REPO="\$repo"/g)?.length === 2
-      && readme.includes(`-c 'cd "$MODEL_EOL_UAT_REPO" && model-eol plan .'`)
-      && readme.includes(`-c 'cd "$MODEL_EOL_UAT_REPO" && model-eol plan . --days 90 --scope direct'`)
-      && readme.match(/--target-dir "\$repo"/g)?.length >= 2,
-    'README resolves published bins externally while planning from the consumer repository for clone-portable paths',
+    botDoc.includes('repo="$(pwd -P)"')
+      && botDoc.includes('cd "$tmp"')
+      && botDoc.match(/MODEL_EOL_UAT_REPO="\$repo"/g)?.length === 2
+      && botDoc.includes(`-c 'cd "$MODEL_EOL_UAT_REPO" && model-eol plan .'`)
+      && botDoc.includes(`-c 'cd "$MODEL_EOL_UAT_REPO" && model-eol plan . --days 90 --scope direct'`)
+      && botDoc.match(/--target-dir "\$repo"/g)?.length >= 2,
+    'docs/BOT.md resolves published bins externally while planning from the consumer repository for clone-portable paths',
   )
   assert(workflow.match(/node-version: 22/g)?.length === 3, 'consumer workflow runs every model-eol job on supported Node 22')
   assert(workflow.match(/package-manager-cache: false/g)?.length === 3, 'consumer workflow disables automatic package-manager caching in every job')

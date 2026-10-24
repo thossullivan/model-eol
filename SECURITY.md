@@ -2,33 +2,36 @@
 
 ## Reporting
 
-Report vulnerabilities privately via
-[GitHub private vulnerability reporting](https://github.com/thossullivan/model-eol/security/advisories/new) -
-please don't open a public issue for a security report. Expect a first
-response within a week.
+Please report vulnerabilities through
+[GitHub private vulnerability reporting](https://github.com/thossullivan/model-eol/security/advisories/new),
+not a public issue. You should get a first response within a week.
 
 ## Supported versions
 
-The latest 0.x release only. There is no backport branch; fixes ship as the
-next patch on npm and move the `v0` action tag.
+Only the latest 0.x release. There are no backport branches. Fixes ship as the
+next patch on npm and move the `v0` Action tag.
 
 ## Scope
 
-The surface that matters, given zero runtime dependencies:
+model-eol has no runtime dependencies, so the attack surface is its own code:
 
-- The scanner runs against untrusted repository content, so path handling and
-  output escaping (GitHub annotations, badge JSON) are in scope.
-- Feed integrity: `feeds/*.json` are generated from provider pages, and a
-  poisoned feed changes CI verdicts downstream. Feed signing is on the
-  roadmap, not shipped.
-- The bot workflow's privilege split: the plan job is read-only, the evaluate
-  job receives only provider secrets explicitly needed by trusted eval code and
-  has no write token, and the publish job receives the write token but never
-  executes repository-owned eval code. `eval.pass_env` controls normal
-  subprocess forwarding; it is not an OS sandbox or same-user secret-isolation
-  boundary. Anything that bridges the evaluate/publish privilege split is a
-  finding.
+- **The scanner reads untrusted repository content.** Path handling and output
+  escaping are in scope: text output and stderr (no Actions workflow commands),
+  JSON printed to logs, Markdown alerts, GitHub annotations, badge JSON, and the
+  bot's PR and issue bodies (no live mentions, references, or links from
+  repository, config, or feed text).
+- **Feed integrity.** The feeds are generated from provider pages, and a
+  poisoned feed changes CI results for everyone downstream. Feeds are not
+  signed yet.
+- **The bot's privilege split.** The plan job is read-only. The evaluate job
+  runs repository-owned eval code, gets only the provider secrets you add, and
+  has no write token. The publish job has the write token and never runs
+  repository-owned eval code. Anything that bridges the evaluate/publish
+  privilege split is a finding. `eval.pass_env` filters the environment for
+  ordinary child processes; it is not an OS sandbox or a secret boundary
+  between processes running as the same user.
+  See [docs/BOT.md](docs/BOT.md#security-model).
 
-The checker itself needs no credentials: scanning is static analysis, so a
-report that assumes an API key inside `check.mjs` is out of scope by
-construction.
+`check.mjs` needs no credentials and makes no API calls, because scanning is
+static analysis. Reports that assume a credential inside the checker are out of
+scope.

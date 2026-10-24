@@ -491,8 +491,8 @@ try {
   for (const text of ['A release gate passes --package, --version', 'verify RECEIPT', '--feeds-dir DIR', '--commit SHA', '--run-url URL', '--package FILE.tgz', '--source-commit SHA', '--version X.Y.Z', '--require-all', 'partial', 'mismatch']) {
     assert(help.stdout.includes(text), `help documents ${text}`)
   }
-  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
-  assert(!readme.includes('arrives in a later release') && readme.includes('model-eol verify') && readme.includes('--require-all') && readme.includes('`partial`'), 'README documents verify instead of promising it later')
+  const receiptsDoc = fs.readFileSync(path.join(root, 'docs', 'RECEIPTS.md'), 'utf8')
+  assert(!receiptsDoc.includes('arrives in a later release') && receiptsDoc.includes('model-eol verify') && receiptsDoc.includes('--require-all') && receiptsDoc.includes('`partial`'), 'docs/RECEIPTS.md documents verify instead of promising it later')
   assert(reports >= 35, `every non-refused verify run emitted a valid ${VERIFICATION_SCHEMA} document (${reports} checked)`)
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
