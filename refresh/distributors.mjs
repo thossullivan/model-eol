@@ -367,6 +367,15 @@ const BEDROCK_CARD_LABELS = ['Model launch date', 'EOL no sooner than', 'Legacy 
 // Policy link text and the EOL banner's "see Model lifecycle" repeat the words, so only the colon form counts.
 const BEDROCK_CARD_LABEL_COUNT = new Map([['Model lifecycle', /\bModel lifecycle\s*:/gi]])
 const BEDROCK_CARD_LIFECYCLE = /^(?:Active|(Legacy)|EOL: (\d{4}-\d{2}-\d{2}))(?: \(certain regions\))?$/
+// The feed has no Region dimension, so a card that is Legacy in any Region is legacy.
+const BEDROCK_CARD_REGIONS = '[a-z]{2}(?:-gov)?-[a-z]+-\\d(?:, [a-z]{2}(?:-gov)?-[a-z]+-\\d)*'
+const BEDROCK_CARD_REGIONAL_LIFECYCLE = new RegExp(`^Legacy in (${BEDROCK_CARD_REGIONS}); Active in other Regions$`)
+const BEDROCK_CARD_REGIONAL_EOL = new RegExp(`^(.+) \\((${BEDROCK_CARD_REGIONS}) only\\)$`)
+function bedrockCardRegionSet(list) {
+  const regions = list.split(', ')
+  if (new Set(regions).size !== regions.length) throw new Error(`duplicate Region in ${list}`)
+  return regions.sort().join(', ')
+}
 const BEDROCK_CARD_MONTH = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
 const BEDROCK_CARD_DAY = new RegExp(`^${BEDROCK_CARD_MONTH} \\d{1,2}, (?:19|20)\\d{2}$`, 'i')
 const BEDROCK_CARD_MONTH_ONLY = new RegExp(`^${BEDROCK_CARD_MONTH} (?:19|20)\\d{2}$`, 'i')
@@ -446,9 +455,11 @@ export function parseBedrockModelCardHtml(html, source) {
     const fields = bedrockCardFields(html)
     const lifecycle = fields.get('Model lifecycle')
     const lifecycleMatch = lifecycle === undefined ? undefined : lifecycle.match(BEDROCK_CARD_LIFECYCLE)
-    if (lifecycle !== undefined && !lifecycleMatch) throw new Error(`unrecognised Model lifecycle: ${lifecycle}`)
+    const regionalMatch = lifecycle?.match(BEDROCK_CARD_REGIONAL_LIFECYCLE)
+    if (lifecycle !== undefined && !lifecycleMatch && !regionalMatch) throw new Error(`unrecognised Model lifecycle: ${lifecycle}`)
+    const lifecycleRegions = regionalMatch && bedrockCardRegionSet(regionalMatch[1])
     const lifecycleEol = lifecycleMatch?.[2] && assertIsoDate(lifecycleMatch[2], 'Model lifecycle EOL')
-    const lifecycleLegacy = Boolean(lifecycleMatch?.[1] || lifecycleEol)
+    const lifecycleLegacy = Boolean(regionalMatch || lifecycleMatch?.[1] || lifecycleEol)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     const regionDates = []
     for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
@@ -481,7 +492,11 @@ export function parseBedrockModelCardHtml(html, source) {
       else if (legacy) {
         exact = bedrockCardDate(legacy[1], 'Model EOL date')
         legacyField = true
-      } else exact = bedrockCardDate(eol, 'Model EOL date')
+      } else {
+        const regional = eol.match(BEDROCK_CARD_REGIONAL_EOL)
+        if (regional && bedrockCardRegionSet(regional[2]) !== lifecycleRegions) throw new Error(`Model EOL date ${eol} does not match the Regions in Model lifecycle: ${lifecycle ?? '(absent)'}`)
+        exact = bedrockCardDate(regional ? regional[1] : eol, 'Model EOL date')
+      }
     }
     if (exact && floorDate && exact < floorDate) throw new Error(`Model EOL date ${exact} precedes EOL no sooner than ${floorDate}`)
     if (regionDates.length && !exact) throw new Error(`region EOL ${regionDates[0]} without an exact Model EOL date`)

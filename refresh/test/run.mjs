@@ -1302,6 +1302,72 @@ reviewTest('Model lifecycle line: Bedrock parses the live EOL card shape with it
 reviewTest('Model lifecycle line: Bedrock reads Legacy (certain regions) as legacy', () => {
   strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy (certain regions)', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
 })
+const marengoSource = new URL('model-card-twelvelabs-marengo-embed-3-0.html', BEDROCK_MODEL_CARDS_URL).href
+const marengoCard = (lifecycle, eol) => '<table><tr><th>Endpoint</th><th>Model ID</th></tr><tr><td>bedrock-runtime</td><td>twelvelabs.marengo-embed-3-0-v1:0</td></tr></table>' +
+  '<ul><li><p><b>Model launch date:</b> Oct 29, 2025</p></li><li><p><b>EOL no sooner than:</b> Oct 29, 2026</p></li><li><p><b>Legacy period:</b> at least 6 months</p></li>' +
+  '<li><p><b>Model lifecycle policy:</b> <a href="./model-lifecycle-legacy.html">Model lifecycle (For Models Launched Prior to Sept 7 2026)</a></p></li>' +
+  (eol === undefined ? '' : `<li><p><b>Model EOL date:</b> ${eol}</p></li>`) + (lifecycle === undefined ? '' : `<li>${lifecycleLine(lifecycle)}</li>`) + '</ul>'
+const marengoRecord = { bedrockId: 'twelvelabs.marengo-embed-3-0-v1:0', shutdown: '2027-03-22', status: 'legacy', source: marengoSource }
+const marengoLive = ['Legacy in ap-northeast-2; Active in other Regions', 'March 22, 2027 (ap-northeast-2 only)']
+reviewTest('Regional lifecycle: Bedrock reads the live Marengo Embed 3.0 card as legacy at its regional EOL date', () => {
+  strictAssert.deepEqual(parseBedrockModelCardHtml(marengoCard(...marengoLive), marengoSource), { records: [marengoRecord], skipped: [] })
+})
+for (const [lifecycle, eol, expected] of [
+  ['Legacy in ap-northeast-2; Active in other Regions', 'March 22, 2027', marengoRecord],
+  ['Legacy in ap-northeast-2; Active in other Regions', 'N/A', { ...marengoRecord, shutdown: '2026-10-29', date_precision: 'tentative' }],
+  ['Legacy in ap-northeast-2; Active in other Regions', undefined, { ...marengoRecord, shutdown: '2026-10-29', date_precision: 'tentative' }],
+  ['Legacy in ap-northeast-2, us-gov-west-1; Active in other Regions', 'March 22, 2027 (us-gov-west-1, ap-northeast-2 only)', marengoRecord],
+]) {
+  reviewTest(`Regional lifecycle: Bedrock marks ${lifecycle} with Model EOL date ${eol ?? '(absent)'} legacy`, () => {
+    strictAssert.deepEqual(parseBedrockModelCardHtml(marengoCard(lifecycle, eol), marengoSource).records, [expected])
+  })
+}
+for (const value of [
+  'Legacy in ap-northeast-2', 'Legacy in ap-northeast-2; Active in other regions', 'Legacy in ap-northeast-2;Active in other Regions', 'legacy in ap-northeast-2; Active in other Regions',
+  'Active in ap-northeast-2; Legacy in other Regions', 'Active in ap-northeast-2; Active in other Regions', 'Legacy in ap-northeast-2; Retired in other Regions', 'Legacy in ap-northeast-2; Legacy in other Regions',
+  'Deprecated in ap-northeast-2; Active in other Regions', 'Retired in ap-northeast-2; Active in other Regions', 'Legacy in Seoul; Active in other Regions', 'Legacy in AP-NORTHEAST-2; Active in other Regions',
+  'Legacy in ap-northeast-2 and us-east-1; Active in other Regions', 'Legacy in ap-northeast-2,us-east-1; Active in other Regions', 'Legacy in ap-northeast-2, ; Active in other Regions', 'Legacy in ; Active in other Regions',
+  'Legacy in ap-northeast-2; EOL: 2027-03-22 in us-east-1; Active in other Regions', 'Legacy in ap-northeast-2; Active in other Regions; EOL: 2027-03-22', 'Legacy (certain regions) in ap-northeast-2; Active in other Regions',
+  'Legacy in ap-northeast-2 (certain regions); Active in other Regions', 'EOL: 2027-3-22 in ap-northeast-2; Active in other Regions', 'EOL: March 22, 2027 in ap-northeast-2; Active in other Regions', 'Legacy in ap-northeast-2; Active in other Regions.',
+  'EOL: 2027-03-22 in ap-northeast-2; Active in other Regions', 'EOL: 2027-03-22 in ap-northeast-2, eu-west-1; Active in other Regions', 'EOL: 2027-03-23 in ap-northeast-2; Active in other Regions', 'EOL: 2027-02-30 in ap-northeast-2; Active in other Regions',
+  'EOL: 2027-03-22 (certain regions) in ap-northeast-2; Active in other Regions',
+]) {
+  reviewTest(`Regional lifecycle: Bedrock rejects an unrecognised regional value: ${value}`, () => {
+    for (const eol of ['March 22, 2027', 'March 22, 2027 (ap-northeast-2 only)', 'N/A', undefined]) {
+      strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(value, eol), marengoSource), error =>
+        error.message.includes(marengoSource) && error.message.includes(`unrecognised Model lifecycle: ${value}`), String(eol))
+    }
+  })
+}
+for (const lifecycle of [undefined, 'Active', 'Legacy', 'Legacy (certain regions)', 'EOL: 2027-03-22', 'EOL: 2027-03-22 (certain regions)', 'Legacy in us-east-1; Active in other Regions', 'Legacy in ap-northeast-2, us-east-1; Active in other Regions']) {
+  reviewTest(`Regional lifecycle: Bedrock rejects a regional Model EOL date whose Regions differ from Model lifecycle: ${lifecycle ?? '(absent)'}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(lifecycle, 'March 22, 2027 (ap-northeast-2 only)'), marengoSource), error =>
+      error.message.includes(marengoSource) && error.message.includes('Model EOL date March 22, 2027 (ap-northeast-2 only) does not match the Regions in Model lifecycle'))
+  })
+}
+for (const eol of ['March 22, 2027 (ap-northeast-2)', 'March 22, 2027 (Seoul only)', 'March 22, 2027 (ap-northeast-2 only).', 'March 22, 2027 (ap-northeast-2 only) (ap-northeast-2 only)', 'March 22, 2027 (ap-northeast-2 Only)',
+  'Legacy: March 22, 2027 (ap-northeast-2 only)', 'No sooner than 3/22/2027 (ap-northeast-2 only)', 'March 2027 (ap-northeast-2 only)', 'N/A (ap-northeast-2 only)', '(ap-northeast-2 only)', 'March 22, 2027(ap-northeast-2 only)']) {
+  reviewTest(`Regional lifecycle: Bedrock rejects a malformed regional Model EOL date: ${eol}`, () => {
+    strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(marengoLive[0], eol), marengoSource), error =>
+      error.message.includes(marengoSource) && /unrecognised Model EOL date date|does not match the Regions/.test(error.message))
+  })
+}
+reviewTest('Regional lifecycle: Bedrock keeps the floor, calendar-date, and duplicate checks on regional values', () => {
+  const cases = [
+    [['Legacy in ap-northeast-2; Active in other Regions', 'March 22, 2026 (ap-northeast-2 only)'], /Model EOL date 2026-03-22 precedes EOL no sooner than 2026-10-29/],
+    [['Legacy in ap-northeast-2; Active in other Regions', 'February 30, 2027 (ap-northeast-2 only)'], /invalid date.*February 30, 2027/],
+    [['Legacy in ap-northeast-2, ap-northeast-2; Active in other Regions', 'March 22, 2027'], /duplicate Region in ap-northeast-2, ap-northeast-2/],
+    [['Legacy in ap-northeast-2; Active in other Regions', 'March 22, 2027 (ap-northeast-2, ap-northeast-2 only)'], /duplicate Region in ap-northeast-2, ap-northeast-2/],
+  ]
+  for (const [[lifecycle, eol], pattern] of cases) {
+    strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(lifecycle, eol), marengoSource), pattern, `${lifecycle} / ${eol}`)
+  }
+  strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(marengoLive[0], marengoLive[1]).replace('</ul>', `<li>${lifecycleLine('Active')}</li></ul>`), marengoSource), /duplicate Model lifecycle field/)
+})
+reviewTest('Regional lifecycle: the live legacy table still wins over the regional Marengo card record', () => {
+  const table = { bedrockId: marengoRecord.bedrockId, status: 'legacy', legacy: '2026-09-22', eol: '2027-03-22' }
+  strictAssert.deepEqual(mergeBedrockSources([table], [marengoRecord]), { records: [{ ...table, source: BEDROCK_LIFECYCLE_URL }], conflicts: [] })
+})
 for (const paragraph of ['<p>Model lifecycle stages are described in the user guide.</p>', '<p><a href="./model-lifecycle.html">Model lifecycle</a> explains the stages.</p>', '<p><b>Model lifecycle policies:</b> see the user guide</p>']) {
   reviewTest(`Model lifecycle line: Bedrock ignores prose that opens with the words: ${paragraph}`, () => {
     strictAssert.deepEqual(parseBedrockModelCardHtml(fableHtml.replace('<p><b>Model launch date:', `${paragraph}<p><b>Model launch date:`), fableCard.source).records, [fableCard])
