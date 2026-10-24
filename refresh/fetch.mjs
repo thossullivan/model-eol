@@ -1,36 +1,58 @@
 export const MAX_SOURCE_BODY_BYTES = 8 * 1024 * 1024
 export const SOURCE_FETCH_DEADLINE_MS = 30_000
+export const MAX_ERROR_DETAIL_BYTES = 1024
 
 async function readBoundedBody(response) {
   const tooLarge = () => new Error(`response exceeds ${MAX_SOURCE_BODY_BYTES} bytes`)
   if (Number(response.headers?.get('content-length')) > MAX_SOURCE_BODY_BYTES) throw tooLarge()
+  if (!response.body) {
+    const text = await response.text()
+    if (Buffer.byteLength(text) > MAX_SOURCE_BODY_BYTES) throw tooLarge()
+    return text.replace(/^\uFEFF/, '')
+  }
   const chunks = []
   let bytes = 0
-  if (response.body) {
-    for await (const chunk of response.body) {
-      bytes += chunk.byteLength
-      if (bytes > MAX_SOURCE_BODY_BYTES) throw tooLarge()
-      chunks.push(Buffer.from(chunk))
-    }
-  } else {
-    const chunk = Buffer.from(await response.text())
-    if (chunk.byteLength > MAX_SOURCE_BODY_BYTES) throw tooLarge()
-    chunks.push(chunk)
+  for await (const chunk of response.body) {
+    bytes += chunk.byteLength
+    if (bytes > MAX_SOURCE_BODY_BYTES) throw tooLarge()
+    chunks.push(Buffer.from(chunk))
   }
-  return Buffer.concat(chunks).toString('utf8')
+  // TextDecoder strips a leading BOM as response.text() does.
+  return new TextDecoder().decode(Buffer.concat(chunks))
+}
+
+async function readErrorDetail(response) {
+  let text = ''
+  if (!response.body) {
+    text = typeof response.text === 'function' ? (await response.text()).slice(0, MAX_ERROR_DETAIL_BYTES) : ''
+  } else {
+    const chunks = []
+    let bytes = 0
+    for await (const chunk of response.body) {
+      chunks.push(Buffer.from(chunk))
+      bytes += chunk.byteLength
+      if (bytes >= MAX_ERROR_DETAIL_BYTES) break
+    }
+    text = new TextDecoder().decode(Buffer.concat(chunks).subarray(0, MAX_ERROR_DETAIL_BYTES))
+  }
+  return text.replace(/\s+/g, ' ').trim().slice(0, 300)
 }
 
 export async function fetchBoundedBody(url, source, fetchImpl = globalThis.fetch, { headers = {} } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('this Node runtime has no built-in fetch')
   const controller = new AbortController()
   let timedOut = false
+  let errorStatus
   const timeout = setTimeout(() => { timedOut = true; controller.abort() }, SOURCE_FETCH_DEADLINE_MS)
   try {
+    // Caller headers carry credentials, which must not follow a redirect to another origin.
+    const redirect = Object.keys(headers).length ? 'error' : 'follow'
     // Providers geo-localize without Accept-Language; the date parsers are English-only.
-    const response = await fetchImpl(url, { headers: { 'accept-language': 'en', ...headers }, signal: controller.signal })
+    const response = await fetchImpl(url, { headers: { 'accept-language': 'en', ...headers }, redirect, signal: controller.signal })
     if (!response.ok) {
+      errorStatus = response.status
       let detail = ''
-      try { detail = (await readBoundedBody(response)).trim().slice(0, 300) } catch {}
+      try { detail = await readErrorDetail(response) } catch {}
       throw new Error(`HTTP ${response.status}${detail ? ` - ${detail}` : ''}`)
     }
     const body = await readBoundedBody(response)
@@ -38,7 +60,10 @@ export async function fetchBoundedBody(url, source, fetchImpl = globalThis.fetch
     return body
   } catch (error) {
     controller.abort()
-    throw new Error(`${source} fetch failed for ${url}: ${timedOut ? `exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline` : error.message}`)
+    const deadline = `exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline`
+    const cause = error.cause?.message ? ` (${String(error.cause.message).replace(/\s+/g, ' ')})` : ''
+    const reason = timedOut ? (errorStatus === undefined ? deadline : `HTTP ${errorStatus}, then ${deadline} reading the body`) : `${error.message}${cause}`
+    throw new Error(`${source} fetch failed for ${url}: ${reason}`)
   } finally {
     clearTimeout(timeout)
   }

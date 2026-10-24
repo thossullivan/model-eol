@@ -2621,6 +2621,8 @@ for (const publisher of Object.keys(boundedPublishers)) {
   assert(result.endpointAvailable && models.length >= 1 && requests.some(request => request.url === PROVIDERS[publisher].deprecationsUrl), `${publisher} bounded refresh still reads its models endpoint and deprecations page`)
   assert(requests.every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en'), `${publisher} models and deprecations requests carry an abort deadline and request English`)
   assert(models.every(({ options }) => options.headers[credential]?.includes('fixture-key')) && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => !Object.hasOwn(options.headers, credential)), `${publisher} bounded fetch sends ${credential} only to the models endpoint`)
+
+  assert(models.every(({ options }) => options.redirect === 'error') && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => options.redirect === 'follow'), `${publisher} credentialed models requests refuse redirects while uncredentialed pages follow them`)
 }
 const oversizedBody = () => new Response(Buffer.alloc(MAX_DISTRIBUTOR_BODY_BYTES + 1, 0x20))
 const oversizedHeader = () => new Response('{}', { headers: { 'content-length': String(MAX_DISTRIBUTOR_BODY_BYTES + 1) } })
@@ -2665,6 +2667,59 @@ for (const page of ['deprecations', 'models']) {
   } catch (error) { reason = error.message } finally { globalThis.setTimeout = realSetTimeout }
   assert(deadlines.includes(SOURCE_FETCH_DEADLINE_MS) && reason.includes(`exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline`), `a stalled ${page} request fails at the source fetch deadline`)
 }
+const vertexRequests = []
+await loadDistributorSource('vertex-ai', { fetchImpl: async (url, options) => { vertexRequests.push(options); return new Response(vertexHtml) }, notice: () => {} })
+assert(vertexRequests.length === 1 && vertexRequests[0].redirect === 'follow', 'uncredentialed distributor pages still follow redirects')
+let redirectReason = ''
+try {
+  await loadBounded('google', async url => {
+    if (!isModelsUrl('google', url)) return boundedResponse('google', url)
+    throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') })
+  })
+} catch (error) { redirectReason = error.message }
+assert(redirectReason.includes('fetch failed (unexpected redirect)'), 'a refused models endpoint redirect names its cause')
+let bomModels = null
+try {
+  bomModels = await loadBounded('openai', async url => isModelsUrl('openai', url)
+    ? new Response(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), fs.readFileSync(path.join(fixtures, 'openai-models.json'))]))
+    : boundedResponse('openai', url))
+} catch {}
+assert(bomModels?.endpointAvailable && bomModels.currentIds.length > 0, 'a models endpoint body with a UTF-8 BOM still parses as JSON')
+const slowErrorDeadlines = []
+let slowErrorReason = ''
+globalThis.setTimeout = (callback, ms, ...args) => { slowErrorDeadlines.push(ms); return realSetTimeout(callback, ms === SOURCE_FETCH_DEADLINE_MS ? 20 : ms, ...args) }
+try {
+  await loadBounded('openai', async (url, options) => {
+    if (!isModelsUrl('openai', url)) return boundedResponse('openai', url)
+    let sent = false
+    return new Response(new ReadableStream({
+      pull(stream) {
+        if (!sent) { sent = true; stream.enqueue(new TextEncoder().encode('partial')); return }
+        if (options.signal?.aborted) return stream.error(options.signal.reason)
+        return new Promise(resolve => options.signal?.addEventListener('abort', () => { stream.error(options.signal.reason); resolve() }, { once: true }))
+      },
+    }), { status: 500 })
+  })
+} catch (error) { slowErrorReason = error.message } finally { globalThis.setTimeout = realSetTimeout }
+assert(slowErrorDeadlines.includes(SOURCE_FETCH_DEADLINE_MS) && slowErrorReason.includes(`HTTP 500, then exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline reading the body`), 'a slow error body keeps its HTTP status when the deadline fires')
+let errorPulls = 0
+let errorCancelled = false
+let longErrorReason = ''
+try {
+  await loadBounded('openai', async url => isModelsUrl('openai', url)
+    ? new Response(new ReadableStream({
+        pull(stream) { errorPulls++; stream.enqueue(new Uint8Array(512).fill(0x41)) },
+        cancel() { errorCancelled = true },
+      }), { status: 500 })
+    : boundedResponse('openai', url))
+} catch (error) { longErrorReason = error.message }
+assert(errorCancelled && errorPulls <= 4 && longErrorReason.includes(`HTTP 500 - ${'A'.repeat(300)}`) && !longErrorReason.includes('A'.repeat(301)), 'error detail reads about 1 KiB, cancels the body, and keeps 300 characters')
+const multilineError = () => new Response('first line\n::error::injected\r\n\tthird', { status: 502 })
+let multilineProviderReason = ''
+try { await loadBounded('openai', async url => isModelsUrl('openai', url) ? boundedResponse('openai', url) : multilineError()) } catch (error) { multilineProviderReason = error.message }
+let multilineDistributorReason = ''
+try { await loadDistributorSource('vertex-ai', { fetchImpl: async () => multilineError(), notice: () => {} }) } catch (error) { multilineDistributorReason = error.message }
+assert([multilineProviderReason, multilineDistributorReason].every(reason => reason.includes('HTTP 502 - first line ::error::injected third') && !/[\r\n\t]/.test(reason)), 'error detail collapses whitespace so a body line cannot start an Actions workflow command')
 const cohereRequests = []
 const cohereLiveNotices = []
 const cohereAuthenticated = await loadProviderSources(PROVIDERS.cohere, {
