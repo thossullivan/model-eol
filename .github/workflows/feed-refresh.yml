@@ -27,6 +27,7 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -230,17 +231,19 @@ jobs:
           fi
 
       - name: Report feed refresh failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
           RUN_EVENT: ${{ github.event_name }}
           RUN_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           title="Feed refresh automation failed"
-          body=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
+          body=$(printf '%s\n\n%s\n%s\n%s\n%s\n\n%s' \
             "The feed freshness check failed. The committed feeds may now be stale." \
             "Run: $RUN_URL" \
+            "Job status: $JOB_STATUS" \
             "Event: $RUN_EVENT" \
             "Commit: $RUN_SHA" \
             "Inspect the failed step, repair the parser or workflow, then rerun feed-refresh from main.")
