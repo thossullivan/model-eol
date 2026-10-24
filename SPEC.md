@@ -1,14 +1,23 @@
-# model-eol - a machine-readable model deprecation feed (public draft v0.1)
+# model-eol feed format, version 0.1
 
-> Status: public draft, updated 2026-08-18. The problem: model retirement dates live in HTML docs
-> and emails, so every deprecation checker is a scraper with a private registry
-> format. Ordinary software solved this layer - endoflife.date for EOL data, OSV for
-> vulnerability feeds. This is the model version: small enough that a provider could
-> ship it in an afternoon, useful enough that scrapers converge on it in the meantime.
+Status: public draft.
 
-## The format
+Model retirement dates are published as HTML pages and emails, so every tool
+that tracks them scrapes those pages into its own private format. This document
+defines a small JSON format for the same data. A publisher could serve it
+directly; until then, aggregators can publish it on a publisher's behalf.
 
-A feed is a JSON document: metadata + a list of model entries.
+## Terms
+
+- **Publisher**: the company that makes a model and serves it on its own API,
+  such as OpenAI or Anthropic.
+- **Distributor**: a cloud platform that serves another publisher's models,
+  such as Amazon Bedrock, Azure AI Foundry, or Vertex AI.
+- **Channel**: either of those, as a place a model can be called. The
+  publisher's own API is one channel, and each distributor is another. A
+  distributor channel is named by its `via` value.
+
+## Example
 
 ```json
 {
@@ -25,8 +34,8 @@ A feed is a JSON document: metadata + a list of model entries.
       "replacement": "gpt-5.6-sol",
       "notes": "Deep-research post-trained agent; replacement is a general model + tools, not a structural successor.",
       "distributions": [
-        { "via": "azure-ai-foundry", "shutdown": "2026-12-26",
-          "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/model-retirements" }
+        { "via": "azure-ai-foundry", "shutdown": "2026-11-19",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule" }
       ]
     },
     {
@@ -36,69 +45,139 @@ A feed is a JSON document: metadata + a list of model entries.
 }
 ```
 
-### Fields
+A feed is a JSON object with metadata and a `models` array. The JSON Schema is
+[`schema/model-eol.schema.json`](schema/model-eol.schema.json).
 
-| Field | Req | Meaning |
+## Feed fields
+
+| Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | The exact model identifier as sent over the wire (dated snapshot preferred) |
-| `aliases` | no | Other strings that resolve to this model (undated aliases, marketing names) |
-| `announced` | no | Date the deprecation was announced (absent = not deprecated) |
-| `shutdown` | no | Date calls stop working on the publisher's own API (absent = none scheduled) |
-| `replacement` | no | A single exact model ID that resolves against an id or alias in this feed and is safe as a drop-in string substitution. This is the only field plan/apply may patch from |
-| `replacement_options` | no | An ordered array of exact model IDs for multiple or unresolved choices. These are issue-only and need not resolve in this feed |
-| `replacement_note` | no | Free-text guidance such as parameter requirements or provider platform alternatives |
-| `notes` | no | Human context: structural differences, migration gotchas |
-| `distributions` | no | Per-distributor lifecycles - the same weights on different clocks (Azure, Bedrock, Vertex). Each entry: `via`, optional `announced`/`shutdown`/`status`/`date_precision`, `source` |
-| `date_precision` | no | Qualifies `shutdown`: absent or `"exact"` means the stated day; `"earliest"` is a scheduled date that cannot move earlier; `"tentative"` means the publisher lists a not-before retirement date without announcing deprecation |
+| `spec` | yes | `"model-eol/0.1"`. |
+| `publisher` | yes | The publisher this feed describes, for example `openai`. |
+| `generated` | yes | When the feed was generated, as an ISO 8601 timestamp. |
+| `source` | no | URL for the feed's claims. Entries can override it with their own `source`. |
+| `note` | no | Free text about the feed as a whole. |
+| `policy` | no | The publisher's stated notice period. See [Notice policy](#notice-policy). |
+| `models` | yes | The model entries. |
 
-Tentative entries carry no `announced`. Consumers must not treat their dates as scheduled retirements. The reference checker reports them as `scheduled` and never fails on them.
+## Model fields
 
-Dates are ISO 8601, UTC. A model with no `announced` and no `shutdown` is an
-affirmative statement of "no retirement scheduled as of `generated`" - the absence
-is data, which is exactly what scraping HTML can never give you.
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | yes | The exact model identifier sent over the wire. A dated snapshot is preferred. |
+| `aliases` | no | Other strings that resolve to this model, such as undated aliases. |
+| `announced` | no | The date the deprecation was announced. Absent means not deprecated. |
+| `shutdown` | no | The date calls stop working on the publisher's own API. Absent means none scheduled. |
+| `date_precision` | no | How to read `shutdown`. See below. |
+| `replacement` | no | One exact model ID that is a safe drop-in string substitution. See below. |
+| `replacement_options` | no | An ordered list of exact model IDs when there is more than one choice, or when the choice isn't in this feed. |
+| `replacement_note` | no | Free-text migration guidance. |
+| `notes` | no | Context for people: structural differences, migration pitfalls. |
+| `distributions` | no | Lifecycles on other channels (Azure, Bedrock, Vertex). See below. |
+| `source` | no | URL for this entry's claims, when it differs from the feed's `source`. |
 
-`distributions[].status`, when present, is one of `active`, `legacy`,
-`extended-access`, or `retired`. `legacy` means no new consumers but existing
-usage works. `extended-access` means the distributor has announced or entered a
-distinct extended-access portion of that lifecycle; it does not imply availability
-after `shutdown`. On Amazon Bedrock, public extended access is a potentially
-higher-priced portion of the Legacy period for active users and ends at EOL, so
-`shutdown` remains the Bedrock EOL date. Bedrock still calls the encompassing
-state Legacy; `extended-access` is this feed's finer-grained channel signal.
-Private arrangements after EOL are not represented by this status. `retired`
-means the distributor explicitly reports the model as no longer generally
-available even when it does not publish an exact shutdown date.
+Model dates (`announced`, `shutdown`) are ISO 8601 calendar dates in UTC,
+because publishers announce retirements by day. Only the feed's `generated` is a
+full timestamp.
 
-Bedrock model-card floors are tentative distribution dates (`date_precision: "tentative"`) without `announced`.
+Every entry that states a date must have a `source` URL, its own or the feed's.
+The reference validator rejects a dated entry with neither.
 
-Azure maps GA/Preview/Legacy to `active`, Deprecated to `legacy`, and Retired to `retired`; Azure Legacy permits new deployments.
-Azure OpenAI uses a resolving bare identity for single-row models only when a dated snapshot candidate is absent.
+The reference validator accepts a model ID in `id`, `aliases`, `replacement`, or
+`replacement_options` when it is at most 256 characters, starts with a letter or
+digit, and contains only letters, digits, `.`, `_`, and `-`.
+
+### No dates means nothing scheduled
+
+An entry with neither `announced` nor `shutdown` states that no retirement was
+scheduled as of `generated`. A scraper can't make that statement, because a
+model missing from a deprecations page might simply be missing from the page. A
+publisher serving its own feed can.
+
+### `date_precision`
+
+- Absent or `"exact"`: `shutdown` is the stated day.
+- `"earliest"`: a scheduled shutdown that can't move earlier, but may happen
+  later. The reference checker uses it as the shutdown date, so it can fail CI.
+- `"tentative"`: the publisher lists a not-before date without announcing a
+  deprecation. Tentative entries carry no `announced`. Consumers must not treat
+  their dates as scheduled retirements. The reference checker reports them as
+  `scheduled` and never fails on them.
+
+### Replacements
+
+`replacement` is one exact model ID that resolves to an `id` or alias in the
+same feed and is safe as a plain string substitution. It is the only field the
+reference `plan` and `apply` patch from. If no such ID exists, it is absent.
+
+`replacement_options` is an ordered list of exact model IDs, in the order the
+publisher gives them. Each option must pass the model ID grammar, but it need
+not resolve in the feed, since the target may not be listed yet.
+
+`replacement_note` carries guidance that isn't an ID, such as a required
+parameter (`reasoning.mode: pro`) or a pointer to another platform.
+
+Replacement options and notes are for issues only. The reference planner never
+patches from them; it patches from `replacement` alone.
+
+OpenAI changed the recommended replacement for its deep-research models during
+their notice period. Consumers should read `replacement` again on each run
+rather than cache it.
+
+### `distributions`
+
+The same model weights can retire on different dates on different channels.
+OpenAI shut off `o3-deep-research` on 2026-07-23, while Azure AI Foundry
+kept it for months longer. A checker that ignores channels tells an Azure user
+their model is gone too early, or tells an OpenAI user they're fine because
+Azure still serves it.
+
+Each distribution entry has:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `via` | yes | The channel, for example `aws-bedrock`, `azure-ai-foundry`, or `vertex-ai`. |
+| `announced` | no | As for the model. |
+| `shutdown` | no | The date the channel stops serving the model. |
+| `date_precision` | no | As for the model. |
+| `status` | no | `active`, `legacy`, `extended-access`, or `retired`. |
+| `source` | no | URL for the channel's claim. |
 
 A model may contain at most one distribution for each `via`. Duplicate channel
-records are ambiguous and fail runtime semantic validation. Draft-07 can enforce
-whole-object uniqueness, but cannot express uniqueness keyed by the `via` field,
-so `model-eol validate` and feed loading enforce this constraint.
+records are ambiguous and fail validation. JSON Schema can't express uniqueness
+by one field, so `model-eol validate` and feed loading enforce it in code.
 
-### Structured replacement contract
+How the reference checker reads distribution entries: an entry without
+`shutdown` means nothing is scheduled on that channel and never inherits the
+publisher's date, unless its `status` is `retired` (reported as retired) or it
+has `announced` without a date (reported as `watch`). When a model has no entry
+for the requested channel, the checker uses the publisher's date and labels the
+result `publisher-fallback`.
 
-`replacement` is a single exact model ID that resolves against an id or alias in
-the same feed and is safe as a drop-in string substitution. This is the ONLY
-field plan/apply may patch from. Otherwise absent.
+`status` values:
 
-`replacement_options` is an optional array of exact model IDs. Each option must
-pass the identifier grammar, but feed resolution is NOT required since a target
-may not be carried yet. Options are ordered as the provider lists them.
+- `active`: generally available.
+- `legacy`: no new customers, but existing use keeps working.
+- `extended-access`: the distributor has announced or entered a separate
+  extended-access part of the lifecycle. It does not mean the model is
+  available after `shutdown`.
+- `retired`: the distributor says the model is no longer generally available,
+  even if it published no exact date.
 
-`replacement_note` is optional free-text guidance. It can carry parameter
-requirements such as `reasoning.mode: pro` or prose alternatives such as Google's
-platform pointers.
+Notes on current distributors:
 
-Replacement options and notes are issue-only. The planner never auto-patches
-from options; it patches `replacement` exclusively.
+- On Amazon Bedrock, public extended access is a possibly higher-priced part of
+  the Legacy period and ends at end of life, so `shutdown` stays the Bedrock
+  end-of-life date. Bedrock still calls the whole state Legacy;
+  `extended-access` is this feed's finer-grained signal. Private arrangements
+  after end of life are not represented. "EOL no sooner than" dates from Bedrock
+  model cards are recorded as `tentative`.
+- Azure's GA, Preview, and Legacy map to `active`, Deprecated to `legacy`, and
+  Retired to `retired`. Azure's Legacy still allows new deployments.
 
-### Policy floors
+## Notice policy
 
-A feed MAY include a publisher's stated minimum deprecation notice period:
+A feed MAY state the publisher's minimum notice period:
 
 ```json
 "policy": {
@@ -107,59 +186,55 @@ A feed MAY include a publisher's stated minimum deprecation notice period:
 }
 ```
 
-For an entry with neither `announced` nor `shutdown`, a policy floor means the
-entry cannot become unavailable before `generated` + `min_notice_days` days,
-provided the provider honors its stated policy. This is a stated policy, not a
-contract or a guarantee that the provider will remain available.
+For an entry with neither `announced` nor `shutdown`, this means the model won't
+become unavailable before `generated` plus `min_notice_days`, as long as the
+publisher follows its own policy. The policy is the publisher's statement and
+can change; it is not a contractual guarantee.
 
-The `policy` field is optional. Its absence means no forward claim can be made,
-intentionally. OpenAI publishes no formal notice floor, so the OpenAI feed carries
-no `policy` field.
+Leaving `policy` out means no forward claim can be made. OpenAI publishes no
+fixed notice period, so the OpenAI feed has no `policy`.
 
-### Why `distributions` is in the core and not an extension
+## Serving a feed
 
-The July 2026 evidence: OpenAI shut off `o3-deep-research` on July 23; Azure lists it
-retiring December 26. Anthropic retired Claude 3.7 Sonnet on February 19; Bedrock
-kept it to April 28. The same BOM entry has different sourcing terms per channel, and
-a checker that doesn't know that will tell an Azure shop their model is dead five
-months early - or tell an OpenAI-direct shop they're fine because Azure says so.
+A publisher can serve its feed at `/.well-known/model-eol.json`, or add
+`announced`, `shutdown`, and `replacement` to its models endpoint.
 
-## Serving it
+Until publishers do, aggregators can publish feeds on their behalf, with a
+`source` on every claim so it can be audited. A consumer can load a publisher's
+own feed where one exists and a community feed where it doesn't.
 
-- **Providers** (the ask): serve the feed at `/.well-known/model-eol.json`, or add
-  `announced`/`shutdown`/`replacement` to the existing models endpoint. Either kills
-  the scraping industry overnight.
-- **Aggregators** (the interim): community datasets re-publish provider pages in this
-  format, with `source` on every entry so claims are auditable. Multiple feeds
-  compose - a checker loads provider feeds where they exist and community feeds where
-  they don't.
-- **Consumers**: anything that can read JSON - a CI step, a dashboard, a Dependabot
-  clone that opens migration PRs when `shutdown - today < threshold`.
+Tools that export CycloneDX SHOULD write one component per model per channel,
+with a deterministic `bom-ref` that includes the channel. That keeps the
+publisher's dates and each distributor's dates separate, and ties each
+occurrence in the code to the date it was checked against.
 
-Repository tools that export CycloneDX SHOULD represent a canonical model once
-per lifecycle channel, with a deterministic channel-qualified `bom-ref`. This
-keeps direct publisher and distributor clocks distinct and binds each source
-occurrence to the lifecycle decision that evaluated it.
+## Compatibility
 
-**Compatibility within 0.1.** The `model-eol/0.1` line evolves additively: new
-optional fields and new enumeration values (such as `date_precision:
-"tentative"`, added in 2026-09) may appear in feeds and reports without a
-version change. A consumer that validates strictly against a snapshot of these
-schemas should expect to refresh that snapshot when it upgrades, and a consumer
-that reads defensively should ignore fields and values it does not recognise
-rather than reject the document. Removing a field or changing the meaning of an
-existing value is a new spec line.
+The `model-eol/0.1` line changes only by addition. New optional fields and new
+enum values (such as `date_precision: "tentative"`, added in September 2026)
+can appear without a version change. A consumer that validates strictly against
+a copy of the schemas should refresh that copy when it upgrades. A consumer
+that reads loosely should ignore fields and values it doesn't recognize.
+Removing a field or changing what an existing value means requires a new
+version.
 
-## Non-goals (v0.1)
+## Out of scope for 0.1
 
-Pricing, capabilities, context windows (models.dev and friends already do this);
-behavior-change tracking (that's an eval suite's job, not a manifest's); signing and
-provenance (worth doing the moment anyone depends on this; premature today).
+- Pricing, capabilities, and context windows. models.dev and similar projects
+  already cover these.
+- Behavior changes between model versions. See
+  [docs/DESIGN_EVAL_BOUNDARY.md](docs/DESIGN_EVAL_BOUNDARY.md).
+- Signing and provenance. These become worth doing once people depend on the
+  feeds, which is premature today.
 
-## Prior art, gratefully
+## Prior art
 
-endoflife.date (the shape of the solution), OSV (proof that a shared schema turns N
-scrapers into an ecosystem), CycloneDX ML-BOM / SPDX AI profile (where an `eol` field
-belongs once feeds exist), and the current scrapers - llm-model-deprecation,
-llmstatus.ai, llm-info, ai-model-watch-data, modelradar-data - which are the demand
-signal this spec is trying to give a common target.
+- [endoflife.date](https://endoflife.date/): end-of-life data for software
+  products, and the model for this project's shape.
+- [OSV](https://osv.dev/): a shared vulnerability schema that let many
+  scrapers become one ecosystem.
+- CycloneDX ML-BOM and the SPDX AI profile, which are where an end-of-life
+  field belongs once feeds exist.
+- Existing deprecation trackers: llm-model-deprecation, llmstatus.ai,
+  llm-info, ai-model-watch-data, and modelradar-data. They show the demand, and
+  this format is meant to give them a common target.

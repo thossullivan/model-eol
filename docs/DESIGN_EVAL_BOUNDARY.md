@@ -1,86 +1,93 @@
-# Design - the eval boundary (what model-eol verifies, and what it does not)
+# What model-eol verifies, and what it doesn't
 
-Status: decided 2026-09-09 (issue #98). This note records the line so that
-future requests for "evals inside model-eol" start from the reasoning, not from
-scratch.
+Decided 2026-09-09 in issue #98. This note records where the line sits, so a
+future request for "evals inside model-eol" can start from the reasoning.
 
 ## The decision
 
-model-eol owns two things around migration verification:
+model-eol owns two things around verifying a migration: the deadline and the
+eval-hook contract.
 
-1. **The deadline.** The feeds carry the date a model stops answering on each
-   clock: the publisher's API, and each distributor (Bedrock, Azure, Vertex).
-   An exact date is the last day a baseline can be captured from the old
-   model. A tentative or earliest floor is only "at least until": the old
-   model may answer past it, and the bot words it that way. On the applied
-   clock the date is the finding's `shutdown`. When the feed lists
-   another clock on which the model still answers, `check` appends
-   `[still answers via <channel> until <date>]` to the retiring or retired
-   line, and the bot adds a `## Capture window` section to every PR and issue
-   it opens. The value comes from the feed only. When the feed has no date,
-   model-eol says nothing. The `check --json` document does not carry a
-   `capture` field yet: the 0.1 report shape published by 0.5.2 is kept
-   byte-compatible for default output, and adding the field is a separate
-   contract decision.
-2. **The eval-hook contract.** The bot runs one repository-owned command on the
-   patched checkout and passes `MODEL_EOL_OLD_ID`, `MODEL_EOL_NEW_ID`,
-   `MODEL_EOL_PLAN`, `MODEL_EOL_REPORT`, `MODEL_EOL_VIA`, and
-   `MODEL_EOL_EVAL_MODE`. Exit zero plus a report file is a pass. That is the
-   whole verification interface.
+### The deadline
 
-model-eol does not own verification itself. It ships no comparator, no
+The feeds carry the date a model stops answering on each channel: the
+publisher's own API, and each distributor (Bedrock, Azure AI Foundry, Vertex AI).
+An exact date is the last day you can record a baseline from the old model. A
+tentative or earliest date only means "at least until": the old model may
+answer past it, and the bot says so in those words.
+
+On the channel being checked, that date is the finding's `shutdown`. When the
+feed lists another channel where the model still answers, `check` adds
+`[still answers via <channel> until <date>]` to the retired or retiring line,
+and the bot adds a "Capture window" section to its migration PRs and issues.
+The value comes only from the feed. When the feed has no date for any other
+channel, `check` adds nothing, and for a retired model the bot's section says it
+can't state a
+capture window.
+
+`check --json` doesn't include the capture window yet. Adding it would change
+the published 0.1 report shape for default output, and that is a separate
+contract decision.
+
+### The eval-hook contract
+
+The bot runs one repository-owned command on the
+patched checkout and passes it `MODEL_EOL_OLD_ID`, `MODEL_EOL_NEW_ID`,
+`MODEL_EOL_PLAN`, `MODEL_EOL_REPORT`, `MODEL_EOL_VIA`, and
+`MODEL_EOL_EVAL_MODE`. Exit 0 with a report file is a pass. That is the whole
+verification interface. [BOT.md](BOT.md#the-eval-hook) has the details.
+
+model-eol does not do the verification itself. It has no comparator, no
 per-case results schema, no starter case set, no scorer, and no judge model.
-Those live in the repository's own eval command and CI, or in tools built for
-that job (promptfoo, Inspect AI, and the like).
+Those belong in the repository's own eval command and CI, or in tools built for
+the job, such as promptfoo or Inspect AI.
 
-## Why the line sits here
+## Why the line is here
 
-- **The Dependabot pattern.** Dependabot opens the PR; the repository's CI
-  decides. model-eol already works that way through the eval hook. Moving the
-  decision into model-eol would make it the first part of the tool that
-  guesses.
-- **The hard parts are verification-domain problems, not lifecycle-data
-  problems.** A design pass on golden capture and replay found that every deep
-  question belongs to the eval side: which cases to run, how to score prose,
-  how many runs make a baseline stable, how much API budget a run may spend,
-  and how to map a publisher's model ID to a distributor's client ID. None of
-  those has settled numbers in the published literature or vendor guidance.
-  model-eol has no data that would improve them.
-- **Zero dependencies.** Calling model APIs from model-eol would need SDKs,
-  keys, and per-vendor request formats. That ends the zero-dependency
-  contract that keeps the tool auditable.
-- **No customer with a case set.** As of the decision, no consumer had a real
-  case set to design against. A comparator built without a user is
-  speculation.
+Dependabot opens a PR and leaves the decision to the repository's CI, and
+model-eol already works the same way through the eval hook. If model-eol scored
+migrations itself, it would be guessing about behavior it can't observe.
 
-## What the feeds can say, and what they cannot
+A design pass on capturing and replaying golden outputs found that every hard
+question was about evaluation: which cases to run, how to score prose, how many
+runs make a stable baseline, how much API budget a run may spend, and how to
+map a publisher's model ID to a distributor's. None of these has settled
+answers in published research or vendor guidance, and model-eol's lifecycle
+data doesn't help answer them.
 
-The feed answers "until when does this model answer on this clock". It does
-not answer "how close is the replacement". A model retired on the publisher
-clock can still answer on Bedrock or Azure for months; `capture.alternatives`
-lists those clocks with their dates. That is the one verification-adjacent
-fact only this data set gives, so it is the one model-eol reports.
+Calling model APIs would also mean SDKs, keys, and per-vendor request formats,
+which would end the zero-dependency rule that keeps the tool easy to audit. And
+when this was decided, no consumer had a real set of eval cases to design
+against, so a comparator would have been built without a user.
 
-Distribution rows carry no replacement ID. The feed's `replacement` is the
-publisher's ID (for example `claude-sonnet-4-6`). A repository that calls
-Bedrock holds a different string for the same weights. An eval command that
-replays against the replacement on a distributor must map the publisher ID to
+## What the feeds can and can't say
+
+A feed says how long a model keeps answering on each channel. It says nothing
+about how close the replacement is. A model retired on the publisher's API can
+keep answering on Bedrock or Azure for months, and the capture window lists
+those channels and dates. The capture window is the only verification fact the
+feeds can supply, and it is the only one model-eol reports.
+
+Distribution entries carry no replacement ID. The feed's `replacement` is the
+publisher's ID, for example `claude-sonnet-4-6`, while a repository that calls
+Bedrock uses a different string for the same model. An eval command that
+replays against the replacement on a distributor has to map the publisher ID to
 its own client ID. `MODEL_EOL_VIA` tells the command which channel the plan was
-built for so it can do that mapping.
+built for so it can do that.
 
 ## The reserved `capture` mode
 
-`MODEL_EOL_EVAL_MODE` is `evaluate` today. The value `capture` is reserved for
-a run on the unpatched checkout against the old ID, so a command could record
-a baseline before the capture window closes. The bot does not run capture
-mode, and `runEvalHook` refuses any mode other than `evaluate`. The name is
-reserved so that a future opt-in does not have to change the contract.
+`MODEL_EOL_EVAL_MODE` is always `evaluate` today. The value `capture` is
+reserved for a run on the unpatched checkout against the old model, so a
+command could record a baseline before the window closes. The bot doesn't run
+capture mode, and the hook refuses any value other than `evaluate`. Reserving
+the name now means a future opt-in won't need a contract change.
 
 ## What would reopen this
 
-A consumer with a real case set, a concrete regressed-item gate they already
-use, and a request for model-eol to schedule (not score) the capture run before
-the deadline. Even then the scoring stays in the consumer's command. The
-candidate addition would be an opt-in capture run keyed by old ID and case-set
-hash, run at most once per key, with the existing timeout as the only cap
+A consumer with a real case set, a regression gate they already use, and a
+request for model-eol to schedule the capture run before the deadline, but not
+to score it. Even then, scoring would stay in the consumer's command. The
+likely addition is an opt-in capture run keyed by old model ID and case-set
+hash, run at most once per key, with the existing timeout as the only limit
 model-eol can enforce.

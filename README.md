@@ -9,124 +9,99 @@
 ![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
-**A machine-readable deprecation feed format for AI models, plus the reference
-tooling that turns it into a Dependabot for models.**
+model-eol finds AI model IDs in your code and tells you which ones are retired
+or about to be. It runs as a CLI, a GitHub Action, and a scheduled bot that
+opens migration PRs. The retirement dates come from feeds in an open format
+([`SPEC.md`](SPEC.md)) that any tool can read.
 
-![model-eol demo: retired models, distributor clocks, worst-case date](docs/img/demo.gif)
+![Terminal recording: model-eol reports retired models, the same repo under Amazon Bedrock's dates, and the earliest retirement date](docs/img/demo.gif)
 
-## The problem
+## Why this exists
 
-On July 23, 2026, OpenAI shut down a scheduled wave of model snapshots. One of my
-research workflows failed that morning with a model-not-found error. The
-retirement had been documented for months. I had not seen it, because a model ID
-was the one dependency my toolchain could not track.
+On July 23, 2026, OpenAI shut down a batch of model snapshots, and one of my
+research workflows started failing with model-not-found errors. The shutdown
+had been announced three months earlier. I missed it because nothing in my
+toolchain knew which models I used.
 
-Other dependencies do not work this way. When an npm package is deprecated, the
-warning prints at install, Dependabot opens a PR, and an advisory can fail CI. A
-model's retirement date usually lives in an HTML docs page and an email.
+Package dependencies don't have this problem. npm prints a warning when a
+package is deprecated, and Dependabot opens a PR. A model's retirement date sits
+on a provider's docs page and in an email to whoever owns the account.
 
-Ordinary software already solved this layer: endoflife.date for end-of-life
-dates, OSV for vulnerability feeds. This project is the model version. The
-schema comes first and the tooling second, so existing trackers can share one
-format instead of each scraping the same pages.
+Ordinary software has shared data for this: endoflife.date for end-of-life
+dates and OSV for vulnerabilities. model-eol is an attempt at the same thing for
+models. The feed format came first, and the tooling is a reference consumer of
+it.
 
-## What's here
+## Quick start
 
-- **`SPEC.md`** - the feed format (model-eol/0.1): id, aliases, announced, shutdown,
-  replacement, `distributions` for per-channel lifecycles, and publisher `policy`
-  floors. It is small enough that a provider could serve it at
-  `/.well-known/model-eol.json` in an afternoon.
-- **`feeds/`** - <!-- feeds-status -->Amazon (4 entries), Anthropic (36 entries), Cohere (12 entries), Google (101 entries), Mistral (43 entries) and OpenAI (204 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-10-19<!-- /feeds-status -->. Every
-  dated entry carries a source URL. Anthropic's "not sooner than" dates for
-  active models are included as `tentative` planning floors.
-- **`check.mjs`** - zero-dependency CLI: CI gate, PR diff gate, inventory, CycloneDX
-  ML-BOM export, retirement schedule, alerts and badges, migration plan/apply,
-  and public document validation.
-- **`refresh/`** - regenerates the feeds from provider pages, models endpoints, and
-  distributor lifecycle pages, with a semantic diff for human review.
-- **`bot/`** - the Dependabot part: a scheduled GitHub workflow that maintains one
-  migration PR or issue per retiring model. It ships as the `model-eol-bot`
-  binary in the same npm package.
-- **Public contract** - versioned schemas, hosted feeds, refresh health, a
-  publication manifest, and an Atom changelog at
-  [`thossullivan.github.io/model-eol`](https://thossullivan.github.io/model-eol/).
-  Publication requires a refresh receipt for the exact feeds on `main`, followed
-  by an exact-byte check of every deployed asset.
-
-## Try it
-
-One command, no install, no API keys:
+It runs with `npx`, needs Node 22 or later, and needs no API key or account:
 
 ```sh
 npx model-eol path/to/your/repo --days 90
 ```
 
-That is the whole CI gate. If you prefer not to use npm, clone and run. The
-result is identical, because there are no dependencies to install either way:
+Output looks like this:
+
+```
+✗ app.py:2  o3-deep-research  RETIRED 2026-07-23 (92 days ago) -> gpt-5.6-sol  [still answers via azure-ai-foundry until 2026-11-19]
+✗ app.py:3  claude-opus-4-1-20250805  RETIRED 2026-08-05 (79 days ago) -> claude-opus-4-8  [still answers via aws-bedrock until 2027-01-08]
+· app.py:4  gpt-5.6-sol  no retirement scheduled
+
+model-eol: 2 finding(s) at or past the 90-day threshold
+```
+
+`✗` is retired, `!` retires within the `--days` threshold, `·` doesn't retire
+within the threshold, and `?` means a retirement is announced but has no date
+yet. A model can retire on one channel (the publisher's own API,
+or a distributor such as Amazon Bedrock, Azure AI Foundry, or Vertex AI) and
+keep answering on another, so the line says where and until when.
+
+The exit code is 0 when the repo is clean, 1 when any finding is retired or
+inside the threshold, and 2 for usage, feed, or scan errors, so you can use the
+command directly as a CI step. A clean run that can't write its output exits 3.
+
+When something fails, `plan` and `apply` make the safe edits for you:
+
+```sh
+npx model-eol plan path/to/your/repo --days 90 > plan.json
+npx model-eol apply --plan plan.json --dry-run
+```
+
+There is nothing to install, so a clone runs the same way:
 
 ```sh
 git clone https://github.com/thossullivan/model-eol && cd model-eol
 node check.mjs path/to/your/repo --days 90
 ```
 
-<details>
-<summary><b>Every command</b> - PR gate, distributor clocks, SBOM, badges, migration plans</summary>
+Feed coverage: <!-- feeds-status -->Amazon (4 entries), Anthropic (36 entries), Cohere (12 entries), Google (101 entries), Mistral (43 entries) and OpenAI (204 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-10-19<!-- /feeds-status -->.
 
-```sh
-# PR gate: report only findings THIS change adds or makes newly actionable
-node check.mjs check . --changed origin/main --days 90
-# the same repo judged by a distributor's clock instead of the publisher's
-node check.mjs path/to/your/repo --via aws-bedrock
-# inventory, and a CycloneDX 1.6 ML-BOM for your SBOM pipeline
-node check.mjs inventory path/to/your/repo
-node check.mjs inventory path/to/your/repo --format cyclonedx > model-bom.json
-# the primary CI gate is also a schema-valid public report
-node check.mjs check path/to/your/repo --json > model-eol-check.json
-node check.mjs validate model-eol-check.json
-# retirement schedule with the repo-level worst case
-node check.mjs schedule path/to/your/repo
-# GitHub Actions annotations, Markdown, or a shields.io badge
-node check.mjs alert path/to/your/repo --format github
-node check.mjs alert path/to/your/repo --format badge > model-eol-badge.json
-# migration plan (only high-confidence direct API refs are patchable) and safe apply
-node check.mjs plan path/to/your/repo --days 90 > plan.json
-node check.mjs apply --plan plan.json --dry-run
-# validate provider feeds, repository policy, or model-eol machine reports
-node check.mjs validate feeds/openai.json .model-eol.json plan.json
-```
+## Commands
 
-</details>
+| Command | What it does |
+|---|---|
+| `check` (default) | Fails on retired and retiring models. `--changed origin/main` reports only what a change adds. |
+| `inventory` | Lists every model reference. `--format cyclonedx` writes a CycloneDX 1.6 ML-BOM with one component per model and channel. |
+| `schedule` | Lists retirement dates and the earliest one in the repo. |
+| `alert` | Writes GitHub annotations (`--format github`), Markdown, or a [shields.io endpoint](https://shields.io/endpoint) badge. |
+| `plan` / `apply` | Builds a migration plan and applies it. `apply --dry-run` previews the edits. |
+| `validate` | Checks a feed, a `.model-eol.json`, or any model-eol report against its schema. |
+| `verify` | Checks a receipt's claims against files you supply. See [docs/RECEIPTS.md](docs/RECEIPTS.md). |
 
-Sample output against the test fixture (2026-08-01):
+The flags you'll use most are `--json`, `--days N`, `--scope all|direct`, and
+`--via DISTRIBUTOR`. `npx model-eol --help` lists which command takes which.
 
-```
-✗ app.py:2  o3-deep-research          RETIRED 2026-07-23 (9 days ago) -> gpt-5.6-sol
-! app.py:3  claude-opus-4-1-20250805  RETIRES 2026-08-05 (4 days) -> claude-opus-4-8
-· app.py:4  gpt-5.6-sol               no retirement scheduled
-earliest risk: 2026-07-23 (o3-deep-research-2025-06-26)
-```
+`plan` proposes only plain string swaps. The reference must be a direct API
+call the scanner is sure about, and the feed must name a replacement that is
+itself safe. Other retired or retiring references are left for manual review,
+and the bot files those as issues.
 
-The command exits 1 when any finding is at or past the threshold, so it works
-in CI as-is. The badge JSON works with the
-[shields endpoint](https://shields.io/endpoint) from any URL your CI can reach.
+Feed updates ship as patch releases, so `npx model-eol` and the `@v0` Action
+tag pick up new dates with each release (see [docs/FEEDS.md](docs/FEEDS.md) for
+when releases happen). Pinning an exact version, such as `npx model-eol@0.10.2`
+or `thossullivan/model-eol@v0.10.2`, also pins the feeds to that release.
 
-**No API keys, no accounts.** Scanning is static analysis and the feeds are data
-files. The checker, PR gate, schedule, SBOM export, and badge run with no
-credentials at all. The bot needs a GitHub token, and a fine-grained PAT if you
-want its PRs to trigger checks. Provider API keys are optional in exactly two
-places: your own eval command, and the models-endpoint coverage in the feed
-refresh. Refresh accepts `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
-(or `GOOGLE_API_KEY`), `MISTRAL_API_KEY`, and `COHERE_API_KEY`.
-
-Both command-line binaries ship in one zero-dependency npm package. The test
-suite packs that package, installs it into an empty directory with the network
-disabled, and runs both binaries. The suite also fails if any runtime,
-development, peer, or optional npm dependency is added.
-
-## Use it as a GitHub Action
-
-The same gate as a composite action. No npm install, feeds bundled, pinned to
-the `v0` line:
+## GitHub Action
 
 ```yaml
 - uses: actions/checkout@v7
@@ -144,571 +119,188 @@ the `v0` line:
     scope: direct
 ```
 
-This is the PR gate. It reports the findings *this* change adds or makes newly
-actionable, and fails when one is retired or retiring within the threshold: a
-model on an added line, or an unchanged reference the change makes bad (a
-`.model-eol.json` edit, nearby SDK or cloud code, a rename, an in-repo feeds
-change, an untracked file). References already bad at the base ref stay out of
-the way. Add `via: aws-bedrock` (or `azure-ai-foundry`) to judge by a
-distributor's clock.
+This is the PR gate. It fails when the change adds a reference to a retired or
+retiring model. It also fails when the change makes an existing reference bad,
+for example by editing `.model-eol.json`, renaming a file, or adding SDK code
+next to an old model ID. References that were already bad on the base branch
+don't fail the PR; the weekly full scan in the example workflow catches those.
 
-A copy-paste workflow with both gates, the PR diff and a weekly full-repository
-check, is in
-[`examples/workflows/model-eol.yml`](examples/workflows/model-eol.yml). The
-Action also exposes `inventory`, `schedule`, `alert`, `plan`, and `validate`.
-Use `format: cyclonedx` for an ML-BOM. Use `output-file` to keep any report as
-a workflow artifact while the same output still prints in the job log.
+[`examples/workflows/model-eol.yml`](examples/workflows/model-eol.yml) has both
+jobs ready to copy. The Action also runs `inventory`, `schedule`, `alert`,
+`plan`, and `validate`. Set `via: aws-bedrock` to use a distributor's dates,
+`format: cyclonedx` for an ML-BOM, and `output-file` to save a report as a
+workflow artifact.
 
-CycloneDX exports contain one machine-learning component per canonical model
-and lifecycle channel. A direct publisher reference (`publisher-direct`), an
-Azure reference, and a Bedrock reference to the same model therefore keep their
-own status and shutdown date, under deterministic channel-qualified `bom-ref`
-values. Occurrences are sorted and attached to the component whose clock judged
-them.
+## Configuration
 
-## One repository policy
-
-The CLI, the Action, and the bot all read a strict `.model-eol.json` at the
-root of the target Git repository. CLI flags and Action inputs override
-configured values. `--config FILE` selects an explicit policy when discovery
-is ambiguous:
+The CLI, the Action, and the bot all read `.model-eol.json` from the root of the
+repository:
 
 ```json
 {
   "days": 90,
   "scope": "direct",
-  "via": null,
-  "ignore": {
-    "models": ["o3-deep-research"],
-    "paths": ["test/fixtures/**", "vendor"]
-  },
+  "ignore": { "paths": ["test/fixtures/**", "data/catalog"] },
   "waivers": [
     {
       "model": "gpt-4",
       "paths": ["services/legacy/**"],
-      "via": "aws-bedrock",
       "reason": "Vendor contract pins this model until the Q1 migration.",
       "owner": "@platform-team",
       "expires": "2026-12-31"
-    }
-  ],
-  "issues": { "enabled": true },
-  "eval": { "command": "node scripts/model-eol-eval.mjs" }
-}
-```
-
-Unknown keys and invalid values are errors. A canonical model ID or any alias
-in `ignore.models` suppresses the whole alias family. `ignore.paths` takes
-repo-relative `*`, `**`, and `?` globs and excludes matching files before scan
-coverage is counted.
-
-With no config, the CLI keeps its historical `scope: all`. Once a config exists,
-omitted values use the bot defaults: `days: 90`, `scope: direct`, and the
-publisher clock. The portable structure is defined by
-[`schema/model-eol.bot-config.schema.json`](schema/model-eol.bot-config.schema.json).
-`model-eol validate` also enforces the runtime rules that Draft-07 cannot
-express.
-
-### Ignores and waivers
-
-Ignores and waivers answer different questions.
-
-`ignore` hides inventory noise: fixtures, caches, and vendored catalogs that are
-not live dependencies. Ignored references do not appear in reports.
-
-A **waiver** records a deliberate exception on a live dependency: which model,
-why, who owns it, and the date it expires. A waiver never hides its finding.
-The reference stays in `check`, `inventory`, `schedule`, `alert`, `plan`, and
-the CycloneDX export, with its reason, owner, expiry, and active state attached.
-The `waiver` field appears on a finding only when a waiver matched it:
-
-```
-✗ app.py:2  o3-deep-research  RETIRED 2026-07-23 (42 days ago) -> gpt-5.6-sol  [waived until 2026-12-31 by @research-platform: Research pipeline pinned until the Q4 rerun.]
-```
-
-While a waiver is active, that finding is left out of the exit-1 total, the
-badge counts, and the alert errors, and the bot opens no migration work for it.
-On the expiry date the finding is actionable again, and the report names the
-waiver that lapsed and who owned it. Expiry uses UTC dates, and the expiry date
-itself counts as expired.
-
-The waiver fields work like this:
-
-- `model` matches the whole alias family.
-- `paths` takes the same repo-relative globs as `ignore.paths`.
-- `via` narrows the waiver to one clock: a distributor id, or `publisher` for
-  the direct publisher clock. Omit it to waive every clock.
-- The first active matching waiver wins.
-- A policy holds at most 500 waivers across the root and its overrides.
-
-A malformed waiver, such as a missing owner, a relative duration, or an unknown
-key, is a config error like any other. An expired waiver is not an error. It is
-simply no longer active. The CycloneDX export records each component's waiver
-state as active, partial, or expired.
-
-### Coverage limits
-
-For content-heavy repositories, start with `inventory`. Then exclude caches,
-generated catalogs, archived fixtures, and documentation that are not live
-model dependencies. The published-repository tests verify both outcomes: an
-unconfigured scan reports the evidence, and an explicit path policy produces a
-clean check and an empty bot decision table without changing repository
-content.
-
-Scans do not recurse into tracked Git submodules. A detected gitlink is
-reported as incomplete coverage, so `check` and `plan` fail unless the path is
-ignored or `--allow-incomplete` is set. To inspect a submodule, run model-eol
-against its checkout as a separate target with its own policy.
-
-Untracked nested Git repositories work the same way. The parent reports
-`nested-repository-skipped` and never recurses into the nested checkout. Ignore
-an intentional nested repository, allow incomplete coverage, or scan it
-separately.
-
-### Monorepos
-
-Mixed-provider monorepos keep the top-level values as defaults, then apply path
-policies and a lifecycle channel per reference:
-
-```json
-{
-  "days": 90,
-  "scope": "direct",
-  "overrides": [
-    { "paths": ["services/**"], "scope": "all" },
-    { "paths": ["services/bedrock/**"], "days": 180, "via": "aws-bedrock" }
-  ],
-  "routes": [
-    { "paths": ["services/vertex/**"], "via": "vertex-ai" },
-    {
-      "paths": ["services/bedrock/**"],
-      "match": "chat-prod",
-      "model": "claude-3-7-sonnet-20250219",
-      "via": "aws-bedrock"
     }
   ]
 }
 ```
 
-Matching overrides apply in order. Later scalar values win. Ignore and waiver
-lists add up, so an override can carry path-scoped `waivers` with the same shape
-as the root. The last matching route wins. An exact `match`/`model` pair
-resolves a deployment alias without making cloud or gateway references
-patchable. Explicit CLI flags and Action inputs still take precedence.
+`ignore` drops files and models that aren't live dependencies, such as fixtures
+and vendored catalogs. A waiver keeps the finding in every report, with its
+owner and expiry, but stops it failing CI until the expiry date. Monorepos can
+set different thresholds and channels per path. Unknown keys are errors.
 
-JSON inventory and plan output record each reference's effective threshold,
-scope, requested channel, and matching rule indexes. A Bedrock service and a
-direct publisher call in the same repository therefore never share one global
-clock by accident.
+Adding a config file changes one default. Without one, the CLI also fails on
+cloud and gateway references (`scope: all`). With one, any key you leave out
+takes the bot's defaults: 90 days, `scope: direct`, and the publisher's dates.
 
-## One model, several retirement dates
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md) covers every key, monorepo
+overrides and routes, and what the scanner reads and skips.
 
-The same model retires on different dates on different channels. A checker that
-ignores this is wrong in both directions. o3-deep-research retired at OpenAI on
-July 23 but stays available on Azure AI Foundry until December 26.
-claude-opus-4-1 retires at Anthropic on August 5 but stays on Amazon Bedrock
-until January 8, 2027.
+## How retirement dates work
 
-`distributions` in the spec carries these per-channel dates. `--via <distributor>`
-judges your repo by the channel you call. The distributor refresh keeps the
-Bedrock, Vertex, and Azure Foundry dates current from their lifecycle pages.
-Bedrock combines its [legacy table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html)
-with [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
-Card floors become tentative distribution dates without announcements.
-Under `--via aws-bedrock`, these floors remain `scheduled` and display "not sooner than".
-A distributor's later date gives you more time for the same migration. It is not a reason to
-skip it.
+### One model, several dates
 
-The later date is also the last day you can still call the old model, when the
-feed gives it as an exact date. A tentative or earliest floor is "at least until",
-and the old model may answer past it. When a retired or retiring model still
-answers on another channel, `check` appends
-`[still answers via aws-bedrock until 2026-10-14]` to the line, and the bot adds
-a `## Capture window` section to its PRs and issues. If your eval compares the
-replacement's outputs against the old model's, capture that baseline before the
-window closes. model-eol reports the window from the feeds and never runs the
-capture; see [docs/DESIGN_EVAL_BOUNDARY.md](docs/DESIGN_EVAL_BOUNDARY.md) for
-where that line sits and why.
+A model can retire on different dates depending on where you call it.
+`claude-opus-4-1` retired on Anthropic's API on August 5, 2026, but Amazon
+Bedrock serves it until January 8, 2027. `o3-deep-research` left OpenAI's API on
+July 23 and stays on Azure AI Foundry until November 19.
 
-## Policy floors
+The feed records each channel's date under `distributions`. Pass
+`--via aws-bedrock`, `--via azure-ai-foundry`, or `--via vertex-ai` to check the
+repo against the channel it actually calls. If the feed has no entry for that
+channel, the checker uses the publisher's date and labels the line
+`publisher-fallback`.
 
-A feed entry with no `announced` and no `shutdown` means "nothing scheduled as
-of `generated`". That is a positive statement, and it is one that scraping HTML
-cannot make on its own.
+The later date buys time for the migration, and it is also the last chance to
+record the old model's outputs if your eval compares against them. When a
+retired or retiring model still answers on another channel, `check` adds
+`[still answers via CHANNEL until DATE]`, and the bot writes a "Capture window"
+section in its PRs and issues. [docs/DESIGN_EVAL_BOUNDARY.md](docs/DESIGN_EVAL_BOUNDARY.md)
+explains why model-eol reports this window but never runs the capture.
 
-Publishers with a stated minimum notice period carry a `policy` floor. Anthropic
-states at least 60 days. The schedule uses that floor to compute a
-no-earlier-than planning date from the feed refresh. This is stated policy, not
-a contract. OpenAI publishes no formal notice period, so its feed makes no
-forward claim.
+### Tentative dates and notice policies
 
-Anthropic also lists a tentative retirement date, "not sooner than", for every
-active model. The feed carries those as `shutdown` with
-`date_precision: "tentative"` and no `announced` date, because nothing has been
-announced. The checker treats a tentative date as a floor, not a schedule. The
-finding is `scheduled`, never `retiring` or `retired`. `safe_until` is the later
-of the floor and the policy date. A tentative floor cannot fail CI, and the bot
-opens no work for it. It does appear in every schedule, so planning can start
-before the announcement:
+Anthropic lists a "not sooner than" retirement date for every active model.
+The feed records these with `date_precision: "tentative"` and no `announced`
+date. The checker shows them in schedules so you can plan ahead, but a tentative
+date never fails CI and the bot opens nothing for it:
 
 ```
-· app.py:1  claude-sonnet-4-5-20250929  scheduled - tentative, not announced: not sooner than 2026-09-29, guaranteed until 2026-10-17 by anthropic policy
+· not sooner than 2026-10-15  app.py:1  claude-haiku-4-5-20251001  scheduled - tentative, not announced: not sooner than 2026-10-15, guaranteed until 2026-12-17 by anthropic policy  [model-reference]  [safe until 2026-12-17]
 ```
 
-When Anthropic announces the retirement, the announcement wins. The entry
-becomes an ordinary exact date with an `announced` date.
+The "guaranteed until" part comes from the publisher's stated minimum notice
+period, which the feed carries as `policy`. Anthropic states 60 days, so the
+date is the feed's `generated` date plus 60 days. Anthropic can change that
+policy, and the line reports it as stated. OpenAI states no fixed notice
+period, so its feed has no `policy`.
 
-`earliest` is different. Google's "earliest possible" shutdown dates are
-announced deprecations, and the checker treats them as the scheduled date.
+Google's "earliest possible" shutdown dates are real announcements. The feed
+marks them `earliest`, and the checker uses them as the shutdown date, so they
+can fail CI.
 
-A repository that uses many active Claude models gets one floor line per
-reference. To read only announced retirements, filter on `date_precision`:
+To list only announced retirements:
 
 ```sh
-node check.mjs schedule path/to/your/repo --json \
+npx model-eol schedule path/to/your/repo --json \
   | jq '.items |= map(select(.date_precision != "tentative"))'
 ```
 
-## Direct-first inventory
+### Direct calls versus clouds and gateways
 
-Direct API usage, meaning OpenAI, Anthropic, Gemini, or similar SDK calls with
-real model IDs, is scanned and checked immediately. Cloud providers and
-gateways such as Azure Foundry, Bedrock, Vertex, OpenRouter, LiteLLM, and
-Portkey often hide the model behind a deployment name or a routing alias. Those
-references stay in the inventory as resolver targets, because static analysis
-cannot know which model is deployed behind them:
+When code calls OpenAI, Anthropic, Gemini, or another publisher SDK with a real
+model ID, the scanner can check it. Azure AI Foundry, Bedrock, Vertex AI,
+OpenRouter, LiteLLM, and Portkey often hide the model behind a deployment name
+or a route alias, and static analysis can't see what is deployed behind
+`chat-prod`. Those references appear in `inventory` and `schedule` as `?`
+lines:
 
 ```
-? src/ai.ts:12  azure-ai-foundry  Azure Foundry/OpenAI deployment reference
-? src/ai.ts:30  openrouter        OpenRouter gateway reference
+? src/ai.ts:12  azure-ai-foundry  Azure Foundry/OpenAI deployment reference  (needs provider/gateway resolver)
+? src/ai.ts:30  openrouter  OpenRouter gateway reference  (needs provider/gateway resolver)
 ```
 
-Use `--scope direct` to fail CI only on what static analysis can prove.
-Model-like strings that are absent from the feeds are reported as non-failing
-**candidates**, so feed gaps stay visible without false alarms.
-
-The scanner covers code and configuration files. The list in
-[`CODE_EXT`](lib/scanner.mjs) is the source of truth: Python,
-TypeScript/JavaScript, JSON/YAML/TOML, shell, Ruby, Go, Java, C#, Rust, C/C++,
-PHP, Swift, Kotlin, Terraform, SQL, Scala, and Objective-C, including `.baml`
-sources. Publisher-compatible BAML provider/model pairs can be plan targets.
-Generated BAML clients and sources marked `DO NOT EDIT` or `@generated` are
-skipped. Model-eol's own JSON reports are skipped on reruns. Third-party
-CycloneDX files are scanned unless they carry explicit model-eol generator
-provenance. Terraform files (`.tf`, `.tfvars`) are scanned, and `.terraform`
-directories are excluded.
+`--scope direct` fails CI only on references the scanner can prove. The bot
+still opens one issue for each cloud or gateway provider it finds, so someone
+checks which model is behind it. If you know, a `routes` entry in the config
+maps an alias to a model. A routed reference still counts as cloud or gateway
+usage, so it fails CI only where `scope` is `all`. Strings that look like model
+IDs but aren't in any feed are listed as candidates and never fail.
 
 ## The bot
 
-Copy `bot.yml.example` to `.github/workflows/model-eol-bot.yml` for a weekly
-run. It maintains exactly one labelled migration PR per retiring model, with
-the full feed context in the body and never auto-merged, and one issue per
-finding that needs a human.
+The bot is a scheduled workflow that keeps one PR open per retiring model, with
+the dates, sources, and replacement in the PR body. It never merges. Findings it
+can't patch safely, and cloud or gateway references it can't resolve, become
+issues. Closing a PR without merging dismisses that
+retirement, and the bot won't reopen it unless the shutdown date or the
+replacement changes.
 
-The workflow resolves `model-eol@0` from npm once and uses that exact version
-across its plan, read-only evaluation, and write-token publication jobs.
-Consumer repositories do not copy `check.mjs` or the `bot/` source directory.
-
-Dismissals are respected. A reintroduced retired model creates fresh work.
-Bot-owned PRs and issues close when their finding disappears or is waived. When
-a waiver expires, the bot treats the finding as new rather than inheriting the
-earlier dismissal.
-
-In a repository without a configured eval, preview everything with no GitHub
-calls and no project dependency:
+To set it up, copy [`bot.yml.example`](bot.yml.example) to
+`.github/workflows/model-eol-bot.yml`. To see what it would do first, run this
+in your repository:
 
 ```sh
 npx --yes --package=model-eol@0 model-eol-bot --dry-run --target-dir . --repo OWNER/REPO
 ```
 
-The workflow honors configured `days`, `scope`, and `via` values. Without a
-config it uses the bot defaults of 90 days and direct references. `eval.command`
-also comes from the config, unless the `MODEL_EOL_EVAL_COMMAND` repository
-variable is set as an explicit override.
+A model swap can change behavior, so the bot can run a test command of yours on
+each migration before it opens the PR. That command runs in a job with no write
+access, and the job that writes to GitHub never runs your code.
+[docs/BOT.md](docs/BOT.md) covers the eval hook, tokens, and the security model.
 
-Each patchable model is applied in an isolated checkout and evaluated on its
-own, with its own old and new IDs, timeout, bounded report, and explicitly
-forwarded environment names. The result manifest is bound to its content and
-pinned to the evaluated Git commit. A passing migration can proceed while a
-failing one stays blocked, and nothing is published against a newer,
-unevaluated default branch.
+## Where the data comes from
 
-### Prove the swap works in your repository
+The publisher feeds are generated from each publisher's deprecation page and
+model listings, plus the Amazon Bedrock, Vertex AI, and Azure AI Foundry
+lifecycle pages, and each dated entry links to the page it came from. The
+files are not edited by hand. (`amazon.json` is the exception: its entries are
+carried forward, and only their Bedrock dates are refreshed.)
 
-Model behavior is specific to your repository, so model-eol never guesses which
-test is good enough to authorize a migration. Check a harness into the
-repository and name it in `.model-eol.json`. A non-empty
-`MODEL_EOL_EVAL_COMMAND` repository variable overrides that command. Otherwise
-the config is authoritative. With neither configured, the result manifest
-records that evaluation was not configured.
+A weekly workflow regenerates the feeds and opens a PR whenever something
+material changes, with a semantic diff of dates that moved, models that were
+added, and replacements that changed. Withdrawn dates are removed too
+([example](https://github.com/thossullivan/model-eol/pull/60)).
 
-Start by copying [`examples/model-eol-eval.mjs`](examples/model-eol-eval.mjs) to
-`scripts/model-eol-eval.mjs`. Replace its `VERIFY` command with the smallest
-deterministic test that proves the behavior your application relies on. A good
-harness checks response or tool-call shape, structured-output parsing, required
-capabilities, and a small set of golden tasks. A passing build is supporting
-evidence, but it does not prove model behavior by itself.
+The feeds, the schemas, and an Atom changelog are published at
+[thossullivan.github.io/model-eol](https://thossullivan.github.io/model-eol/).
+[docs/FEEDS.md](docs/FEEDS.md) describes the refresh and publication pipeline.
 
-The starter calls a dedicated `npm run eval:model-eol` script, so adopting it
-requires an explicit repository test. That prevents an unrelated unit suite from
-being treated as an LLM-behavior eval by accident. Point `eval:model-eol` at the
-behavior test, not back at the harness.
+## For providers and tracker maintainers
 
-The harness runs after the proposed migration, in an isolated checkout, and
-receives:
+What I'd most like is for providers to publish this data themselves: a
+`retirement_date` field in the models endpoint, or a feed at
+`/.well-known/model-eol.json`. [`SPEC.md`](SPEC.md) is short enough to implement
+in an afternoon. endoflife.date already tracks Claude with nearly the same
+fields. If you maintain a model tracker, I'd rather we agree on one schema, this
+one or a better one, than keep scraping the same pages separately.
 
-- `MODEL_EOL_OLD_ID` and `MODEL_EOL_NEW_ID` for the current migration.
-- `MODEL_EOL_PLAN`, a one-model plan containing the exact changed references.
-- `MODEL_EOL_REPORT`, the required path for a bounded, publishable Markdown receipt.
-- `MODEL_EOL_VIA`, the distributor channel the plan was built for, or empty for the publisher's direct API. Use it to map the publisher's replacement ID to your client's ID on that channel.
-- `MODEL_EOL_EVAL_MODE`, always `evaluate` today. The value `capture` is reserved for a future run on the unpatched checkout against the old ID. The bot does not run it, and the hook refuses any other value.
+## Limits
 
-Exit zero plus a regular report file means pass. Any other exit, a timeout, a
-missing report, a tracked workspace change, or checkout drift fails that
-migration. Test stdout and stderr are not published. Put only non-secret
-evidence in the report. Forward only the credentials the eval code needs,
-through `eval.pass_env`. That allowlist controls normal subprocess environment
-forwarding. It is not an OS sandbox and does not isolate code running as the
-same user. The security boundary is that the evaluation job has no repository
-write token, and the publication job never runs repository-owned eval code.
-
-Before enabling the scheduled bot, commit the harness and policy on a clean
-branch and run the same isolated evaluator locally:
-
-```bash
-set -euo pipefail
-repo="$(pwd -P)"
-version="$(npm view model-eol@0 version --json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const v=JSON.parse(s);const r=Array.isArray(v)?v.at(-1):v;if(typeof r!=="string")process.exit(1);process.stdout.write(r)})')"
-tmp="$(mktemp -d)"
-trap 'rm -rf -- "$tmp"' EXIT
-cd "$tmp"
-if [ -f "$repo/.model-eol.json" ]; then
-  MODEL_EOL_UAT_REPO="$repo" npx --yes --package="model-eol@$version" \
-    -c 'cd "$MODEL_EOL_UAT_REPO" && model-eol plan .' > "$tmp/plan.json"
-else
-  MODEL_EOL_UAT_REPO="$repo" npx --yes --package="model-eol@$version" \
-    -c 'cd "$MODEL_EOL_UAT_REPO" && model-eol plan . --days 90 --scope direct' > "$tmp/plan.json"
-fi
-npx --yes --package="model-eol@$version" model-eol-bot evaluate \
-  --target-dir "$repo" \
-  --plan-file "$tmp/plan.json" \
-  --output-file "$tmp/eval.json"
-node -e 'const r=require(process.argv[1]); console.log(r.results)' "$tmp/eval.json"
-MODEL_EOL_EVAL_RESULTS_FILE="$tmp/eval.json" \
-  npx --yes --package="model-eol@$version" model-eol-bot \
-    --dry-run --target-dir "$repo" --repo OWNER/REPO
-```
-
-Each planned model is patched and evaluated on its own. The cleanup trap
-removes the temporary files when the shell exits. Copy `eval.json` elsewhere
-after the dry run if you want to keep it as evidence. Then let
-`bot.yml.example` run the same contract, with any provider keys you opt in
-available only to its read-only evaluate job, never to its publish job.
-
-Inline `model-eol-bot --eval` and the older unbound report and status artifacts
-are refused. A configured publication must consume the commit-bound manifest
-from `model-eol-bot evaluate`. Missing results fail before any GitHub API call.
-
-On its first actionable run, the bot creates the `model-eol` label. If
-repository policy prevents label creation or assignment, the bot stops rather
-than publish work whose ownership cannot be verified. Existing work is trusted
-only when the label, metadata, deterministic branch, repository, base, and Git
-lease all agree. For HTTPS remotes, including private repositories, the bot
-passes `GITHUB_TOKEN` to temporary Git processes as a host-scoped authorization
-header and never puts it in a remote URL.
-
-Two operational notes. PRs created with `GITHUB_TOKEN` do not trigger
-`pull_request` workflows; store a fine-grained PAT or GitHub App token as the
-optional `MODEL_EOL_BOT_TOKEN` secret when checks must run. And the workflow
-splits privileges: only the provider secrets you add for the eval live in the
-read-only evaluation job, and write tokens live only in the reconciliation job.
-
-## Keeping the feeds honest
-
-```sh
-node refresh/refresh.mjs --check                      # semantic diff vs live pages; exit 3 = PR-worthy
-node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry # distributor lifecycle clocks
-node scripts/feed-changelog.mjs                       # local rendering of the hosted Atom feed
-```
-
-A parse failure stops the run. The refresh never writes a guessed feed.
-
-Anthropic reads model IDs and aliases from overview pages listed in `https://platform.claude.com/docs/llms.txt`.
-It reads at most 100 unique pages with 30-second deadlines and 8 MiB response limits.
-Only the deprecations page supplies Anthropic dates.
-Offline checks use `anthropic-llms.txt` and `anthropic-model-pages/<slug>.md`; missing pages stop refresh.
-Alias attachments and moves emit notices and appear in semantic diffs.
-
-AWS changed its Bedrock lifecycle policy on 2026-09-07.
-The legacy table covers models launched before that date; newer models publish lifecycle dates on individual cards.
-The Bedrock refresh reads both sources and keeps legacy-table records when IDs overlap.
-Conflicting exact dates appear under "Source conflicts"; the legacy table wins.
-When two card floors differ, the later day-precision date applies.
-Cards without lifecycle fields or day-precision dates appear under "Model cards without lifecycle fields" and emit notices.
-The crawl reads at most 400 unique cards sequentially, with 30-second deadlines and 8 MiB response limits.
-Offline checks use `bedrock-lifecycle.html`, `bedrock-model-cards.html`, and `bedrock-model-cards/<basename>` fixtures.
-Missing card fixtures stop the refresh.
-
-This runs automatically. A weekly workflow
-(`.github/workflows/feed-refresh.yml`, Mondays 05:23 UTC) checks the live
-sources and opens a PR with the semantic diff, plus an updated README freshness
-line, whenever something material changed. If an earlier refresh PR is still
-open and no human has touched it, the run updates that PR instead of opening
-another one.
-
-The first live runs found real errors. They caught the hand-compiled feeds
-drifting from Anthropic's recommendations within one week, and corrected a
-hand-compiled Bedrock date that was three months wrong.
-
-Every successful live refresh produces a byte-exact receipt. The Pages workflow
-publishes the [public contract](https://thossullivan.github.io/model-eol/) only
-when that receipt matches the exact feeds on `main`. A no-change check advances
-`last_checked` immediately. A material-change run waits for its feed PR to
-merge. The feed's `generated` date changes only when source data changes. The
-hosted contract contains canonical Draft-07 schemas, feeds with SHA-256
-receipts, and the Atom changelog.
-
-The refresh also removes dates. On August 3, Google removed the October 16
-earliest shutdown dates it had listed for the Gemini 2.5 Pro, Flash, and
-Flash-Lite GA models. The pipeline opened
-[a PR with the semantic retraction](https://github.com/thossullivan/model-eol/pull/60),
-and downstream checks stopped warning about dates Google no longer listed. A
-lifecycle tracker has to retract stale alarms as well as add new ones.
-
-## Receipts
-
-model-eol writes three receipt kinds. Each one is a public Draft-07 schema,
-and `model-eol validate receipt.json` selects the schema from the receipt's
-`schema` value.
-
-| Kind | `schema` value | Binds |
-|---|---|---|
-| [Eval results manifest](https://thossullivan.github.io/model-eol/schema/0.1/model-eol.eval.schema.json) | `model-eol.eval/0.1` | One pass, fail, or timeout result per migration group to the evaluated base commit, the plan digest, the eval settings digest, and each group's feed digest. Written by `model-eol-bot evaluate`. |
-| [Feed-refresh receipt](https://thossullivan.github.io/model-eol/schema/0.1/model-eol.feed-refresh-receipt.schema.json) | `model-eol/feed-refresh-receipt@0.1` | The refresh run URL, the checked commit, and the check time to the SHA-256 of every `feeds/*.json` file. A pending receipt also names the open feed PR. |
-| [npm release result](https://thossullivan.github.io/model-eol/schema/0.1/model-eol.npm-release-result.schema.json) | `model-eol/npm-release-result@0.2` | The release workflow's source commit to either no release, or one exact version, its tag, the release commit, and the registry tarball's sha512 integrity. |
-
-Additive changes keep a receipt's version. Any change that makes an old
-receipt invalid, or changes what a digest covers, is a new version. Validators
-reject unknown versions. A few rules, such as feed sort order and `tag` equal
-to `v` plus `version`, cannot be written in Draft-07. Each schema's
-`description` lists them, and `model-eol validate` enforces them in code.
-
-`model-eol validate` checks a receipt's structure only. `model-eol verify`
-checks what a receipt claims against inputs you supply:
-
-```bash
-# release result against the exact tarball you hold (no registry lookup)
-npm pack model-eol@0.8.4
-model-eol verify npm-release-result.json --package model-eol-0.8.4.tgz \
-  --commit RELEASE_SHA --source-commit SOURCE_SHA --version 0.8.4
-
-# refresh receipt against a checkout's feeds directory
-model-eol verify feed-refresh-receipt.json --feeds-dir ./feeds \
-  --commit REFRESH_SHA --run-url https://github.com/OWNER/REPO/actions/runs/ID
-
-# eval manifest against the plan, config, and feeds the evaluator used
-model-eol verify eval-results.json --commit BASE_SHA --plan plan.json \
-  --config .model-eol.json --feeds-dir ./feeds
-```
-
-The receipt kind comes from its `schema` value. verify validates the receipt's
-structure first, then reports each claim. It never reads the current
-directory, git state, or the network; every input is an explicit flag.
-
-| Flag | Checks |
-|---|---|
-| `--feeds-dir DIR` | Refresh: the SHA-256 of every `DIR/*.json`, compared with the receipt's `feeds` list as a set. Changed, missing, and extra files are each a mismatch. `DIR` is the feeds directory itself; a repository root (a directory holding `feeds/`) is refused. Eval: with `--plan` and `--config`, recomputes each result's `feed_digest` (`--plan` and `--config` alone already fix the expected result set). |
-| `--commit SHA` | Refresh `refresh_commit`, release `release_commit`, or eval `base_sha`. |
-| `--run-url URL` | Refresh `refresh_run`, after the same HTTPS URL normalization the receipt writer applies. |
-| `--package FILE.tgz` | Release `registry_integrity`: the sha512 SRI of the tarball bytes. |
-| `--source-commit SHA` | Release `source_commit`. |
-| `--version X.Y.Z` | Release `version`; `tag` is bound to it as `vX.Y.Z`. |
-| `--plan FILE` | Eval `plan_digest`, from a validated `model-eol.plan/0.1` document. |
-| `--config FILE` | Eval `eval_config_digest` and `configured`, with the bot's settings resolution. `MODEL_EOL_EVAL_COMMAND` in the environment overrides `eval.command` as it does for the bot, and the output says so. For a repository without `.model-eol.json`, pass a file containing `{}`. |
-| `--require-all` | Exit 1 when the result is `partial`. |
-| `--json` | Emit a [`model-eol/verification@0.1`](https://thossullivan.github.io/model-eol/schema/0.1/model-eol.verification.schema.json) document. |
-
-SHA inputs are 40 to 64 hex characters; uppercase is lowercased. A flag that
-does not apply to the receipt's kind is a usage error.
-
-Each claim is `verified`, `mismatch` (with the receipt's value and the
-computed one), `not-checked` (with the flag that would check it), or
-`not-applicable` (a `released: false` result makes no release claims, so only
-`source_commit` applies). Supplying `--commit`, `--version`, or `--package` for a
-`released: false` result adds a `released` claim that mismatches, because those
-inputs assert a release the receipt says did not happen. For a refresh receipt,
-the report also shows its `state`, `checked_at`, and `pending_pr` as information;
-a pending receipt verifies by the same rules as a clean one. For a release
-result the report shows `released`; a release gate must pass `--package`,
-`--version`, `--commit`, and `--require-all`, so that a no-release receipt
-mismatches instead of verifying through `--source-commit` alone.
-
-For a configured eval manifest, `--plan` and `--config` fix the set of result
-identities the evaluator had to produce: a planned identity with no result, a
-result for an unplanned identity, and a duplicated identity are each a
-mismatch, and `--feeds-dir` additionally checks each result's `feed_digest`.
-Without `--plan` and `--config`, a `results` claim is reported as not checked,
-so stripping results from a manifest never verifies. Text output escapes
-control characters in every printed value. The overall result is `verified` only when every
-applicable claim is verified. It is `partial` when nothing mismatched but at
-least one claim was not checked: the receipt is consistent with what you
-supplied, not proven. It is `mismatch` when any claim mismatched.
-
-Eval outcomes are never claims. `verify` does not check `status`, `exit_code`,
-`report`, or `generated`, because an evaluation cannot be reproduced offline. A
-`verified` eval manifest is bound to the supplied commit, plan, config, and
-feeds. It does not mean the evals passed. A gate that needs passing evals must
-read the results itself.
-
-| Exit | Meaning |
-|---|---|
-| 0 | No mismatch: `verified`, or `partial` without `--require-all`. |
-| 1 | At least one claim mismatched, or `partial` with `--require-all`. |
-| 2 | Usage error, unreadable file, structurally invalid receipt, or unsupported receipt schema or version. No claim is reported. |
-| 3 | Output write failure when the result would otherwise exit 0. |
-
-## The actual ask
-
-The goal is the format, not another checker. Providers already publish
-deprecation *pages* because customers asked for them. A `retirement_date` field
-in the models endpoint, or this feed at a well-known URL, would let every
-existing tracker read the same data. endoflife.date now tracks Claude with
-nearly this field set, so the convergence has started. If you maintain one of
-the community trackers, agreeing on a shared schema, this one or a better one,
-is the most useful thing any of us can do here.
-
-## Status
-
-- Feeds refresh automatically. The weekly feed-refresh workflow is live in this
-  repo. Parse failures fail the run, and material changes become a reviewed PR.
-  CI runs the full suite on every push and PR. The copy-ready bot workflow ships
-  as `bot.yml.example` and uses the published package, not local copies of the
-  tooling.
-- The [public contract](https://thossullivan.github.io/model-eol/) publishes
-  canonical schemas, feeds, refresh health, a publication manifest, and Atom.
-  Each deployment is bound to an exact feed-refresh receipt and verified against
-  every live asset. `model-eol validate` checks feeds, repository policy, check
-  reports, inventories, schedules, alerts, plans, and receipts against the same
-  zero-dependency runtime contracts.
-- Current-model entries, and therefore policy-floor horizons, populate only when
-  the refresh runs with provider API keys for the models endpoints. Anthropic's
-  tentative dates come from its public deprecations page and need no key.
-- The checker matches known IDs only. It does not discover models that are
-  absent from the feeds. This is deliberate: a CI gate needs precision more than
-  discovery.
-- Fetchers: OpenAI, Anthropic, Google, Mistral, Cohere, aws-bedrock, vertex-ai,
-  and azure-ai-foundry are live. xAI publishes no lifecycle index and its models
-  API carries no deprecation fields, so xAI is not ingested.
-- On npm as [`model-eol`](https://www.npmjs.com/package/model-eol). Material
-  feed changes republish automatically as patch versions, with trusted
-  publishing and provenance. Code releases require an explicit stable version.
-  `npx model-eol` therefore always checks against current dates.
-- Not yet: feed signing, and authenticated account-level gateway or cloud
-  resolvers.
+- The checker only knows the models in the feeds. A model missing from every
+  feed can't fail CI until a feed adds it.
+- model-eol doesn't query cloud accounts or gateways to find out which model is
+  deployed; that is out of scope
+  ([#79](https://github.com/thossullivan/model-eol/issues/79)). Those
+  references stay in the inventory, and `routes` can map known aliases.
+- xAI publishes no lifecycle index and its models API has no deprecation fields,
+  so there is no xAI feed.
+- New current models (entries with nothing scheduled) come from the OpenAI,
+  Google, Mistral, and Cohere models endpoints, so the refresh adds them only
+  when it has API keys. Without keys it keeps the entries already in the feeds.
+- Feeds are not signed yet.
 
 ## Contributing
 
-The most valuable contribution is a feed correction with a source URL. The one
-rule is that `feeds/*.json` are generated, never hand-edited. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for that workflow, the zero-dependency rule,
-and what a new publisher parser needs.
+The most useful contribution is a feed correction with a source URL. Feed files
+are generated, so a correction usually means fixing a parser.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the details.
