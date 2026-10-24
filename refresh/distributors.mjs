@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
 
-import { assertIsoDate, dateFromText, MODEL_ID_PATTERN, sectionProse, stripComments } from './providers.mjs'
+import { assertIsoDate, dateFromText, MODEL_ID_PATTERN, rowLifecycleLabel, sectionProse, stripComments } from './providers.mjs'
 
 export { MAX_SOURCE_BODY_BYTES as MAX_DISTRIBUTOR_BODY_BYTES } from './fetch.mjs'
 
@@ -559,10 +559,10 @@ function vertexDate(cell, modelId) {
   return date
 }
 
+const VERTEX_PRECISION_PATTERN = /earliest\s+possible|retirement\s+timelines?\s+may\s+be\s+extended|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i
+
 function vertexDatePrecision(sectionText, text) {
-  return /earliest\s+possible|retirement\s+timelines?\s+may\s+be\s+extended|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i.test(`${sectionText} ${text}`)
-    ? 'earliest'
-    : undefined
+  return VERTEX_PRECISION_PATTERN.test(`${sectionText} ${text}`) ? 'earliest' : undefined
 }
 
 /** Parse Vertex model versions and lifecycle tables. */
@@ -570,15 +570,16 @@ export function parseVertexModelVersionsHtml(html) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('vertex-ai lifecycle page is empty')
 
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
-  const governingProse = sectionProse(html)
+  const governingProse = sectionProse(html, VERTEX_PRECISION_PATTERN)
   const records = []
+  const archived = new WeakSet()
   let recognisedTables = 0
   for (const table of tables) {
     const rows = expandRows(tableRows(table[1]))
     const headers = vertexHeaderIndexes(rows)
     if (!headers) continue
     recognisedTables++
-    const sectionText = governingProse(table.index)
+    const section = governingProse(table.index)
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       if (!modelCell || !modelCell.text) continue
@@ -590,9 +591,10 @@ export function parseVertexModelVersionsHtml(html) {
       const record = { vertexId: modelId }
       if (shutdown) {
         record.shutdown = shutdown
-        const precision = vertexDatePrecision(sectionText, retirementCell.text)
+        const precision = vertexDatePrecision(section.text, retirementCell.text)
         if (precision) record.date_precision = precision
       }
+      if (section.archived) archived.add(record)
       records.push(record)
     }
   }
@@ -607,8 +609,14 @@ export function parseVertexModelVersionsHtml(html) {
       unique.set(record.vertexId, record)
       continue
     }
-    const same = previous.shutdown === record.shutdown && previous.date_precision === record.date_precision
-    if (!same) throw new Error(`vertex-ai lifecycle page has conflicting rows for ${record.vertexId}`)
+    const sameDate = previous.shutdown === record.shutdown
+    if (sameDate && previous.date_precision === record.date_precision) continue
+    // An archive row yields to the available row with the same date; only their precision differs.
+    if (sameDate && archived.has(previous) !== archived.has(record)) {
+      if (archived.has(previous)) unique.set(record.vertexId, record)
+      continue
+    }
+    throw new Error(`vertex-ai lifecycle page has conflicting rows for ${record.vertexId}: ${rowLifecycleLabel(previous)} and ${rowLifecycleLabel(record)}`)
   }
   return [...unique.values()]
 }

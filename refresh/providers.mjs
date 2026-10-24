@@ -118,27 +118,69 @@ function plainText(fragment) {
 
 const blankOut = match => ' '.repeat(match.length)
 
-// Maps a table offset to the prose of its section and each enclosing section, without table text
-export function sectionProse(html) {
+function outermostTableSpans(html) {
+  const spans = []
+  let depth = 0
+  let start = 0
+  for (const tag of html.matchAll(/<(\/?)table\b[^>]*>/gi)) {
+    if (!tag[1]) {
+      if (!depth++) start = tag.index
+    } else if (depth && !--depth) spans.push([start, tag.index + tag[0].length])
+  }
+  if (depth) spans.push([start, html.length])
+  return spans
+}
+
+const isArchiveHeading = heading => /\bid\s*=\s*["']retired-models["']/i.test(heading.attrs) ||
+  /^(?:retired models|the following table lists the retired models\b.*)$/i.test(heading.text)
+
+// Maps a table offset to { text, archived }: the prose of its section and each enclosing section, without table text
+export function sectionProse(html, qualifier) {
   const visible = String(html)
     .replace(/<!--[\s\S]*?--!?>/g, blankOut)
     .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, blankOut)
-  const headings = [...visible.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)]
-    .map(match => ({ start: match.index, end: match.index + match[0].length, level: Number(match[1]), text: plainText(match[2]) }))
-  const prose = (from, to) => plainText(visible.slice(from, to).replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, ' '))
+  const spans = outermostTableSpans(visible)
+  let outside = ''
+  let cursor = 0
+  for (const [start, end] of spans) {
+    outside += visible.slice(cursor, start) + ' '.repeat(end - start)
+    cursor = end
+  }
+  outside += visible.slice(cursor)
+  const insideTable = index => spans.some(([start, end]) => index >= start && index < end)
+  const headings = [...visible.matchAll(/<h([1-6])\b([^>]*)>([\s\S]*?)<\/h\1>/gi)]
+    .filter(match => !insideTable(match.index))
+    .map(match => ({ start: match.index, end: match.index + match[0].length, level: Number(match[1]), attrs: match[2], text: plainText(match[3]) }))
+  const own = headings.map((heading, index) => plainText(outside.slice(heading.end, headings[index + 1]?.start ?? outside.length)))
+  const root = plainText(outside.slice(0, headings[0]?.start ?? outside.length))
+  const open = []
+  const parents = headings.map((heading, index) => {
+    while (open.length && headings[open.at(-1)].level >= heading.level) open.pop()
+    const parent = open.at(-1) ?? -1
+    open.push(index)
+    return parent
+  })
   return tableStart => {
-    const preceding = headings.filter(heading => heading.end <= tableStart)
-    if (!preceding.length) return prose(0, tableStart)
-    const parts = []
-    for (let heading = preceding.at(-1); heading;) {
-      const next = headings.find(candidate => candidate.start >= heading.end)
-      parts.push(prose(heading.end, next?.start ?? visible.length))
-      // Dates under a retired heading are history; qualifiers above it describe available models.
-      if (/\bretired\b/i.test(heading.text)) break
-      const { level } = heading
-      heading = preceding.slice(0, preceding.indexOf(heading)).reverse().find(candidate => candidate.level < level)
+    const nearest = headings.findLastIndex(heading => heading.end <= tableStart)
+    if (nearest < 0) return { text: root, archived: false }
+    const chain = []
+    let archived = false
+    for (let index = nearest; index >= 0; index = parents[index]) {
+      chain.push(index)
+      // Dates under the retired-models archive are history; qualifiers above it describe available models.
+      if (isArchiveHeading(headings[index])) {
+        archived = true
+        break
+      }
     }
-    return parts.join(' ')
+    for (const [position, index] of chain.slice(0, -1).entries()) {
+      if (!/retir/i.test(headings[index].text)) continue
+      const inherited = chain.slice(position + 1).find(ancestor => qualifier?.test(own[ancestor]))
+      if (inherited !== undefined) {
+        throw new Error(`section "${headings[index].text}" mentions retirement beneath the date qualifier of "${headings[inherited].text}"`)
+      }
+    }
+    return { text: chain.map(index => own[index]).join(' '), archived }
   }
 }
 
@@ -536,7 +578,7 @@ function openAIModelIds(fragment) {
     const completionsOf = token => snapshots.find(snapshot => token === `${snapshot}-completions`)
     const ambiguous = undated.find(token => MODEL_ID_PATTERN.test(token) && !completionsOf(token))
     if (ambiguous) throw new Error(`openai deprecations row lists snapshots ${snapshots.join(', ')} with ambiguous alias ${ambiguous}`)
-    // Non-model tokens stay attached so the caller skips the row as an endpoint or product row.
+    // Non-model tokens stay attached so the caller refuses the row rather than keeping part of it.
     return snapshots.map((id, index) => ({ id, aliases: undated.filter(token => completionsOf(token) ? completionsOf(token) === id : !index) }))
   }
   const canonical = snapshots[0] ?? tokens[0]
@@ -547,6 +589,8 @@ function openAIModelIds(fragment) {
 }
 
 const openAIReplacement = extractReplacementFields
+
+const OPENAI_NON_MODEL_TOKEN = /^\/v\d+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*$|^[A-Z][A-Za-z]*(?: [A-Z][A-Za-z]*)* API$|^OpenAI-Beta: [a-z_]+=v\d+$/
 
 /** Parse the OpenAI docs page, whose announcement date is a section heading. */
 export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl) {
@@ -585,8 +629,11 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       const modelTokens = parsedModels.flatMap(parsedModel => [parsedModel.id, ...parsedModel.aliases])
       const invalidTokens = modelTokens.filter(token => !MODEL_ID_PATTERN.test(token))
       if (invalidTokens.length) {
-        const unclassified = invalidTokens.find(token => !/[\s/]/.test(token))
+        const unclassified = invalidTokens.find(token => !OPENAI_NON_MODEL_TOKEN.test(token))
         if (unclassified) throw new Error(`openai deprecations table refused row: invalid-model-id: ${unclassified}`)
+        if (invalidTokens.length < modelTokens.length) {
+          throw new Error(`openai deprecations table refused row: model ids beside endpoint-or-product tokens: ${modelTokens.join(', ')}`)
+        }
         skippedReasons.add('endpoint-or-product-row')
         continue
       }
@@ -927,11 +974,13 @@ function googleShutdown(text, id) {
   return parsed
 }
 
+const GOOGLE_PRECISION_PATTERN = /earliest\s+possible|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i
+
 function googleDatePrecision(sectionText, shutdownText) {
-  return /earliest\s+possible|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i.test(`${sectionText} ${shutdownText}`)
-    ? 'earliest'
-    : undefined
+  return GOOGLE_PRECISION_PATTERN.test(`${sectionText} ${shutdownText}`) ? 'earliest' : undefined
 }
+
+export const rowLifecycleLabel = record => `${record.shutdown ?? 'no date'} (${record.date_precision ?? 'exact'})`
 
 /** Parse Google's Gemini deprecations tables. */
 export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.deprecationsUrl) {
@@ -943,8 +992,9 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
   }
 
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
-  const governingProse = sectionProse(html)
+  const governingProse = sectionProse(html, GOOGLE_PRECISION_PATTERN)
   const records = []
+  const archived = new WeakSet()
   const skippedReasons = new Set()
   let recognisedTables = 0
   for (const table of tables) {
@@ -956,7 +1006,7 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
       continue
     }
     recognisedTables++
-    const sectionText = governingProse(table.index)
+    const section = governingProse(table.index)
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       const shutdownCell = row.cells[headers.date]
@@ -972,11 +1022,12 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
       const item = { id, source: sourceUrl }
       if (shutdown) {
         item.shutdown = shutdown
-        const precision = googleDatePrecision(sectionText, shutdownText)
+        const precision = googleDatePrecision(section.text, shutdownText)
         if (precision) item.date_precision = precision
       }
       const replacementCell = row.cells[headers.recommended]
       if (replacementCell) Object.assign(item, extractReplacementFields(replacementCell.html))
+      if (section.archived) archived.add(item)
       records.push(item)
     }
   }
@@ -994,11 +1045,16 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
       unique.set(record.id, record)
       continue
     }
-    const same = previous.announced === record.announced &&
+    const sameDates = previous.announced === record.announced &&
       previous.shutdown === record.shutdown &&
-      previous.date_precision === record.date_precision &&
       sameReplacementPayload(previous, record)
-    if (!same) throw new Error(`google deprecations page has conflicting rows for ${record.id}`)
+    if (sameDates && previous.date_precision === record.date_precision) continue
+    // An archive row yields to the available row with the same date; only their precision differs.
+    if (sameDates && archived.has(previous) !== archived.has(record)) {
+      if (archived.has(previous)) unique.set(record.id, record)
+      continue
+    }
+    throw new Error(`google deprecations page has conflicting rows for ${record.id}: ${rowLifecycleLabel(previous)} and ${rowLifecycleLabel(record)}`)
   }
   return [...unique.values()]
 }

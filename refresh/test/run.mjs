@@ -3375,10 +3375,10 @@ reviewTest('2026-10-18 shapes: OpenAI splits a row that lists several dated snap
 reviewTest('2026-10-18 shapes: OpenAI fails closed when several dated snapshots share an undated alias', () => {
   strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')), /ambiguous alias gpt-4o/)
 })
-reviewTest('2026-10-18 review: an OpenAI endpoint row with several dated snapshots is skipped, not fatal', () => {
+reviewTest('2026-10-23 review: an OpenAI endpoint token beside dated snapshots refuses the row instead of dropping the snapshots', () => {
   const page = shapesOpenAIPage('<code>/v1/foo</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')
     + '<h2>2026-10-15: Other</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>January 14, 2027</td><td><code>gpt-4.1-2025-04-14</code></td><td><code>gpt-6-luna</code></td></tr></table>'
-  strictAssert.deepEqual(parseOpenAIDeprecations(page).map(record => record.id), ['gpt-4.1-2025-04-14'])
+  strictAssert.throws(() => parseOpenAIDeprecations(page), /model ids beside endpoint-or-product tokens/)
 })
 const openAICodes = (...ids) => ids.map(id => `<code>${id}</code>`).join(', ')
 const openAISnapshots = (...ids) => parseOpenAIDeprecations(shapesOpenAIPage(openAICodes(...ids))).map(record => [record.id, record.aliases])
@@ -3462,6 +3462,50 @@ reviewTest('OpenAI still skips endpoint and product rows inside a lifecycle tabl
   for (const cell of ['Videos API', '<code>OpenAI-Beta: realtime=v1</code>', '<code>/v1/audio/translations</code>']) {
     strictAssert.deepEqual(parseOpenAIDeprecations(shapesOpenAIPage(cell) + openAIValidTable).map(record => record.id), ['gpt-4.1-2025-04-14'], cell)
   }
+})
+reviewTest('PR 126 review: OpenAI skips exactly the live endpoint and product shapes', () => {
+  for (const cell of ['/v1/audio/translations', 'Videos API', 'OpenAI-Beta: realtime=v1', 'Assistants API', 'OpenAI-Beta: assistants=v1', '/v1/fine-tunes', '/v1/edits', '/v1/engines', '/v1/search', '/v1/classifications', '/v1/answers']) {
+    strictAssert.deepEqual(parseOpenAIDeprecations(shapesOpenAIPage(cell) + openAIValidTable).map(record => record.id), ['gpt-4.1-2025-04-14'], cell)
+  }
+})
+reviewTest('PR 126 review: OpenAI refuses rows whose model IDs would otherwise be dropped silently', () => {
+  for (const cell of ['<code>gpt-4o-2024-05-13</code> <code>/v1/chat/completions</code>', '<code>gpt-4o-mini-tts</code> (<code>/v1/audio/speech</code>)', '<code>gpt-image-1</code> in <code>Images API</code>', '<code>gpt-4o-mini, gpt-4o</code>', '<code>gpt-4o (2024-05-13)</code>', '<code>openai/gpt-oss-120b</code>', '<code>gpt-4o&#8201;-mini</code>']) {
+    strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage(cell) + openAIValidTable), /openai deprecations table refused row: (?:invalid-model-id|model ids beside endpoint-or-product tokens): /, cell)
+  }
+})
+const qualifiedVertexPage = body => `<h1>Model versions and lifecycle</h1><h2>Latest available models</h2><p>While retirement timelines may be extended, they won't be moved to an earlier date than what is listed.</p>${body}`
+reviewTest('PR 126 review: Vertex refuses a retirement-worded section beneath a qualifier instead of guessing', () => {
+  for (const heading of ['Models retired after 2027', 'Models scheduled to be retired', 'Not yet retired']) {
+    strictAssert.throws(() => parseVertexModelVersionsHtml(qualifiedVertexPage(`<h3>${heading}</h3>${precisionVertexTable(['gemini-a', 'October 20, 2026'])}`)), /mentions retirement beneath the date qualifier of "Latest available models"/, heading)
+  }
+  strictAssert.deepEqual(vertexPrecisions(`<h2>Models scheduled to be retired</h2>${precisionVertexTable(['gemini-a', 'October 20, 2026'])}`), { 'gemini-a': 'exact' })
+})
+reviewTest('PR 126 review: Vertex recognises the retired-models archive by its anchor id', () => {
+  strictAssert.deepEqual(vertexPrecisions(qualifiedVertexPage(`<h3 id="retired-models">Archive</h3>${precisionVertexTable(['gemini-old', 'April 21, 2025'])}`)), { 'gemini-old': 'exact' })
+})
+reviewTest('PR 126 review: Vertex keeps the available row when the archive repeats it with the same date', () => {
+  for (const [first, second] of [['available', 'archive'], ['archive', 'available']]) {
+    const tables = { available: `<h3>Embeddings models</h3>${precisionVertexTable(['text-embedding-a', 'April 1, 2027'])}`, archive: `<h3 id="retired-models">Retired models</h3>${precisionVertexTable(['text-embedding-a', 'April 1, 2027'])}` }
+    strictAssert.deepEqual(vertexPrecisions(qualifiedVertexPage(tables[first] + tables[second])), { 'text-embedding-a': 'earliest' }, first)
+  }
+  const moved = qualifiedVertexPage(`<h3>Embeddings models</h3>${precisionVertexTable(['text-embedding-a', 'April 1, 2027'])}<h3>Retired models</h3>${precisionVertexTable(['text-embedding-a', 'April 21, 2025'])}`)
+  strictAssert.throws(() => parseVertexModelVersionsHtml(moved), /conflicting rows for text-embedding-a: 2027-04-01 \(earliest\) and 2025-04-21 \(exact\)/)
+})
+reviewTest('PR 126 review: Google names both precisions when two available sections disagree', () => {
+  const html = `<h1>Gemini deprecations</h1><h2>Gemini 3 models</h2><p>These dates are no sooner than listed.</p>${precisionGoogleTable('gemini-a', 'May 7, 2027')}<h2>Live API models</h2>${precisionGoogleTable('gemini-a', 'May 7, 2027')}`
+  strictAssert.throws(() => parseGoogleDeprecations(html), /conflicting rows for gemini-a: 2027-05-07 \(earliest\) and 2027-05-07 \(exact\)/)
+})
+reviewTest('PR 126 review: section prose excludes table text behind a heading inside a table or a nested table', () => {
+  const lifecycle = precisionVertexTable(['gemini-y', 'October 20, 2026'])
+  const headingInTable = `<h2>Models</h2><table><tr><td><h4>Footnotes</h4></td></tr><tr><td>Dates may slip to May 2027 or later.</td></tr></table>${lifecycle}`
+  const nestedTable = `<h2>Models</h2><table><tr><td><table><tr><td>x</td></tr></table> Retirement may come on or later dates.</td></tr></table>${lifecycle}`
+  strictAssert.deepEqual(vertexPrecisions(headingInTable), { 'gemini-y': 'exact' })
+  strictAssert.deepEqual(vertexPrecisions(nestedTable), { 'gemini-y': 'exact' })
+})
+reviewTest('PR 126 review: a table with no heading above it reads the whole root section, including text after it', () => {
+  const lifecycle = precisionVertexTable(['gemini-z', 'October 20, 2026'])
+  strictAssert.deepEqual(vertexPrecisions(`${lifecycle}<p>Retirement timelines may be extended, but they will not be moved to an earlier date.</p>`), { 'gemini-z': 'earliest' })
+  strictAssert.deepEqual(vertexPrecisions(`${lifecycle}<h2>Quotas</h2><p>Quotas rise for projects created on or later than 2026.</p>`), { 'gemini-z': 'exact' })
 })
 
 fs.rmSync(outputDir, { recursive: true, force: true })
