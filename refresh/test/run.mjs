@@ -3662,6 +3662,23 @@ reviewTest('PR 128 review 3: a row reaching its target through an alias cannot s
   const agreeing = familyMerge([{ id: 'gpt-fam-2026-03-17' }], familyPage(familyRow, ['Apr 1, 2027', familyCell('gpt-fam')]))
   strictAssert.deepEqual(agreeing.feed.models.map(model => [model.id, ...familyLifecycle(model)]), [['gpt-fam-2026-03-17', '2026-10-01', '2027-04-01', 'gpt-next', PROVIDERS.openai.deprecationsUrl, ['gpt-fam']]])
 })
+reviewTest('PR 128 late review: the family rule also refuses a replacement that is the alias\'s own newer snapshot', () => {
+  const committed = [{ id: 'gpt-fam-2025-08-07' }, { id: 'gpt-fam' }]
+  strictAssert.throws(() => familyMerge(committed, familyPage(['Dec 11, 2026', familyCell('gpt-fam', 'gpt-fam-2025-08-07'), 'gpt-fam-2026-03-01'])), /names its family alias gpt-fam as the replacement/)
+})
+reviewTest('PR 128 late review: alias rows that differ only in a note or option order do not conflict', () => {
+  const committed = { ...anthropicFeed, models: [{ id: 'claude-x-20250514', aliases: ['claude-x'] }] }
+  const base = { announced: '2026-10-01', shutdown: '2027-04-01', replacement_options: ['claude-a', 'claude-b'] }
+  const merged = mergeFeed(committed, {
+    deprecations: [{ id: 'claude-x-20250514', ...base }, { id: 'claude-x', ...base, replacement_options: ['claude-b', 'claude-a'], replacement_note: 'Either works.' }],
+    currentIds: null, provider: PROVIDERS.anthropic, notice: () => {},
+  })
+  strictAssert.equal(merged.feed.models.find(model => model.id === 'claude-x-20250514').shutdown, '2027-04-01')
+  strictAssert.throws(() => mergeFeed(committed, {
+    deprecations: [{ id: 'claude-x-20250514', ...base }, { id: 'claude-x', ...base, shutdown: '2027-06-01' }],
+    currentIds: null, provider: PROVIDERS.anthropic, notice: () => {},
+  }), /conflicting lifecycles/)
+})
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
   strictAssert.equal(record.id, 'gemini-3.7-flash')

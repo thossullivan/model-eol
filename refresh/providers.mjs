@@ -1719,7 +1719,8 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
   }
 
   const lifecycleFields = ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']
-  const lifecycleKey = record => JSON.stringify(lifecycleFields.map(field => record[field] ?? null))
+  // Notes and option order are presentation; dates, precision, and replacement targets decide a conflict.
+  const lifecycleKey = record => JSON.stringify([record.announced, record.shutdown, record.date_precision, record.replacement, [...(record.replacement_options ?? [])].sort()].map(value => value ?? null))
   const lifecycleApplied = new Map()
   const noteLifecycle = (model, record, indirect) => {
     const previous = lifecycleApplied.get(model)
@@ -1742,7 +1743,8 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
       if (!alias || alias === canonicalId) continue
       const owner = locate(alias)
       if (owner && owner !== target && owner.id === alias && familyAliasOf(record.id, alias)) {
-        if (record.replacement === alias || record.replacement_options?.includes(alias)) {
+        const repointsAlias = token => token === alias || (token?.startsWith(`${alias}-`) && familyAliasOf(token, alias))
+        if ([record.replacement, ...(record.replacement_options ?? [])].some(repointsAlias)) {
           throw new Error(`deprecation row for ${record.id} names its family alias ${alias} as the replacement`)
         }
         familyAliases.push(owner)
