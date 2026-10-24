@@ -680,6 +680,10 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       if (!previous.aliases.length) delete previous.aliases
       continue
     }
+    const [kept, dropped] = record.announced > previous.announced ? [record, previous] : [previous, record]
+    if (record.announced !== previous.announced && (dropped.aliases ?? []).some(alias => !(kept.aliases ?? []).includes(alias))) {
+      throw new Error(`openai deprecations page has conflicting rows for ${record.id}: an earlier announcement names aliases the later one does not`)
+    }
     if (record.announced > previous.announced) {
       record.aliases = [...new Set([...(record.aliases ?? []), ...(previous.aliases ?? [])])]
         .filter(alias => alias !== record.id)
@@ -1714,15 +1718,38 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     index = identityIndex(models)
   }
 
+  const lifecycleFields = ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']
+  // Notes and option order are presentation; dates, precision, and replacement targets decide a conflict.
+  const lifecycleKey = record => JSON.stringify([record.announced, record.shutdown, record.date_precision, record.replacement, [...(record.replacement_options ?? [])].sort()].map(value => value ?? null))
+  const lifecycleApplied = new Map()
+  const noteLifecycle = (model, record, indirect) => {
+    const previous = lifecycleApplied.get(model)
+    if (previous && (previous.indirect || indirect) && previous.key !== lifecycleKey(record)) {
+      throw new Error(`deprecation rows give ${model.id} conflicting lifecycles via ${previous.recordId} and ${record.id}`)
+    }
+    lifecycleApplied.set(model, { key: lifecycleKey(record), indirect: indirect || previous?.indirect, recordId: record.id })
+  }
+  const familyAliasOf = (snapshot, alias) => provider.publisher === 'openai'
+    && /-(?:19|20)\d{2}-\d{2}-\d{2}$/.test(snapshot) && snapshot.slice(0, -11) === alias
+
   for (const record of deprecations) {
     let target = locate(record.id)
     if (!target) target = add({ id: record.id })
 
     const canonicalId = target.id
     const aliases = new Set(target.aliases ?? [])
+    const familyAliases = []
     for (const alias of [record.id, ...(record.aliases ?? [])]) {
       if (!alias || alias === canonicalId) continue
       const owner = locate(alias)
+      if (owner && owner !== target && owner.id === alias && familyAliasOf(record.id, alias)) {
+        const repointsAlias = token => token === alias || (token?.startsWith(`${alias}-`) && familyAliasOf(token, alias))
+        if ([record.replacement, ...(record.replacement_options ?? [])].some(repointsAlias)) {
+          throw new Error(`deprecation row for ${record.id} names its family alias ${alias} as the replacement`)
+        }
+        familyAliases.push(owner)
+        continue
+      }
       if (committedIds.has(alias) || (owner && owner !== target && owner.id === alias)) {
         throw new Error(`deprecation alias ${alias} for ${canonicalId} conflicts with a canonical model id`)
       }
@@ -1754,8 +1781,19 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     Object.assign(target, clone(record), { id: canonicalId })
     if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
     else delete target.aliases
+    noteLifecycle(target, record, record.id !== target.id)
     confirmed.add(target.id)
     deprecationConfirmed.add(target.id)
+    // An OpenAI row naming a snapshot and its undated family id dates both entries and joins neither.
+    for (const family of familyAliases) {
+      noteLifecycle(family, record, true)
+      for (const field of lifecycleFields) delete family[field]
+      for (const [field, value] of Object.entries(clone(record))) {
+        if (field !== 'id' && field !== 'aliases') family[field] = value
+      }
+      confirmed.add(family.id)
+      deprecationConfirmed.add(family.id)
+    }
     index = identityIndex(models)
   }
 
