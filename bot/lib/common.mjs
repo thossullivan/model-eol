@@ -1,4 +1,5 @@
 import { sha256 } from '../../lib/digests.mjs'
+import { printable } from '../../lib/printable.mjs'
 
 export { matchesAnyGlob, matchesGlob } from '../../lib/glob.mjs'
 export { activeWaiver, itemDigest, repoPath, sha256, sortedJsonDigest, stableJson } from '../../lib/digests.mjs'
@@ -25,8 +26,8 @@ export const daysRemaining = (shutdown, now = new Date()) => {
   return Math.ceil((new Date(`${shutdown}T00:00:00Z`) - now) / 86400000)
 }
 
-// HTML also closes a comment at --!>, so no raw angle bracket may reach the body
-export const metadataLine = metadata => `<!-- model-eol ${JSON.stringify(metadata).replaceAll('-->', '\\u002d\\u002d\\u003e').replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')} -->`
+// HTML also closes a comment at --!>, and parseMetadata's . stops at U+2028 and U+2029
+export const metadataLine = metadata => `<!-- model-eol ${JSON.stringify(metadata).replaceAll('-->', '\\u002d\\u002d\\u003e').replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replace(/[\u2028\u2029]/g, character => `\\u${character.charCodeAt(0).toString(16)}`)} -->`
 
 export const hasMetadataMarker = body => String(body ?? '').includes('<!-- model-eol')
 
@@ -58,7 +59,7 @@ export const parseMetadata = body => {
 }
 
 export const staleWorkComment = (kind, waiver = null) => waiver
-  ? `model-eol is closing this bot-owned ${kind} because an active waiver makes its finding non-actionable. The waiver expires ${waiver.expires}, is owned by ${markdownText(waiver.owner)}, and records: ${markdownText(waiver.reason)}`
+  ? `model-eol is closing this bot-owned ${kind} because an active waiver makes its finding non-actionable. The waiver expires ${markdownText(waiver.expires)}, is owned by ${markdownCode(waiver.owner)}, and records: ${markdownCode(waiver.reason)}`
   : `model-eol is closing this bot-owned ${kind} because its finding is no longer actionable on the repository's current default branch. The reference may have been removed, ignored, retracted by the feed, moved to another clock, or disabled by repository configuration.`
 
 const entityMap = new Map([
@@ -76,19 +77,22 @@ const entityMap = new Map([
   ['_', '&#95;'],
   ['~', '&#126;'],
   ['!', '&#33;'],
+  ['@', '&#64;'],
+  ['|', '&#124;'],
 ])
 
-export const markdownText = value => String(value ?? '')
-  .replaceAll('\r\n', '\n')
-  .replaceAll('\r', '\n')
-  .replace(/[&<>`\\[\]()#*_~!]/g, character => entityMap.get(character))
-  .split('\n')
-  .map(line => line.replace(/^(\s*)([-+>]\s|\d+\.\s)/, '$1&#45; '))
-  .join('\n')
+const markdownInline = value => printable(String(value ?? '').replace(/\r\n|[\r\n]/g, ' '))
+  .replace(/[&<>`\\[\]()#*_~!@|]/g, character => entityMap.get(character))
+  .replace(/^(\s*)([-+>]\s|\d+\.\s)/, '$1&#45; ')
+
+// one line of text: no block structure, table cells, or bare autolinks
+export const markdownText = value => markdownInline(value)
+  .replace(/(www)\./gi, '$1&#46;')
+  .replaceAll('://', '&#58;//')
 
 // code spans show entities literally, so drop backticks and line breaks instead of escaping
 export const markdownCode = value => {
-  const text = String(value ?? '').replace(/[\r\n]+/g, ' ').replaceAll('`', '')
+  const text = printable(String(value ?? '').replace(/[\r\n]+/g, ' ').replaceAll('`', ''))
   return `\`${text === '' ? ' ' : text}\``
 }
 
@@ -98,7 +102,7 @@ export const markdownLink = (label, value) => {
     const url = new URL(text)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return markdownText(text)
     const href = url.toString().replaceAll('\\', '%5C').replaceAll('(', '%28').replaceAll(')', '%29')
-    return `[${markdownText(label)}](${href})`
+    return `[${markdownInline(label)}](${href})`
   } catch {
     return markdownText(text)
   }

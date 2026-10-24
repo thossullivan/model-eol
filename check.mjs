@@ -52,6 +52,7 @@ import { BaseUnavailableError, inCheckScope, selectChangedFindings } from './lib
 import { gitRootFor, incompleteScanNotes, scanTargets } from './lib/scanner.mjs'
 import { DOCUMENT_TYPES, formatDocumentErrors, validateDocumentFile } from './lib/validate-document.mjs'
 import { SUPPORTED_RECEIPT_SCHEMAS, VERIFY_INPUTS, VerifyError, formatVerification, printable, verifyReceipt } from './lib/verify.mjs'
+import { printableLines } from './lib/printable.mjs'
 
 const rootForTarget = target => {
   const absolute = path.resolve(target)
@@ -349,7 +350,7 @@ if (command === 'apply') {
     const result = applyPlan({ planPath: PLAN_FILE, dryRun: DRY_RUN, rootDir: process.cwd() })
     return result.failed ? 1 : 0
   } catch (e) {
-    console.error(`failed to apply plan ${PLAN_FILE}: ${e.message}`)
+    console.error(printableLines(`failed to apply plan ${PLAN_FILE}: ${e.message}`))
     return 2
   }
 }
@@ -371,13 +372,13 @@ if (command === 'validate') {
     try {
       const result = validateDocumentFile(file, { type: values.type ?? null })
       if (result.errors.length) {
-        for (const error of formatDocumentErrors(result.errors)) console.error(`${file}: ${error}`)
+        for (const error of formatDocumentErrors(result.errors)) console.error(printableLines(`${file}: ${error}`))
         failed = true
         continue
       }
       console.log(`${file}: valid ${result.type} document`)
     } catch (error) {
-      console.error(`${file}: validation failed: ${error.message}`)
+      console.error(printableLines(`${file}: validation failed: ${error.message}`))
       failed = true
     }
   }
@@ -397,7 +398,7 @@ try {
     ? loadConfig(configLocation.file, { defaults: DEFAULT_CONFIG, allowMissing: false })
     : normalizeConfig({}, { defaults: CLI_DEFAULT_CONFIG })
 } catch (e) {
-  console.error(`failed to load repository config: ${e.message}`)
+  console.error(printable(`failed to load repository config: ${e.message}`))
   return 2
 }
 
@@ -431,7 +432,7 @@ let feedData
 try {
   feedData = loadFeeds(FEEDS_DIR)
 } catch (e) {
-  console.error(`failed to load feeds from ${FEEDS_DIR}: ${e.message}`)
+  console.error(printableLines(`failed to load feeds from ${FEEDS_DIR}: ${e.message}`))
   return 2
 }
 if (feedData.entries.size === 0) {
@@ -441,7 +442,7 @@ if (feedData.entries.size === 0) {
 
 const headPolicyError = policyError(repositoryConfig, feedData, values.via)
 if (headPolicyError) {
-  console.error(headPolicyError)
+  console.error(printable(headPolicyError))
   return 2
 }
 
@@ -464,7 +465,7 @@ try {
     includeDocs: INCLUDE_DOCS,
   }))
 } catch (e) {
-  console.error(`scan failed: ${e.message}`)
+  console.error(printableLines(`scan failed: ${e.message}`))
   return 2
 }
 
@@ -541,7 +542,7 @@ if (CHANGED_BASE !== null) {
     changedFindings = selection.findings
     changedStats = selection.stats
   } catch (e) {
-    console.error(`--changed failed: ${e.message}`)
+    console.error(printableLines(`--changed failed: ${e.message}`))
     return 2
   }
   const statsFile = process.env.MODEL_EOL_CHANGED_STATS

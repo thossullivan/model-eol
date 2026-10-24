@@ -14,7 +14,7 @@ import { color, colorEnabled } from '../lib/color.mjs'
 import { assertIsoDate, buildModelPattern, captureWindowFor, findingFromRef, lifecycleFor, loadFeeds } from '../lib/feeds.mjs'
 import { buildPlan } from '../lib/plan.mjs'
 import { JsonSchemaRegistry, validateJsonSchema } from '../lib/json-schema.mjs'
-import { formatCheck, formatSchedule } from '../lib/reports.mjs'
+import { formatAlertMarkdown, formatCheck, formatSchedule } from '../lib/reports.mjs'
 import { SKIP_DIRS, changedLinesForTargets, isScannable, parseDiffPath } from '../lib/scanner.mjs'
 import { validateDocument } from '../lib/validate-document.mjs'
 import { PROVIDERS, loadProviderSources, mergeFeed } from '../refresh/providers.mjs'
@@ -300,6 +300,45 @@ fs.mkdirSync(noteDir)
 fs.writeFileSync(path.join(noteDir, 'bad\n::warning::forged.py'), Buffer.from([0xff, 0xfe, 0x0a]))
 const noteCheck = run(['check', noteDir], { env: colorEnv })
 assert(noteCheck.code === 2 && noteCheck.err.includes('bad\\n::warning::forged.py') && !noteCheck.err.split('\n').some(line => line.startsWith('::')), 'incomplete-scan notes cannot start a workflow command line')
+const opensCommand = text => text.split('\n').some(line => line.trimStart().startsWith('::') || line.includes('##['))
+const hostileConfigDir = path.join(tempRoot, 'escape-config')
+fs.mkdirSync(hostileConfigDir)
+fs.writeFileSync(path.join(hostileConfigDir, 'a.py'), 'MODEL = "o3-deep-research"\n')
+for (const [label, config] of [
+  ['an unknown lifecycle channel', JSON.stringify({ via: 'x\n::warning::forged ##[error]legacy' })],
+  ['a route model missing from feeds', JSON.stringify({ routes: [{ paths: ['**'], via: 'aws-bedrock', match: 'm', model: 'x\n  ::error::forged' }] })],
+  ['an unknown config key', JSON.stringify({ 'k\n::error::forged': 1 })],
+  ['a JSON.parse excerpt of raw bytes', 'x\n::error::forged'],
+]) {
+  fs.writeFileSync(path.join(hostileConfigDir, '.model-eol.json'), config)
+  const result = run(['check', hostileConfigDir], { env: colorEnv })
+  assert(result.code === 2 && result.err.length > 0 && !opensCommand(result.err), `config errors for ${label} cannot start a workflow command`)
+}
+const hostileFeedsDir = path.join(tempRoot, 'escape-feeds')
+fs.mkdirSync(hostileFeedsDir)
+fs.writeFileSync(path.join(hostileFeedsDir, 'x.json'), JSON.stringify({ spec: 'model-eol/0.1', publisher: 'p\n::warning::forged', generated: '2026-01-01T00:00:00Z', models: [{ id: 'bad\n::error::forged' }] }))
+fs.writeFileSync(path.join(tempRoot, 'escape-empty.json'), '{}')
+const hostileFeeds = run(['check', path.join(hostileConfigDir, 'a.py'), '--config', path.join(tempRoot, 'escape-empty.json'), '--feeds', hostileFeedsDir], { env: colorEnv })
+assert(hostileFeeds.code === 2 && hostileFeeds.err.includes('failed to load') && !opensCommand(hostileFeeds.err), 'feed load errors keep their lines but cannot start a workflow command')
+const escapeApplyDir = path.join(tempRoot, 'escape-apply')
+fs.mkdirSync(escapeApplyDir)
+fs.writeFileSync(path.join(escapeApplyDir, 'x\n::warning title=forged::apply ##[warning]legacy.py'), 'from openai import OpenAI\nclient = OpenAI()\nclient.responses.create(model="o3-deep-research")\n')
+const applyPlanRun = run(['plan', '.', '--days', '90'], { cwd: escapeApplyDir, env: colorEnv })
+fs.writeFileSync(path.join(tempRoot, 'escape-apply-plan.json'), applyPlanRun.out)
+const applyDry = run(['apply', '--plan', path.join(tempRoot, 'escape-apply-plan.json'), '--dry-run'], { cwd: escapeApplyDir, env: colorEnv })
+assert(applyDry.code === 0 && applyDry.out.includes('would change x\\n') && !opensCommand(applyDry.out), 'apply prints plan file paths with control characters escaped')
+const legacyDir = path.join(tempRoot, 'escape-legacy')
+fs.mkdirSync(legacyDir)
+fs.writeFileSync(path.join(legacyDir, 'a ##[warning]forged \u202e.py'), 'MODEL = "o3-deep-research"\n')
+for (const args of [['check'], ['inventory', '--format', 'text'], ['schedule'], ['alert', '--format', 'markdown']]) {
+  const human = run([...args, legacyDir], { env: colorEnv })
+  assert(human.out.includes('a #\\x23[warning]forged \\u202e.py') && !opensCommand(human.out), `${args.join(' ')} neutralizes legacy ##[ commands and bidi overrides in names`)
+}
+const legacyJson = JSON.parse(run(['check', legacyDir, '--json'], { env: colorEnv }).out)
+assert(legacyJson.findings[0]?.file.endsWith('a ##[warning]forged \u202e.py'), 'JSON output keeps names byte-for-byte')
+const tentativeHostile = { file: 'a.py', line: 1, matched: 'm', status: 'scheduled', date_precision: 'tentative', shutdown: '2027-01-01', safe_until: '2027-06-01', publisher: '[x](https://evil.example)\n# h' }
+const tentativeMarkdown = formatAlertMarkdown({ scan_notes: [], errors: [], warnings: [tentativeHostile] }, 30)
+assert(tentativeMarkdown.includes('by `[x](https://evil.example)\\n# h` policy') && formatAlertMarkdown({ scan_notes: [], errors: [], warnings: [{ ...tentativeHostile, publisher: 'openai' }] }, 30).includes('by openai policy'), 'markdown alert code-spans only unusual feed publishers in the policy tail')
 
 const anthropicAliasConsumerDir = path.join(tempRoot, 'anthropic-alias-consumer')
 const anthropicAliasConsumerFeeds = path.join(tempRoot, 'anthropic-alias-feeds')

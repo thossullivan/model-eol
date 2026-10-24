@@ -17,7 +17,7 @@ import {
   runBot,
   runPlan,
 } from '../bot.mjs'
-import { branchFor, itemDigest, markdownCode, metadataLine, parseMetadata, slugFor } from '../lib/common.mjs'
+import { branchFor, itemDigest, markdownCode, markdownText, metadataLine, parseMetadata, slugFor, staleWorkComment } from '../lib/common.mjs'
 import { loadConfig } from '../lib/config.mjs'
 import { downloadFeeds } from '../lib/feeds.mjs'
 import { capReport, readReportCapped, reportForBody, runEvalHook } from '../lib/eval.mjs'
@@ -436,6 +436,34 @@ assert(markdownCode('custom_hub') === '`custom_hub`' && markdownCode('a`b``c') =
 const hostileMetadata = { schema: 'model-eol.bot/0.1', id: 'o3-deep-research-2025-06-26', publisher: 'openai', shutdown: '2026-07-23', head_sha: null, feed_digest: 'd', replacement_note: 'a --!><img src=https://example.com/p.png> b --> c' }
 const hostileLine = metadataLine(hostileMetadata)
 assert(!/[<>]/.test(hostileLine.slice('<!--'.length, -'-->'.length)) && parseMetadata(hostileLine)?.replacement_note === hostileMetadata.replacement_note, 'metadata comments carry no raw angle bracket that could close them early and still round-trip')
+const lineSeparator = String.fromCharCode(0x2028)
+const separatorMetadata = { ...hostileMetadata, replacement_note: `a${lineSeparator}b${String.fromCharCode(0x2029)}c` }
+const separatorLine = metadataLine(separatorMetadata)
+assert(!separatorLine.includes(lineSeparator) && parseMetadata(separatorLine)?.replacement_note === separatorMetadata.replacement_note, 'metadata comments encode U+2028 and U+2029 so the metadata line still parses')
+const hostileText = markdownText('azure/x\n---\n@thossullivan see https://evil.example www.evil.example |a|b| \x1b[2K')
+assert(!/[\n\r@|\x1b]|:\/\/|www\./i.test(hostileText) && hostileText.includes('&#64;thossullivan') && hostileText.includes('&#124;'), 'markdown text stays on one line and neutralizes mentions, table pipes, autolinks, and controls')
+const hostileIssue = buildIssueBody({
+  group: {
+    kind: 'issue',
+    id: 'o3-deep-research-2025-06-26',
+    subject: 'o3-deep-research-2025-06-26',
+    publisher: 'openai',
+    shutdown: '2026-07-23',
+    via: null,
+    root: '.',
+    feedDigest: 'd',
+    context: { announced: null, notes: [], entry: null },
+    issues: [{ file: 'azure/x\n---\n@thossullivan see https://evil.example now.py', line: 3, reason: 'not-direct-api', status: 'retired', matched: 'o3-deep-research' }],
+  },
+  now: new Date('2026-08-01T00:00:00Z'),
+})
+const hostileIssueLines = hostileIssue.split('\n')
+const evidenceLines = hostileIssueLines.slice(hostileIssueLines.indexOf('## Evidence') + 1, hostileIssueLines.indexOf('## Sources') - 1)
+assert(evidenceLines.length === 1 && evidenceLines[0] === '- `azure/x --- @thossullivan see https:/evil.example now.py:3` - not-direct-api (`o3-deep-research`)' && !hostileIssueLines.includes('---'), 'issue evidence code-spans repository paths so they cannot add rules, mentions, or links')
+const waivedComment = staleWorkComment('issue', { expires: '2099-01-01', owner: '@thossullivan', reason: 'see [x](https://evil.example)\n# h' })
+assert(waivedComment.includes('owned by `@thossullivan`') && waivedComment.includes('records: `see [x](https://evil.example) # h`') && !waivedComment.includes('\n'), 'stale-work comments code-span waiver owner and reason')
+const decisionLog = formatDecisions([{ action: 'create', group: { kind: 'issue', publisher: 'openai', subject: 'x\n::error::forged' }, body: 'line\n::warning title=forged::x\n  ##[error]legacy\n\x1b[2K' }])
+assert(decisionLog.startsWith('model-eol decision table\n') && !decisionLog.split('\n').some(line => line.trimStart().startsWith('::') || line.includes('##[') || line.includes('\x1b')), 'dry-run decision tables cannot open workflow commands')
 const clockDigestFeeds = path.join(tempRoot, 'clock-digest-feeds')
 fs.mkdirSync(clockDigestFeeds)
 const clockDigestRows = status => [

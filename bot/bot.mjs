@@ -37,6 +37,7 @@ import {
 import { assertValidPlanDocument } from '../lib/validate-document.mjs'
 import { captureWindowFor, lifecycleFor } from '../lib/feeds.mjs'
 import { parseCliArgs } from '../lib/cli.mjs'
+import { printable, printableLines } from '../lib/printable.mjs'
 import { EVAL_RESULTS_SCHEMA as EVAL_SCHEMA, assertValidEvalResults } from '../lib/receipts.mjs'
 import { loadConfig } from './lib/config.mjs'
 import { downloadFeeds } from './lib/feeds.mjs'
@@ -508,7 +509,7 @@ export const buildIssueBody = ({ group, now = new Date() }) => {
     ...(group.channel ? { channel: group.channel } : {}),
   }
   const evidence = group.issues
-    .map(issue => `- ${markdownText(`${repoPath(issue.file, group.root || '.')}:${issue.line} - ${issue.reason}${issue.matched ? ` (${issue.matched})` : ''}`)}`)
+    .map(issue => `- ${markdownCode(`${repoPath(issue.file, group.root || '.')}:${issue.line}`)} - ${markdownText(issue.reason)}${issue.matched ? ` (${markdownCode(issue.matched)})` : ''}`)
     .join('\n')
   const sections = [
     metadataLine(metadata),
@@ -1285,7 +1286,7 @@ export const formatDecisions = (decisions, { degraded = false } = {}) => {
     if (record.branch) lines.push(`  branch: ${record.branch}`)
     if (record.body) lines.push('  body:', record.body.split('\n').map(line => `    ${line}`).join('\n'))
   }
-  return lines.join('\n')
+  return printableLines(lines.join('\n'))
 }
 
 const BLOCKED_ACTIONS = new Set(['conflict', 'eval-failed', 'label-unavailable', 'report-only', 'stand-down'])
@@ -1531,7 +1532,7 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
   if (options.dryRun) console.log(formatDecisions(result.decisions, { degraded: result.degraded }))
   else {
     if (result.degraded) console.log('model-eol status: degraded - vendored feed fallback enabled; no GitHub writes')
-    for (const item of result.decisions) console.log(`${item.action} ${item.group.publisher}/${item.group.kind === 'model' ? item.group.id : item.group.subject}`)
+    for (const item of result.decisions) console.log(printable(`${item.action} ${item.group.publisher}/${item.group.kind === 'model' ? item.group.id : item.group.subject}`))
   }
   appendDecisionSummary(env.GITHUB_STEP_SUMMARY, result.decisions, { degraded: result.degraded })
   return result.degraded || result.decisions.some(item => BLOCKED_ACTIONS.has(item.action)) ? 1 : 0
@@ -1548,7 +1549,7 @@ const invokedFile = (() => {
 
 if (invokedFile === fs.realpathSync(fileURLToPath(import.meta.url))) {
   main().then(code => process.exit(code)).catch(error => {
-    console.error(`model-eol bot: ${error.message}`)
+    console.error(printableLines(`model-eol bot: ${error.message}`))
     process.exit(2)
   })
 }
