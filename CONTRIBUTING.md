@@ -131,9 +131,10 @@ gateway references, prose replacements, and dates that came from
 `publisher-fallback` become issues for a person.
 
 A distribution entry without a date means nothing is scheduled on that channel.
-It doesn't inherit the publisher's date; only a missing entry falls back, and
-the result is labeled `publisher-fallback`. An earlier, more cautious reading
-told Azure users their models were gone five months early.
+It doesn't inherit the publisher's date; only a missing entry falls back. The
+result is labeled `publisher-fallback` only when the publisher has a `shutdown`
+or `announced` date; with neither, it is `ok` with no `via`. An earlier, more
+cautious reading told Azure users their models were gone five months early.
 
 `refresh --check` exits 3 only when the generated files change materially.
 Rows the parser can't confirm show up in the diff but don't count. Otherwise a

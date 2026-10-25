@@ -178,7 +178,8 @@ The feed records each channel's date under `distributions`. Pass
 `--via aws-bedrock`, `--via azure-ai-foundry`, or `--via vertex-ai` to check the
 repo against the channel it actually calls. If the feed has no entry for that
 channel, the checker uses the publisher's date and labels the line
-`publisher-fallback`.
+`publisher-fallback`. If the publisher has no `shutdown` or `announced` date
+either, the line is `ok` with no channel.
 
 The later date buys time for the migration, and it is also the last chance to
 record the old model's outputs if your eval compares against them. When a

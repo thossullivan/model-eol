@@ -1173,6 +1173,7 @@ const schemaOnlyCases = [
   ['note', { ...schemaOnlyBase, note: 7, models: [{ id: 'schema-note-model' }] }, 'note'],
   ['replacement_note', { ...schemaOnlyBase, models: [{ id: 'schema-replacement-note-model', replacement_note: { x: 1 } }] }, 'models[0].replacement_note'],
   ['generated', { ...schemaOnlyBase, generated: '2026-08-01T24:00:00Z', models: [{ id: 'schema-generated-model' }] }, 'generated'],
+  ['source', { ...schemaOnlyBase, source: ' https://example.invalid/schema', models: [{ id: 'schema-source-model' }] }, 'source'],
 ]
 for (const [label, feed, field] of schemaOnlyCases) {
   const dir = path.join(tempRoot, `schema-only-${label}`)
@@ -1185,9 +1186,9 @@ for (const [label, feed, field] of schemaOnlyCases) {
   } catch (error) {
     message = error.message
   }
-  assert(message.startsWith(`${file} model ${feed.models[0].id}: ${field}: `), `loadFeeds runs the feed schema and names the file, model, and field for ${label}`)
+  assert(message.startsWith(`${file} model ${feed.models[0].id}: ${field}: `), `loadFeeds rejects an invalid ${label} and names the file, model, and field`)
   const schemaOnlyCheck = run(['check', path.join(root, 'test/fixture'), '--feeds', dir, '--json'])
-  assert(schemaOnlyCheck.code === 2 && schemaOnlyCheck.out === '' && schemaOnlyCheck.err.includes('failed to load feeds') && schemaOnlyCheck.err.includes(`${field}: `), `check fails closed with exit 2 on a feed whose ${label} only the schema rejects`)
+  assert(schemaOnlyCheck.code === 2 && schemaOnlyCheck.out === '' && schemaOnlyCheck.err.includes('failed to load feeds') && schemaOnlyCheck.err.includes(`${field}: `), `check fails closed with exit 2 on a feed with an invalid ${label}`)
   assert(run(['validate', file]).code === 2, `validate rejects the same ${label} feed`)
 }
 

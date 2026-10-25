@@ -7,16 +7,16 @@
   "required": ["spec", "publisher", "generated", "models"],
   "properties": {
     "spec": { "const": "model-eol/0.1" },
-    "publisher": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "generated": { "type": "string", "format": "date-time" },
-    "source": { "type": "string", "format": "uri" },
-    "note": { "type": "string" },
+    "publisher": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\u0000-\u001f\u007f-\u009f]*$" },
+    "generated": { "type": "string", "maxLength": 64, "format": "date-time", "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$" },
+    "source": { "$ref": "#/definitions/url" },
+    "note": { "$ref": "#/definitions/text" },
     "policy": {
       "type": "object",
       "required": ["min_notice_days", "source"],
       "properties": {
-        "min_notice_days": { "type": "integer", "minimum": 0 },
-        "source": { "type": "string", "format": "uri" }
+        "min_notice_days": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "source": { "$ref": "#/definitions/url" }
       },
       "additionalProperties": false
     },
@@ -27,7 +27,9 @@
   },
   "additionalProperties": false,
   "definitions": {
-    "isoDate": { "type": "string", "format": "date" },
+    "isoDate": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])$" },
+    "text": { "type": "string", "maxLength": 4096, "pattern": "^[^\u0000-\u001f\u007f-\u009f]*$" },
+    "url": { "type": "string", "maxLength": 4096, "format": "uri", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:[^\u0000-\u001f\u007f-\u009f]*$" },
     "model": {
       "type": "object",
       "required": ["id"],
@@ -36,6 +38,7 @@
         "aliases": {
           "type": "array",
           "minItems": 1,
+          "uniqueItems": true,
           "items": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
         },
         "announced": { "$ref": "#/definitions/isoDate" },
@@ -47,22 +50,34 @@
           "minItems": 1,
           "items": { "type": "string", "maxLength": 256, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
         },
-        "replacement_note": { "type": "string" },
-        "notes": { "type": "string" },
-        "source": { "type": "string", "format": "uri" },
+        "replacement_note": { "$ref": "#/definitions/text" },
+        "notes": { "$ref": "#/definitions/text" },
+        "source": { "$ref": "#/definitions/url" },
         "distributions": {
           "type": "array",
           "items": {
             "type": "object",
             "required": ["via"],
             "properties": {
-              "via": { "type": "string", "minLength": 1 },
+              "via": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\u0000-\u001f\u007f-\u009f]*$" },
               "announced": { "$ref": "#/definitions/isoDate" },
               "shutdown": { "$ref": "#/definitions/isoDate" },
               "date_precision": { "enum": ["exact", "earliest", "tentative"] },
               "status": { "enum": ["active", "legacy", "extended-access", "retired"] },
-              "source": { "type": "string", "format": "uri" }
+              "source": { "$ref": "#/definitions/url" }
             },
+            "oneOf": [
+              { "properties": { "date_precision": { "enum": ["exact", "earliest"] } } },
+              {
+                "required": ["date_precision", "shutdown"],
+                "properties": {
+                  "date_precision": { "const": "tentative" },
+                  "announced": false,
+                  "shutdown": true,
+                  "status": { "enum": ["active", "legacy", "extended-access"] }
+                }
+              }
+            ],
             "additionalProperties": false
           }
         }
@@ -79,6 +94,17 @@
           }
         }
       },
+      "oneOf": [
+        { "properties": { "date_precision": { "enum": ["exact", "earliest"] } } },
+        {
+          "required": ["date_precision", "shutdown"],
+          "properties": {
+            "date_precision": { "const": "tentative" },
+            "announced": false,
+            "shutdown": true
+          }
+        }
+      ],
       "additionalProperties": false
     }
   }
