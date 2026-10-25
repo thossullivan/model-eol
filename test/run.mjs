@@ -1167,6 +1167,29 @@ try {
 assert(invalidUtf8FeedMessage.includes('invalid-utf8.json') && invalidUtf8FeedMessage.includes('invalid UTF-8'), 'operational feed loading rejects invalid UTF-8 with the feed filename')
 const invalidUtf8FeedRun = run(['check', path.join(root, 'test/fixture'), '--feeds', invalidUtf8Feeds, '--json'])
 assert(invalidUtf8FeedRun.code === 2 && invalidUtf8FeedRun.err.includes('invalid-utf8.json') && invalidUtf8FeedRun.err.includes('invalid UTF-8'), 'check exits 2 instead of loading a replacement-decoded feed')
+const schemaOnlyBase = { spec: 'model-eol/0.1', publisher: 'schema-test', generated: '2026-08-01T00:00:00Z', source: 'https://example.invalid/schema' }
+const schemaOnlyCases = [
+  ['notes', { ...schemaOnlyBase, models: [{ id: 'schema-notes-model', notes: 5 }] }, 'models[0].notes'],
+  ['note', { ...schemaOnlyBase, note: 7, models: [{ id: 'schema-note-model' }] }, 'note'],
+  ['replacement_note', { ...schemaOnlyBase, models: [{ id: 'schema-replacement-note-model', replacement_note: { x: 1 } }] }, 'models[0].replacement_note'],
+  ['generated', { ...schemaOnlyBase, generated: '2026-08-01T24:00:00Z', models: [{ id: 'schema-generated-model' }] }, 'generated'],
+]
+for (const [label, feed, field] of schemaOnlyCases) {
+  const dir = path.join(tempRoot, `schema-only-${label}`)
+  fs.mkdirSync(dir)
+  const file = path.join(dir, 'schema-only.json')
+  fs.writeFileSync(file, JSON.stringify(feed))
+  let message = ''
+  try {
+    loadFeeds(dir)
+  } catch (error) {
+    message = error.message
+  }
+  assert(message.startsWith(`${file} model ${feed.models[0].id}: ${field}: `), `loadFeeds runs the feed schema and names the file, model, and field for ${label}`)
+  const schemaOnlyCheck = run(['check', path.join(root, 'test/fixture'), '--feeds', dir, '--json'])
+  assert(schemaOnlyCheck.code === 2 && schemaOnlyCheck.out === '' && schemaOnlyCheck.err.includes('failed to load feeds') && schemaOnlyCheck.err.includes(`${field}: `), `check fails closed with exit 2 on a feed whose ${label} only the schema rejects`)
+  assert(run(['validate', file]).code === 2, `validate rejects the same ${label} feed`)
+}
 
 const federationDir = path.join(tempRoot, 'federation')
 const federationFeeds = path.join(federationDir, 'feeds')
@@ -1225,6 +1248,43 @@ fs.writeFileSync(path.join(policyFeeds, 'anthropic.json'), JSON.stringify({
 const policySchedule = run(['schedule', policyDir, '--feeds', policyFeeds])
 assert(policySchedule.code === 0, 'policy-floor schedule exits 0')
 assert(policySchedule.out.includes('guaranteed until 2026-09-30 per anthropic stated policy (>=60d notice, feed generated 2026-08-01)'), 'schedule explains a policy-floor guarantee')
+const offsetPolicyDir = path.join(tempRoot, 'offset-policy-fixture')
+const offsetPolicyFeeds = path.join(offsetPolicyDir, 'feeds')
+fs.mkdirSync(offsetPolicyFeeds, { recursive: true })
+fs.writeFileSync(path.join(offsetPolicyDir, 'app.py'), 'MODEL = "offset-floor-model"\nAZURE_MODEL = "offset-azure-model"\nTENTATIVE_MODEL = "offset-tentative-model"\n')
+const offsetPolicyFeed = {
+  spec: 'model-eol/0.1',
+  publisher: 'offset-publisher',
+  generated: '2026-07-26T01:00:00+05:00',
+  source: 'https://example.invalid/offset',
+  policy: { min_notice_days: 60, source: 'https://example.invalid/offset' },
+  models: [
+    { id: 'offset-floor-model' },
+    { id: 'offset-azure-model', distributions: [{ via: 'azure-ai-foundry', status: 'active' }] },
+    { id: 'offset-tentative-model', shutdown: '2026-09-01', date_precision: 'tentative' },
+  ],
+}
+fs.writeFileSync(path.join(offsetPolicyFeeds, 'offset.json'), JSON.stringify(offsetPolicyFeed))
+const offsetSafeUntil = (args, id) => JSON.parse(run(['inventory', offsetPolicyDir, '--feeds', offsetPolicyFeeds, '--json', ...args]).out)
+  .model_references.find(item => item.id === id)?.safe_until
+assert(offsetSafeUntil([], 'offset-floor-model') === '2026-09-23', 'inventory counts the policy floor from the UTC date of the feed generated time')
+assert(offsetSafeUntil(['--via', 'azure-ai-foundry'], 'offset-azure-model') === null, 'inventory gives no policy-floor safe_until on an undated distributor clock')
+const offsetSchedule = run(['schedule', offsetPolicyDir, '--feeds', offsetPolicyFeeds])
+assert(
+  offsetSchedule.code === 0 && offsetSchedule.out.includes('guaranteed until 2026-09-23 per offset-publisher stated policy (>=60d notice, feed generated 2026-07-25)'),
+  'schedule prints the UTC generated date the policy floor counts from',
+)
+const offsetViaSchedule = run(['schedule', offsetPolicyDir, '--feeds', offsetPolicyFeeds, '--via', 'vertex-ai'])
+assert(
+  offsetSchedule.out.includes('guaranteed until 2026-09-23 by offset-publisher policy') &&
+    offsetViaSchedule.code === 0 && offsetViaSchedule.out.includes('offset-tentative-model') && !offsetViaSchedule.out.includes('guaranteed until'),
+  'schedule --via applies no publisher policy floor to publisher-fallback or no-row models',
+)
+const hugePolicyFeeds = path.join(offsetPolicyDir, 'huge-feeds')
+fs.mkdirSync(hugePolicyFeeds)
+fs.writeFileSync(path.join(hugePolicyFeeds, 'huge.json'), JSON.stringify({ ...offsetPolicyFeed, policy: { ...offsetPolicyFeed.policy, min_notice_days: 100000000 } }))
+const hugePolicyCheck = run(['check', offsetPolicyDir, '--feeds', hugePolicyFeeds, '--json'])
+assert(hugePolicyCheck.code === 0 && !hugePolicyCheck.err.includes('Invalid time value'), `check survives a policy floor past the representable date range (stderr: ${hugePolicyCheck.err.trim()})`)
 
 const changedRepo = path.join(tempRoot, 'changed-repo')
 fs.mkdirSync(changedRepo)
@@ -2546,6 +2606,40 @@ const distributorTentativeFloor = lifecycleFor({
 })
 assert(distributorTentativeFloor.status === 'scheduled' && distributorTentativeFloor.via === 'aws-bedrock', 'a distributor tentative floor remains scheduled on its own clock')
 assert(distributorTentativeFloor.safe_until === '2026-09-01' && distributorTentativeFloor.days === -2, 'publisher notice policy never extends a distributor tentative floor')
+const undatedDistributorEntry = { id: 'undated-distributor-model', distributions: [{ via: 'azure-ai-foundry', status: 'active' }] }
+const undatedFloorOptions = { days: 30, today: tentativeToday, policy: tentativePolicy, generated: '2026-08-18T00:00:00Z' }
+const undatedPublisherClock = lifecycleFor(undatedDistributorEntry, undatedFloorOptions)
+const undatedDistributorClock = lifecycleFor(undatedDistributorEntry, { ...undatedFloorOptions, via: 'azure-ai-foundry' })
+assert(
+  undatedPublisherClock.safe_until === '2026-10-17' &&
+    undatedDistributorClock.status === 'ok' && undatedDistributorClock.via === 'azure-ai-foundry' && undatedDistributorClock.safe_until === null,
+  'publisher notice policy sets safe_until on the publisher clock but not on an undated distributor clock',
+)
+const utcFloor = generated => lifecycleFor({ id: 'utc-floor-model' }, { days: 30, today: tentativeToday, policy: tentativePolicy, generated }).safe_until
+assert(utcFloor('2026-07-26T01:00:00+05:00') === '2026-09-23', 'the policy floor counts from the UTC date of a positive-offset generated time')
+assert(utcFloor('2026-07-25T22:00:00-05:00') === '2026-09-24', 'the policy floor counts from the UTC date of a negative-offset generated time')
+assert(utcFloor('2026-02-30T00:00:00Z') === null && utcFloor('2026-08-01T24:00:00Z') === null, 'the policy floor ignores generated times that are not RFC 3339 date-times')
+const tentativeFallbackEntry = { id: 'tentative-fallback-model', shutdown: '2026-09-29', date_precision: 'tentative' }
+const tentativeFallback = lifecycleFor(tentativeFallbackEntry, { ...undatedFloorOptions, via: 'vertex-ai' })
+assert(
+  lifecycleFor(tentativeFallbackEntry, undatedFloorOptions).safe_until === '2026-10-17' &&
+    tentativeFallback.via === 'publisher-fallback' && tentativeFallback.safe_until === '2026-09-29' && tentativeFallback.days === 26,
+  'publisher notice policy extends a tentative date without --via but not a publisher-fallback date under --via',
+)
+const noRowEntry = { id: 'norow-model' }
+const noRowLifecycle = lifecycleFor(noRowEntry, { ...undatedFloorOptions, via: 'azure-ai-foundry' })
+assert(
+  lifecycleFor(noRowEntry, undatedFloorOptions).safe_until === '2026-10-17' && noRowLifecycle.status === 'ok' && noRowLifecycle.safe_until === null,
+  'publisher notice policy sets safe_until without --via but not for a model with no row for the requested --via',
+)
+let hugePolicyFloor
+try {
+  hugePolicyFloor = lifecycleFor({ id: 'huge-policy-model' }, { ...undatedFloorOptions, policy: { ...tentativePolicy, min_notice_days: 100000000 } }).safe_until
+} catch (error) {
+  hugePolicyFloor = `threw ${error.message}`
+}
+assert(hugePolicyFloor === null, `a policy floor past the representable date range gives no safe_until (got ${hugePolicyFloor})`)
+assert(utcFloor('9999-12-31T00:00:00Z') === null, 'a policy floor past year 9999 gives no safe_until')
 const pastEarliestFinding = findingFromRef({
   file: 'fixture.py',
   line: 1,

@@ -356,6 +356,28 @@ try {
     attempts: 1,
     retryMs: 0,
   }), /baseUrl must be the canonical public contract root/)
+
+  const schemaOnlyInput = path.join(repo, 'feeds', 'amazon.json')
+  const schemaOnlyFeed = JSON.parse(fs.readFileSync(schemaOnlyInput, 'utf8'))
+  schemaOnlyFeed.models[0].notes = 5
+  fs.writeFileSync(schemaOnlyInput, `${JSON.stringify(schemaOnlyFeed, null, 2)}\n`)
+  runGit(['-c', 'user.name=model-eol test', '-c', 'user.email=model-eol@example.test', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-am', 'schema-only feed defect'])
+  const schemaOnlySha = runGit(['rev-parse', 'HEAD'])
+  const schemaOnlyReceiptFile = path.join(temp, 'schema-only-receipt.json')
+  fs.writeFileSync(schemaOnlyReceiptFile, `${JSON.stringify(createFeedRefreshReceipt({
+    repoDir: repo,
+    state: 'clean',
+    checkedAt,
+    refreshRunUrl: refreshRun,
+    refreshSha: schemaOnlySha,
+  }), null, 2)}\n`)
+  const schemaOnlyBuild = runBuilder([
+    '--out-dir', path.join(temp, 'schema-only-site'),
+    '--receipt', schemaOnlyReceiptFile,
+    '--source-sha', schemaOnlySha,
+  ])
+  assert.equal(schemaOnlyBuild.status, 1, 'the public site build fails on a feed only the schema rejects')
+  assert.match(schemaOnlyBuild.stderr, /amazon\.json model [^:]+: models\[0\]\.notes: must be string/)
 } finally {
   if (server) await new Promise(resolve => server.close(resolve))
   fs.rmSync(temp, { recursive: true, force: true })

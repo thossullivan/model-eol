@@ -204,6 +204,10 @@ date is the feed's `generated` date plus 60 days. Anthropic can change that
 policy, and the line reports it as stated. OpenAI states no fixed notice
 period, so its feed has no `policy`.
 
+The policy covers the publisher's own API, so the checker applies it only
+without `--via`. With `--via`, no line says "guaranteed until", and a tentative
+date that falls back to the publisher's date is safe only until that date.
+
 Google's "earliest possible" shutdown dates are real announcements. The feed
 marks them `earliest`, and the checker uses them as the shutdown date, so they
 can fail CI.

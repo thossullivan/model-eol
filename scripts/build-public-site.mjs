@@ -7,7 +7,7 @@ import path from 'node:path'
 
 import { parseCliArgs } from '../lib/cli.mjs'
 import { SHA_PATTERN } from '../lib/receipts.mjs'
-import { assertValidFeed } from '../lib/validate-feed.mjs'
+import { assertValidFeedDocument } from '../lib/validate-document.mjs'
 import { readFeedRefreshReceipt } from './feed-refresh-receipt.mjs'
 
 const PUBLIC_BASE = 'https://thossullivan.github.io/model-eol'
@@ -155,7 +155,7 @@ export function buildPublicSite({
   const feeds = copyJsonDirectory({
     from: path.join(root, 'feeds'),
     to: path.join(output, 'feeds'),
-    validate: (feed, source) => assertValidFeed(feed, source),
+    validate: (feed, source) => assertValidFeedDocument(feed, source),
   })
 
   const changelog = spawnSync(process.execPath, [

@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { fetchBoundedBody } from '../../lib/fetch-bounded.mjs'
-import { assertValidFeed } from '../../lib/validate-feed.mjs'
+import { assertValidFeedDocument } from '../../lib/validate-document.mjs'
 import { logWarning } from './common.mjs'
 
 const asText = value => value instanceof Uint8Array ? Buffer.from(value).toString() : String(value)
@@ -45,7 +45,7 @@ export const downloadFeeds = async ({
       } catch (error) {
         throw new Error(`${url} was not valid JSON: ${error.message}`)
       }
-      assertValidFeed(value, url)
+      assertValidFeedDocument(value, url)
       fs.writeFileSync(path.join(tempDir, `feed-${index}.json`), JSON.stringify(value, null, 2))
     }
     return {

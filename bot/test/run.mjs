@@ -1620,6 +1620,21 @@ const streamedErrorReason = await feedDownloadError(async () => ({
   body: (async function* () { for (let index = 0; index < 32 * 1024; index++) { errorChunks++; yield 'E'.repeat(512) } })(),
 }))
 assert(errorChunks <= 3 && streamedErrorReason.endsWith(`: HTTP 500 - ${'E'.repeat(300)}`), 'a string-streamed error body is read only to the detail cap')
+let schemaFeedDownloadError = null
+try {
+  await downloadFeeds({
+    urls: ['https://feeds.invalid/schema.json'],
+    vendoredDir: path.join(root, 'feeds'),
+    fetchImpl: async url => ({
+      status: 200,
+      ok: true,
+      text: async () => JSON.stringify({ spec: 'model-eol/0.1', publisher: 'remote', generated: '2026-08-01T00:00:00Z', source: url, models: [{ id: 'schema-remote-model', notes: 5 }] }),
+    }),
+  })
+} catch (error) {
+  schemaFeedDownloadError = error
+}
+assert(schemaFeedDownloadError?.message.includes('https://feeds.invalid/schema.json model schema-remote-model: models[0].notes: '), 'downloadFeeds runs the feed schema on remote feeds')
 
 const evalDir = fs.mkdtempSync(path.join(tempRoot, 'eval-'))
 const evalPlan = path.join(evalDir, 'plan.json')

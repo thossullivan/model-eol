@@ -150,6 +150,21 @@ try {
   validatorRejectedOption = true
 }
 assert(validatorRejectedReplacement && validatorRejectedOption, 'validate-feeds rejects unresolved replacements and invalid options')
+let schemaOnlyRefreshMessage = ''
+try {
+  validateGeneratedFeeds([{
+    provider: { feedFile: 'schema-only.json' },
+    feed: {
+      spec: 'model-eol/0.1',
+      publisher: 'test',
+      generated: '2026-08-01T00:00:00Z',
+      models: [{ id: 'schema-only-refresh-model', notes: 5 }],
+    },
+  }])
+} catch (error) {
+  schemaOnlyRefreshMessage = error.message
+}
+assert(schemaOnlyRefreshMessage.includes('schema-only.json model schema-only-refresh-model: models[0].notes: '), 'refresh runs the feed schema on generated feeds')
 let tentativeWithoutAnnouncementValid = true
 try {
   validateGeneratedFeeds([{
