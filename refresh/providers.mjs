@@ -1757,8 +1757,10 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     splitAliases.set(alias, { owner: owner.id, members: new Set(rows.map(row => row.id)) })
   }
   const anthropicApplied = new Map()
+  // An uncommitted family alias's own row merges after its snapshot row, so row order cannot decide whether it is an alias.
+  const mergeOrder = [...deprecations].sort((a, b) => Number(familyRows.has(a.id) && !committedIds.has(a.id)) - Number(familyRows.has(b.id) && !committedIds.has(b.id)))
 
-  for (const record of deprecations) {
+  for (const record of mergeOrder) {
     let target = locate(record.id)
     if (!target) target = add({ id: record.id })
     if (target.id !== record.id && datedSnapshot(record.id)) {

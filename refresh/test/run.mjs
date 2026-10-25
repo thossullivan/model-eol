@@ -3848,6 +3848,31 @@ reviewTest('Issue 135 round 3: the same-run fold check compares the whole lifecy
   ]
   for (const page of pages) strictAssert.throws(() => familyMerge([], page), /would join gpt-md-0101 through alias gpt-md with a different lifecycle/)
 })
+reviewTest('Issue 135 late pass: one snapshot row beside its uncommitted alias\'s own row gives the same result in either order', () => {
+  const own = ['Apr 1, 2027', familyCell('gpt-fam')]
+  for (const models of [[], [{ id: 'gpt-fam-2025-01-01' }]]) {
+    for (const rows of [[splitEarly, own], [own, splitEarly]]) {
+      const first = familyMerge(models, familyPage(...rows))
+      strictAssert.deepEqual(splitShape(first), [['gpt-fam-2025-01-01', '2027-04-01', ['gpt-fam']]])
+      strictAssert.deepEqual(familyMerge(first.feed.models, familyPage(...rows)).feed.models, first.feed.models)
+    }
+    for (const rows of [[splitEarly, ['Jun 1, 2027', familyCell('gpt-fam')]], [['Jun 1, 2027', familyCell('gpt-fam')], splitEarly]]) {
+      strictAssert.throws(() => familyMerge(models, familyPage(...rows)), /conflicting lifecycles/)
+    }
+  }
+  for (const rows of [[splitEarly, own], [own, splitEarly]]) {
+    strictAssert.deepEqual(familyMerge([{ id: 'gpt-fam' }], familyPage(...rows)).feed.models.map(model => [model.id, model.shutdown]).sort(), [['gpt-fam', '2027-04-01'], ['gpt-fam-2025-01-01', '2027-04-01']])
+  }
+})
+reviewTest('Issue 135 late pass: an ID that only contains a date is not a dated snapshot, so same-lifecycle rows still merge it', () => {
+  const preview = ['Apr 1, 2027', familyCell('gpt-fam-2025-01-01-preview', 'gpt-fam-pre')]
+  const chat = ['Apr 1, 2027', familyCell('gpt-fam-pre-chat', 'gpt-fam-pre')]
+  for (const rows of [[preview, chat], [chat, preview]]) {
+    const ids = familyMerge([], familyPage(...rows)).feed.models.map(model => [model.id, ...(model.aliases ?? [])].sort())
+    strictAssert.equal(ids.length, 1)
+    strictAssert.deepEqual(ids[0], ['gpt-fam-2025-01-01-preview', 'gpt-fam-pre', 'gpt-fam-pre-chat'])
+  }
+})
 const anthropicAnnouncement = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-y-20250101</code></td><td><code>claude-next</code></td></tr></table>'
 const anthropicStatusRows = rows => `<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>${rows.map(cells => `<tr>${cells.map((cell, index) => `<td>${index ? cell : `<code>${cell}</code>`}</td>`).join('')}</tr>`).join('')}</table>`
 const anthropicAliasMerge = (html, reverse = false, models = [{ id: 'claude-y-20250101', aliases: ['claude-y'] }]) => {
@@ -3859,6 +3884,7 @@ reviewTest('Issue 135 round 3: an Anthropic status row reaching an entry through
     strictAssert.throws(() => anthropicAliasMerge(anthropicAnnouncement + anthropicStatusRows([['claude-y', 'Active', 'N/A', 'Not sooner than September 1, 2027']]), reverse), /status row claude-y conflicts with announcement: status state Active/)
     strictAssert.throws(() => anthropicAliasMerge(anthropicAnnouncement + anthropicStatusRows([['claude-y', 'Deprecated', 'March 1, 2026', 'June 1, 2027']]), reverse), /status row claude-y conflicts with announcement: status deprecated 2026-03-01/)
     strictAssert.throws(() => anthropicAliasMerge(anthropicStatusRows([['claude-y', 'Deprecated', 'March 1, 2026', 'June 1, 2027'], ['claude-y-20250101', 'Active', 'N/A', 'Not sooner than September 1, 2027']]), reverse), /status rows give claude-y-20250101 conflicting lifecycles via claude-y/)
+    strictAssert.throws(() => anthropicAliasMerge(anthropicStatusRows([['claude-y', 'Deprecated', 'January 1, 2026', 'January 1, 2027'], ['claude-y-20250101', 'Deprecated', 'January 1, 2026', 'June 1, 2027']]), reverse), /status rows give claude-y-20250101 conflicting lifecycles/)
     const html = anthropicAnnouncement + anthropicStatusRows([['claude-y', 'Deprecated', 'January 1, 2026', 'January 1, 2027']])
     const first = anthropicAliasMerge(html, reverse)
     strictAssert.deepEqual(first.feed.models, anthropicAliasMerge(anthropicAnnouncement + anthropicStatusRows([['claude-other', 'Active', 'N/A', 'N/A']])).feed.models.filter(model => model.id === 'claude-y-20250101'))
