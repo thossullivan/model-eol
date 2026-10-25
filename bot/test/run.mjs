@@ -1607,6 +1607,13 @@ const legacyDetailReason = await feedDownloadError(async () => ({ status: 404, t
 assert(legacyDetailReason.startsWith('feed download failed: ') && legacyDetailReason.endsWith(': HTTP 404 - gone'), 'a legacy error response keeps its text() detail')
 const legacyBareReason = await feedDownloadError(async () => ({ status: 500, ok: false }))
 assert(legacyBareReason.startsWith('feed download failed: ') && legacyBareReason.endsWith(': HTTP 500'), 'a legacy error response without a body reports the status and no serialized object')
+for (const [label, respond] of [
+  ['a 302 Response with a feed body', url => new Response(boundedFeedJson(url), { status: 302 })],
+  ['a legacy ok: false response with a feed body', url => ({ ok: false, text: async () => boundedFeedJson(url) })],
+]) {
+  const reason = await feedDownloadError(async url => respond(url))
+  assert(reason.startsWith('feed download failed: '), `--feeds-url rejects ${label} below status 400`)
+}
 let errorChunks = 0
 const streamedErrorReason = await feedDownloadError(async () => ({
   status: 500,
