@@ -3607,17 +3607,33 @@ reviewTest('Family alias: an uncommitted alias still binds to its snapshot as be
   const merged = familyMerge([{ id: 'gpt-fam-2026-03-17' }], familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2026-03-17')]))
   strictAssert.deepEqual(merged.feed.models.map(model => [model.id, model.aliases]), [['gpt-fam-2026-03-17', ['gpt-fam']]])
 })
-reviewTest('Family alias: one alias listed with two snapshots on the same lifecycle dates the alias once', () => {
-  const page = familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')])
-  const merged = familyMerge([{ id: 'gpt-fam-2025-03-20' }, { id: 'gpt-fam-2025-12-15' }, { id: 'gpt-fam' }], page)
-  for (const model of merged.feed.models) strictAssert.deepEqual(familyLifecycle(model), familyDated, model.id)
-})
-reviewTest('Family alias: fails closed when two snapshot rows give the alias different lifecycles', () => {
-  const committed = [{ id: 'gpt-fam-2025-03-20' }, { id: 'gpt-fam-2025-12-15' }, { id: 'gpt-fam' }]
-  for (const rows of [[['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Jun 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')]],
-    [['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15'), 'gpt-other-next']]]) {
-    strictAssert.throws(() => familyMerge(committed, familyPage(...rows)), /gpt-fam conflicting lifecycles/)
+reviewTest('Family alias: two snapshots on the same lifecycle stay separate, and the alias is dated once or follows the newest snapshot, in either order', () => {
+  const rows = [['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')]]
+  const byId = merged => Object.fromEntries(merged.feed.models.map(model => [model.id, familyLifecycle(model)]))
+  const newestKeeps = { 'gpt-fam-2025-03-20': familyDated, 'gpt-fam-2025-12-15': [...familyDated.slice(0, 4), ['gpt-fam']] }
+  for (const order of [rows, [...rows].reverse()]) {
+    const page = familyPage(...order)
+    const committedAlias = familyMerge([{ id: 'gpt-fam-2025-03-20' }, { id: 'gpt-fam-2025-12-15' }, { id: 'gpt-fam' }], page)
+    strictAssert.deepEqual(byId(committedAlias), { 'gpt-fam-2025-03-20': familyDated, 'gpt-fam-2025-12-15': familyDated, 'gpt-fam': familyDated })
+    strictAssert.deepEqual(familyMerge(committedAlias.feed.models, page).feed.models, committedAlias.feed.models)
+    for (const committed of [[], [{ id: 'gpt-fam-2025-03-20' }], [{ id: 'gpt-fam-2025-03-20', aliases: ['gpt-fam'] }]]) {
+      const first = familyMerge(committed, page)
+      strictAssert.deepEqual(byId(first), newestKeeps, JSON.stringify(committed))
+      strictAssert.deepEqual(familyMerge(first.feed.models, page).feed.models, first.feed.models)
+    }
   }
+})
+reviewTest('Family alias: two snapshot rows with different lifecycles date the alias from the earliest shutdown, and a tie fails closed', () => {
+  const committed = [{ id: 'gpt-fam-2025-03-20' }, { id: 'gpt-fam-2025-12-15' }, { id: 'gpt-fam' }]
+  const early = ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')]
+  const late = ['Jun 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')]
+  for (const rows of [[early, late], [late, early]]) {
+    const merged = familyMerge(committed, familyPage(...rows))
+    strictAssert.deepEqual(Object.fromEntries(merged.feed.models.map(model => [model.id, familyLifecycle(model)])), {
+      'gpt-fam-2025-03-20': familyDated, 'gpt-fam-2025-12-15': ['2026-10-01', '2027-06-01', 'gpt-next', PROVIDERS.openai.deprecationsUrl, undefined], 'gpt-fam': familyDated,
+    })
+  }
+  strictAssert.throws(() => familyMerge(committed, familyPage(early, ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15'), 'gpt-other-next'])), /family alias gpt-fam different lifecycles with no single earliest shutdown/)
 })
 reviewTest('Family alias: fails closed when the alias has its own row with a different lifecycle, in either order', () => {
   const committed = [{ id: 'gpt-fam-2026-03-17' }, { id: 'gpt-fam' }]
@@ -3694,6 +3710,201 @@ reviewTest('PR 128 late review: alias rows that differ only in a note or option 
     deprecations: [{ id: 'claude-x-20250514', ...base }, { id: 'claude-x', ...base, shutdown: '2027-06-01' }],
     currentIds: null, provider: PROVIDERS.anthropic, notice: () => {},
   }), /conflicting lifecycles/)
+})
+const splitEarly = ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-01-01')]
+const splitLate = ['Jun 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-06-01')]
+const splitEarliest = ['Jan 1, 2027', familyCell('gpt-fam', 'gpt-fam-2024-11-01')]
+const splitShape = merged => merged.feed.models.map(model => [model.id, model.shutdown, model.aliases]).sort(([a], [b]) => a.localeCompare(b))
+const splitExpected = [['gpt-fam-2025-01-01', '2027-04-01', ['gpt-fam']], ['gpt-fam-2025-06-01', '2027-06-01', undefined]]
+reviewTest('Issue 135: two new snapshots sharing an alias with different shutdowns stay separate and the earliest keeps the alias, in either order', () => {
+  for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+    strictAssert.deepEqual(splitShape(familyMerge([], familyPage(...rows))), splitExpected)
+  }
+})
+reviewTest('Issue 135: merging the split result again with the same page changes nothing, in either order', () => {
+  for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+    const page = familyPage(...rows)
+    const first = familyMerge([], page)
+    const second = familyMerge(first.feed.models, page)
+    strictAssert.deepEqual(second.feed.models, first.feed.models)
+    strictAssert.equal(compareFeeds(first.feed, second.feed).changed, false)
+    strictAssert.deepEqual(second.unconfirmedIds, [])
+  }
+})
+reviewTest('Issue 135: a committed alias stays with the earliest snapshot when a later one joins, and moves when an earlier one joins', () => {
+  const committed = [{ id: 'gpt-fam-2025-01-01', aliases: ['gpt-fam'] }]
+  for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+    strictAssert.deepEqual(splitShape(familyMerge(committed, familyPage(...rows))), splitExpected)
+  }
+  const twoRows = familyMerge([], familyPage(splitEarly, splitLate))
+  for (const rows of [[splitEarly, splitLate, splitEarliest], [splitEarliest, splitLate, splitEarly]]) {
+    const notices = []
+    const page = familyPage(...rows)
+    const moved = familyMerge(twoRows.feed.models, page, { notice: message => notices.push(message) })
+    strictAssert.deepEqual(splitShape(moved), [['gpt-fam-2024-11-01', '2027-01-01', ['gpt-fam']], ...splitExpected.map(([id, shutdown]) => [id, shutdown, undefined])])
+    strictAssert.deepEqual(notices, ['notice: openai alias gpt-fam moved from gpt-fam-2025-01-01 to gpt-fam-2024-11-01'])
+    const diff = compareFeeds(twoRows.feed, moved.feed)
+    strictAssert.deepEqual(diff.aliasChanges, [{ id: 'gpt-fam-2025-01-01', added: [], removed: ['gpt-fam'] }])
+    strictAssert.deepEqual(diff.added.map(model => [model.id, model.aliases]), [['gpt-fam-2024-11-01', ['gpt-fam']]])
+    strictAssert.deepEqual(familyMerge(moved.feed.models, page).feed.models, moved.feed.models)
+  }
+})
+reviewTest('Issue 135: the alias\'s own row beside snapshot rows with different shutdowns fails closed, in every order', () => {
+  const permutations = items => items.length < 2 ? [items] : items.flatMap((item, index) => permutations(items.filter((_, other) => other !== index)).map(rest => [item, ...rest]))
+  for (const shutdown of ['Apr 1, 2027', 'Jun 1, 2027']) {
+    for (const rows of permutations([splitEarly, splitLate, [shutdown, familyCell('gpt-fam')]])) {
+      strictAssert.throws(() => familyMerge([], familyPage(...rows)), /share their family alias gpt-fam beside its own row/, rows.map(row => row[1]).join(' / '))
+    }
+  }
+})
+reviewTest('Issue 135: snapshot rows that tie on the earliest shutdown with different lifecycles fail closed', () => {
+  const tied = ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-01'), 'gpt-other-next']
+  for (const rows of [[splitEarly, tied], [tied, splitEarly], [splitEarly, splitLate, ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-01')]]]) {
+    strictAssert.throws(() => familyMerge([], familyPage(...rows)), /family alias gpt-fam different lifecycles with no single earliest shutdown/)
+  }
+})
+const splitLateDated = ['2026-10-01', '2027-06-01', 'gpt-next', PROVIDERS.openai.deprecationsUrl, undefined]
+reviewTest('Issue 135 round 2: a committed alias takes the earliest snapshot row\'s lifecycle in either order, and a second run changes nothing', () => {
+  for (const committed of [[{ id: 'gpt-fam' }], [{ id: 'gpt-fam-2025-06-01' }, { id: 'gpt-fam' }, { id: 'gpt-fam-2025-01-01' }]]) {
+    for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+      const page = familyPage(...rows)
+      const first = familyMerge(committed, page)
+      strictAssert.deepEqual(Object.fromEntries(first.feed.models.map(model => [model.id, familyLifecycle(model)])), { 'gpt-fam': familyDated, 'gpt-fam-2025-01-01': familyDated, 'gpt-fam-2025-06-01': splitLateDated })
+      const second = familyMerge(first.feed.models, page)
+      strictAssert.deepEqual(second.feed.models, first.feed.models)
+      strictAssert.equal(compareFeeds(first.feed, second.feed).changed, false)
+      strictAssert.deepEqual(second.unconfirmedIds, [])
+    }
+  }
+})
+reviewTest('Issue 135 round 2: a committed alias\'s own row may match the earliest snapshot row, but a disagreeing own row or a repointing row still fails closed', () => {
+  const permutations = items => items.length < 2 ? [items] : items.flatMap((item, index) => permutations(items.filter((_, other) => other !== index)).map(rest => [item, ...rest]))
+  for (const rows of permutations([splitEarly, splitLate, ['Apr 1, 2027', familyCell('gpt-fam')]])) {
+    strictAssert.deepEqual(familyLifecycle(familyMerge([{ id: 'gpt-fam' }], familyPage(...rows)).feed.models.find(model => model.id === 'gpt-fam')), familyDated)
+  }
+  for (const rows of permutations([splitEarly, splitLate, ['Jun 1, 2027', familyCell('gpt-fam')]])) {
+    strictAssert.throws(() => familyMerge([{ id: 'gpt-fam' }], familyPage(...rows)), /gpt-fam conflicting lifecycles/)
+  }
+  for (const rows of [[splitEarly, [...splitLate.slice(0, 2), 'gpt-fam']], [[...splitLate.slice(0, 2), 'gpt-fam'], splitEarly]]) {
+    strictAssert.throws(() => familyMerge([{ id: 'gpt-fam' }], familyPage(...rows)), /names its family alias gpt-fam as the replacement/)
+  }
+})
+reviewTest('Issue 135 round 2: a row that would fold in an entry dated earlier in the run through an alias with a different lifecycle fails closed', () => {
+  const chat = ['Jul 1, 2027', familyCell('gpt-fam-chat', 'gpt-fam')]
+  const monthDay = [['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0101')], ['Jun 1, 2027', familyCell('gpt-md', 'gpt-md-0601')]]
+  for (const rows of [[splitEarly, splitLate, chat], [chat, splitEarly, splitLate], monthDay, [...monthDay].reverse()]) {
+    strictAssert.throws(() => familyMerge([], familyPage(...rows)), /would join gpt-\S+ through alias gpt-(?:fam|md) with a different lifecycle/, rows.map(row => row[1]).join(' / '))
+  }
+  const mistralRows = ['2027-04-01', '2027-06-01'].map((shutdown, index) => ({ id: `mistral-fam-250${index + 1}`, aliases: ['mistral-fam-latest'], announced: '2026-10-01', shutdown }))
+  strictAssert.throws(() => mergeFeed({ spec: 'model-eol/0.1', publisher: 'mistral', models: [] }, { deprecations: mistralRows, currentIds: null, provider: PROVIDERS.mistral, notice: () => {} }), /would join mistral-fam-2501 through alias mistral-fam-latest/)
+  const sameLifecycle = familyMerge([], familyPage(['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0101')], ['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0601')]))
+  strictAssert.deepEqual(splitShape(sameLifecycle), [['gpt-md-0601', '2027-04-01', ['gpt-md-0101', 'gpt-md']]])
+})
+const repointing = (row, replacement) => [row[0], row[1], replacement]
+reviewTest('Issue 135 round 3: any snapshot row that repoints its family alias stops the run, whether or not the alias is committed', () => {
+  for (const committed of [[], [{ id: 'gpt-fam' }]]) {
+    for (const rows of [
+      [repointing(splitEarly, 'gpt-fam-2025-06-01'), splitLate], [splitLate, repointing(splitEarly, 'gpt-fam-2025-06-01')],
+      [repointing(splitEarly, 'gpt-fam'), splitLate], [splitEarly, repointing(splitLate, 'gpt-fam')], [splitEarly, repointing(splitLate, 'gpt-fam-2025-01-01')],
+      [repointing(splitEarly, 'gpt-fam')], [repointing(splitEarly, 'gpt-fam-2025-06-01')],
+    ]) {
+      strictAssert.throws(() => familyMerge(committed, familyPage(...rows)), /names its family alias gpt-fam as the replacement/, `${JSON.stringify(committed)} ${rows.map(row => row[2] ?? 'gpt-next').join(' / ')}`)
+    }
+  }
+})
+reviewTest('Issue 135 round 3: an OpenAI dated snapshot never folds into another entry or takes one in, in either order', () => {
+  const sameLifecycle = (cell, page = familyPage) => [page(splitEarly, ['Apr 1, 2027', cell]), page(['Apr 1, 2027', cell], splitEarly)]
+  for (const page of [...sameLifecycle(familyCell('gpt-fam-chat', 'gpt-fam')), ...sameLifecycle(familyCell('gpt-fam', 'gpt-fam-mini-2025-06-01'))]) {
+    strictAssert.throws(() => familyMerge([], page), /an OpenAI dated snapshot is always its own entry/)
+  }
+  const oldFold = [{ id: 'gpt-fam-2025-06-01', aliases: ['gpt-fam-2025-01-01', 'gpt-fam'] }]
+  for (const rows of [[splitEarly, ['Apr 1, 2027', splitLate[1]]], [['Apr 1, 2027', splitLate[1]], splitEarly]]) {
+    strictAssert.throws(() => familyMerge(oldFold, familyPage(...rows)), /OpenAI snapshot gpt-fam-2025-01-01 reaches gpt-fam-2025-06-01 through an alias/)
+  }
+})
+reviewTest('Issue 135 round 3: a committed split whose snapshots converge on one lifecycle moves the alias to the newest snapshot, in either order, and a second run changes nothing', () => {
+  const split = [{ id: 'gpt-fam-2025-01-01', aliases: ['gpt-fam'] }, { id: 'gpt-fam-2025-06-01' }]
+  for (const [shutdown, rows] of [['2027-06-01', [['Jun 1, 2027', splitEarly[1]], splitLate]], ['2027-04-01', [splitEarly, ['Apr 1, 2027', splitLate[1]]]]]) {
+    for (const order of [rows, [...rows].reverse()]) {
+      const notices = []
+      const page = familyPage(...order)
+      const first = familyMerge(split, page, { notice: message => notices.push(message) })
+      strictAssert.deepEqual(splitShape(first), [['gpt-fam-2025-01-01', shutdown, undefined], ['gpt-fam-2025-06-01', shutdown, ['gpt-fam']]])
+      strictAssert.deepEqual(notices, ['notice: openai alias gpt-fam moved from gpt-fam-2025-01-01 to gpt-fam-2025-06-01'])
+      strictAssert.deepEqual(familyMerge(first.feed.models, page).feed.models, first.feed.models)
+    }
+  }
+  const committedAlias = familyMerge([{ id: 'gpt-fam' }], familyPage(splitEarly, splitLate)).feed.models
+  for (const rows of [[['Jun 1, 2027', splitEarly[1]], splitLate], [splitLate, ['Jun 1, 2027', splitEarly[1]]]]) {
+    const first = familyMerge(committedAlias, familyPage(...rows))
+    strictAssert.deepEqual(first.feed.models.map(model => [model.id, model.shutdown]).sort(), [['gpt-fam', '2027-06-01'], ['gpt-fam-2025-01-01', '2027-06-01'], ['gpt-fam-2025-06-01', '2027-06-01']])
+    strictAssert.deepEqual(familyMerge(first.feed.models, familyPage(...rows)).feed.models, first.feed.models)
+  }
+})
+reviewTest('Issue 135 round 3: only rows that list the alias join its group, and the models endpoint confirms a split', () => {
+  const lateAlone = ['Apr 1, 2027', familyCell('gpt-fam-2025-06-01')]
+  for (const rows of [[splitEarly, lateAlone], [lateAlone, splitEarly], [splitEarly, [...lateAlone, 'gpt-other']]]) {
+    strictAssert.deepEqual(splitShape(familyMerge([], familyPage(...rows))), [['gpt-fam-2025-01-01', '2027-04-01', ['gpt-fam']], ['gpt-fam-2025-06-01', '2027-04-01', undefined]])
+  }
+  const currentIds = ['gpt-fam', 'gpt-fam-2025-01-01', 'gpt-fam-2025-06-01']
+  for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+    const first = familyMerge([], familyPage(...rows), { currentIds })
+    strictAssert.deepEqual(splitShape(first), splitExpected)
+    const second = familyMerge(first.feed.models, familyPage(...rows), { currentIds })
+    strictAssert.deepEqual(second.feed.models, first.feed.models)
+    strictAssert.deepEqual(second.unconfirmedIds, [])
+  }
+})
+reviewTest('Issue 135 round 3: the same-run fold check compares the whole lifecycle and covers entries dated through an alias', () => {
+  const pages = [
+    familyPage(['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0101')], ['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0601'), 'gpt-other']),
+    familyTable('2026-09-01: Earlier', 'Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0101')) + familyTable('2026-10-01: Later', 'Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0601')),
+    familyPage(['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0101')], ['Apr 1, 2027', familyCell('gpt-md')], ['Jun 1, 2027', familyCell('gpt-md', 'gpt-md-0601')]),
+  ]
+  for (const page of pages) strictAssert.throws(() => familyMerge([], page), /would join gpt-md-0101 through alias gpt-md with a different lifecycle/)
+})
+reviewTest('Issue 135 late pass: one snapshot row beside its uncommitted alias\'s own row gives the same result in either order', () => {
+  const own = ['Apr 1, 2027', familyCell('gpt-fam')]
+  for (const models of [[], [{ id: 'gpt-fam-2025-01-01' }]]) {
+    for (const rows of [[splitEarly, own], [own, splitEarly]]) {
+      const first = familyMerge(models, familyPage(...rows))
+      strictAssert.deepEqual(splitShape(first), [['gpt-fam-2025-01-01', '2027-04-01', ['gpt-fam']]])
+      strictAssert.deepEqual(familyMerge(first.feed.models, familyPage(...rows)).feed.models, first.feed.models)
+    }
+    for (const rows of [[splitEarly, ['Jun 1, 2027', familyCell('gpt-fam')]], [['Jun 1, 2027', familyCell('gpt-fam')], splitEarly]]) {
+      strictAssert.throws(() => familyMerge(models, familyPage(...rows)), /conflicting lifecycles/)
+    }
+  }
+  for (const rows of [[splitEarly, own], [own, splitEarly]]) {
+    strictAssert.deepEqual(familyMerge([{ id: 'gpt-fam' }], familyPage(...rows)).feed.models.map(model => [model.id, model.shutdown]).sort(), [['gpt-fam', '2027-04-01'], ['gpt-fam-2025-01-01', '2027-04-01']])
+  }
+})
+reviewTest('Issue 135 late pass: an ID that only contains a date is not a dated snapshot, so same-lifecycle rows still merge it', () => {
+  const preview = ['Apr 1, 2027', familyCell('gpt-fam-2025-01-01-preview', 'gpt-fam-pre')]
+  const chat = ['Apr 1, 2027', familyCell('gpt-fam-pre-chat', 'gpt-fam-pre')]
+  for (const rows of [[preview, chat], [chat, preview]]) {
+    const ids = familyMerge([], familyPage(...rows)).feed.models.map(model => [model.id, ...(model.aliases ?? [])].sort())
+    strictAssert.equal(ids.length, 1)
+    strictAssert.deepEqual(ids[0], ['gpt-fam-2025-01-01-preview', 'gpt-fam-pre', 'gpt-fam-pre-chat'])
+  }
+})
+const anthropicAnnouncement = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-y-20250101</code></td><td><code>claude-next</code></td></tr></table>'
+const anthropicStatusRows = rows => `<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>${rows.map(cells => `<tr>${cells.map((cell, index) => `<td>${index ? cell : `<code>${cell}</code>`}</td>`).join('')}</tr>`).join('')}</table>`
+const anthropicAliasMerge = (html, reverse = false, models = [{ id: 'claude-y-20250101', aliases: ['claude-y'] }]) => {
+  const deprecations = parseAnthropicDeprecations(html)
+  return mergeFeed({ spec: 'model-eol/0.1', publisher: 'anthropic', models }, { deprecations: reverse ? deprecations.reverse() : deprecations, currentIds: null, provider: PROVIDERS.anthropic, notice: () => {} })
+}
+reviewTest('Issue 135 round 3: an Anthropic status row reaching an entry through an alias follows the rules for naming it directly, in either order', () => {
+  for (const reverse of [false, true]) {
+    strictAssert.throws(() => anthropicAliasMerge(anthropicAnnouncement + anthropicStatusRows([['claude-y', 'Active', 'N/A', 'Not sooner than September 1, 2027']]), reverse), /status row claude-y conflicts with announcement: status state Active/)
+    strictAssert.throws(() => anthropicAliasMerge(anthropicAnnouncement + anthropicStatusRows([['claude-y', 'Deprecated', 'March 1, 2026', 'June 1, 2027']]), reverse), /status row claude-y conflicts with announcement: status deprecated 2026-03-01/)
+    strictAssert.throws(() => anthropicAliasMerge(anthropicStatusRows([['claude-y', 'Deprecated', 'March 1, 2026', 'June 1, 2027'], ['claude-y-20250101', 'Active', 'N/A', 'Not sooner than September 1, 2027']]), reverse), /status rows give claude-y-20250101 conflicting lifecycles via claude-y/)
+    strictAssert.throws(() => anthropicAliasMerge(anthropicStatusRows([['claude-y', 'Deprecated', 'January 1, 2026', 'January 1, 2027'], ['claude-y-20250101', 'Deprecated', 'January 1, 2026', 'June 1, 2027']]), reverse), /status rows give claude-y-20250101 conflicting lifecycles/)
+    const html = anthropicAnnouncement + anthropicStatusRows([['claude-y', 'Deprecated', 'January 1, 2026', 'January 1, 2027']])
+    const first = anthropicAliasMerge(html, reverse)
+    strictAssert.deepEqual(first.feed.models, anthropicAliasMerge(anthropicAnnouncement + anthropicStatusRows([['claude-other', 'Active', 'N/A', 'N/A']])).feed.models.filter(model => model.id === 'claude-y-20250101'))
+    strictAssert.deepEqual(anthropicAliasMerge(html, reverse, first.feed.models).feed.models, first.feed.models)
+  }
 })
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')

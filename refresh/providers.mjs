@@ -1695,9 +1695,11 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     index = identityIndex(models)
     return model
   }
+  const datedSnapshot = id => provider.publisher === 'openai' && /-(?:19|20)\d{2}-\d{2}-\d{2}$/.test(id ?? '')
   const absorb = (target, other, aliases) => {
     if (target === other) return
     if (committedIds.has(other.id)) throw new Error(`deprecation alias for ${target.id} conflicts with canonical model id ${other.id}`)
+    if (datedSnapshot(target.id) || datedSnapshot(other.id)) throw new Error(`deprecation rows would fold ${other.id} into ${target.id}, but an OpenAI dated snapshot is always its own entry`)
     aliases.add(other.id)
     for (const alias of other.aliases ?? []) aliases.add(alias)
     const metadata = new Set(['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note', 'source'])
@@ -1729,29 +1731,66 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     }
     lifecycleApplied.set(model, { key: lifecycleKey(record), indirect: indirect || previous?.indirect, recordId: record.id })
   }
-  const familyAliasOf = (snapshot, alias) => provider.publisher === 'openai'
-    && /-(?:19|20)\d{2}-\d{2}-\d{2}$/.test(snapshot) && snapshot.slice(0, -11) === alias
-
+  const familyAliasOf = (snapshot, alias) => datedSnapshot(snapshot) && snapshot.slice(0, -11) === alias
+  const familyRows = new Map()
   for (const record of deprecations) {
+    const alias = record.id?.slice(0, -11)
+    if (!familyAliasOf(record.id, alias) || !(record.aliases ?? []).includes(alias)) continue
+    if ([record.replacement, ...(record.replacement_options ?? [])].some(token => token === alias || familyAliasOf(token, alias))) {
+      throw new Error(`deprecation row for ${record.id} names its family alias ${alias} as the replacement`)
+    }
+    familyRows.set(alias, [...(familyRows.get(alias) ?? []), record])
+  }
+  // A family alias shared by snapshot rows follows the earliest shutdown, or the newest snapshot when the lifecycles agree.
+  const splitAliases = new Map()
+  for (const [alias, rows] of familyRows) {
+    if (rows.length < 2) continue
+    const ids = rows.map(row => row.id).join(', ')
+    if (!committedIds.has(alias) && deprecations.some(record => record.id === alias)) throw new Error(`deprecation rows for ${ids} share their family alias ${alias} beside its own row`)
+    let owner = rows.reduce((newest, row) => row.id > newest.id ? row : newest)
+    if (new Set(rows.map(lifecycleKey)).size > 1) {
+      const first = rows.reduce((min, row) => row.shutdown < min ? row.shutdown : min, rows[0].shutdown)
+      const earliest = rows.filter(row => row.shutdown === first)
+      if (!first || earliest.length !== 1) throw new Error(`deprecation rows for ${ids} give their family alias ${alias} different lifecycles with no single earliest shutdown`)
+      owner = earliest[0]
+    }
+    splitAliases.set(alias, { owner: owner.id, members: new Set(rows.map(row => row.id)) })
+  }
+  const anthropicApplied = new Map()
+  // An uncommitted family alias's own row merges after its snapshot row, so row order cannot decide whether it is an alias.
+  const mergeOrder = [...deprecations].sort((a, b) => Number(familyRows.has(a.id) && !committedIds.has(a.id)) - Number(familyRows.has(b.id) && !committedIds.has(b.id)))
+
+  for (const record of mergeOrder) {
     let target = locate(record.id)
     if (!target) target = add({ id: record.id })
+    if (target.id !== record.id && datedSnapshot(record.id)) {
+      throw new Error(`deprecation row for OpenAI snapshot ${record.id} reaches ${target.id} through an alias, but a dated snapshot is always its own entry`)
+    }
 
     const canonicalId = target.id
     const aliases = new Set(target.aliases ?? [])
     const familyAliases = []
     for (const alias of [record.id, ...(record.aliases ?? [])]) {
       if (!alias || alias === canonicalId) continue
+      const split = splitAliases.get(alias)
+      if (split?.members.has(record.id) && split.owner !== record.id) continue
       const owner = locate(alias)
+      if (split?.owner === record.id && owner && owner !== target && split.members.has(owner.id)) {
+        owner.aliases = owner.aliases.filter(value => value !== alias)
+        if (!owner.aliases.length) delete owner.aliases
+        notice(`notice: ${provider.publisher} alias ${alias} moved from ${owner.id} to ${target.id}`)
+        aliases.add(alias)
+        continue
+      }
       if (owner && owner !== target && owner.id === alias && familyAliasOf(record.id, alias)) {
-        const repointsAlias = token => token === alias || (token?.startsWith(`${alias}-`) && familyAliasOf(token, alias))
-        if ([record.replacement, ...(record.replacement_options ?? [])].some(repointsAlias)) {
-          throw new Error(`deprecation row for ${record.id} names its family alias ${alias} as the replacement`)
-        }
         familyAliases.push(owner)
         continue
       }
       if (committedIds.has(alias) || (owner && owner !== target && owner.id === alias)) {
         throw new Error(`deprecation alias ${alias} for ${canonicalId} conflicts with a canonical model id`)
+      }
+      if (owner && owner !== target && lifecycleApplied.has(owner) && lifecycleApplied.get(owner).key !== lifecycleKey(record)) {
+        throw new Error(`deprecation row for ${record.id} would join ${owner.id} through alias ${alias} with a different lifecycle`)
       }
       if (owner && owner !== target) absorb(target, owner, aliases)
       aliases.add(alias)
@@ -1759,15 +1798,23 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     const anthropicStatus = provider.publisher === 'anthropic'
       ? anthropicStatusStates.get(record)
       : undefined
+    const anthropicPrior = anthropicApplied.get(target)
     if (anthropicStatus) {
-      if (anthropicStatus === 'active') {
-        for (const field of ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']) delete target[field]
-        if (record.shutdown !== undefined) target.shutdown = record.shutdown
-        if (record.date_precision !== undefined) target.date_precision = record.date_precision
-      } else {
-        for (const field of ['announced', 'shutdown', 'date_precision']) delete target[field]
-        target.announced = record.announced
-        if (record.shutdown !== undefined) target.shutdown = record.shutdown
+      // Rows reaching one entry follow the parser's rules for a status row and an announcement naming the same id.
+      if (anthropicPrior?.announcement) assertAnthropicStatusMatchesAnnouncement(record.id, anthropicStatus, record, anthropicPrior.announcement)
+      else if (anthropicPrior && ['state', 'announced', 'shutdown', 'date_precision'].some(field => (field === 'state' ? anthropicStatus : record[field]) !== anthropicPrior[field])) {
+        throw new Error(`anthropic model status rows give ${target.id} conflicting lifecycles via ${anthropicPrior.recordId} and ${record.id}`)
+      } else if (!anthropicPrior) {
+        anthropicApplied.set(target, { recordId: record.id, state: anthropicStatus, announced: record.announced, shutdown: record.shutdown, date_precision: record.date_precision })
+        if (anthropicStatus === 'active') {
+          for (const field of ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']) delete target[field]
+          if (record.shutdown !== undefined) target.shutdown = record.shutdown
+          if (record.date_precision !== undefined) target.date_precision = record.date_precision
+        } else {
+          for (const field of ['announced', 'shutdown', 'date_precision']) delete target[field]
+          target.announced = record.announced
+          if (record.shutdown !== undefined) target.shutdown = record.shutdown
+        }
       }
       if (target.source === undefined && record.source !== undefined) target.source = record.source
       if (aliases.size) target.aliases = [...aliases].filter(alias => alias !== canonicalId)
@@ -1776,6 +1823,10 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
       deprecationConfirmed.add(target.id)
       index = identityIndex(models)
       continue
+    }
+    if (provider.publisher === 'anthropic') {
+      if (anthropicPrior?.state) assertAnthropicStatusMatchesAnnouncement(anthropicPrior.recordId, anthropicPrior.state, anthropicPrior, record)
+      anthropicApplied.set(target, { announcement: record })
     }
     for (const field of ['announced', 'shutdown', 'date_precision', 'replacement', 'replacement_options', 'replacement_note']) delete target[field]
     Object.assign(target, clone(record), { id: canonicalId })
