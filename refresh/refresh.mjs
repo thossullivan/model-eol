@@ -16,7 +16,7 @@ import {
   loadProviderSources,
   mergeFeed,
 } from './providers.mjs'
-import { validateFeed } from '../lib/validate-feed.mjs'
+import { assertValidFeedDocument } from '../lib/validate-document.mjs'
 
 const THIS_FILE = fileURLToPath(import.meta.url)
 const ROOT = path.join(path.dirname(THIS_FILE), '..')
@@ -93,7 +93,14 @@ function readCommitted(provider) {
 }
 
 export function validateGeneratedFeeds(generated) {
-  const failures = generated.flatMap(item => validateFeed(item.feed).map(error => `${item.provider.feedFile}: ${error.path}: ${error.message}`))
+  const failures = generated.flatMap(item => {
+    try {
+      assertValidFeedDocument(item.feed, item.provider.feedFile)
+      return []
+    } catch (error) {
+      return [error.message]
+    }
+  })
   if (failures.length) throw new Error(`generated feed validation failed:\n${failures.join('\n')}`)
 }
 

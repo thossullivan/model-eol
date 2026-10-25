@@ -600,6 +600,21 @@ try {
   const missing = run(['validate', path.join(tempRoot, 'missing.json')])
   assert.equal(missing.code, 2, 'an unreadable document exits 2')
   assert.match(missing.err, /could not read/, 'an unreadable document names the read failure')
+
+  const validatorTree = path.join(tempRoot, 'validate-feeds-tree')
+  for (const directory of ['lib', 'schema']) fs.cpSync(path.join(root, directory), path.join(validatorTree, directory), { recursive: true })
+  fs.mkdirSync(path.join(validatorTree, 'scripts'))
+  fs.copyFileSync(path.join(root, 'scripts/validate-feeds.mjs'), path.join(validatorTree, 'scripts/validate-feeds.mjs'))
+  fs.mkdirSync(path.join(validatorTree, 'feeds'))
+  fs.writeFileSync(path.join(validatorTree, 'feeds/schema-only.json'), JSON.stringify({
+    spec: 'model-eol/0.1',
+    publisher: 'test',
+    generated: '2026-08-01T00:00:00Z',
+    models: [{ id: 'schema-only-script-model', notes: 5 }],
+  }))
+  const schemaOnlyScript = spawnSync(process.execPath, [path.join(validatorTree, 'scripts/validate-feeds.mjs')], { encoding: 'utf8' })
+  assert.equal(schemaOnlyScript.status, 1, 'validate-feeds fails on a feed only the schema rejects')
+  assert.match(schemaOnlyScript.stderr, /schema-only\.json model schema-only-script-model: models\[0\]\.notes: must be string/, 'validate-feeds names the schema failure')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }
