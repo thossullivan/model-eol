@@ -1731,6 +1731,23 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
   }
   const familyAliasOf = (snapshot, alias) => provider.publisher === 'openai'
     && /-(?:19|20)\d{2}-\d{2}-\d{2}$/.test(snapshot) && snapshot.slice(0, -11) === alias
+  const familyRows = new Map()
+  for (const record of deprecations) {
+    const alias = record.id?.slice(0, -11)
+    if (familyAliasOf(record.id, alias) && (record.aliases ?? []).includes(alias)) familyRows.set(alias, [...(familyRows.get(alias) ?? []), record])
+  }
+  // A family alias shared by snapshot rows with different lifecycles follows the earliest shutdown alone.
+  const splitAliases = new Map()
+  for (const [alias, rows] of familyRows) {
+    if (rows.length < 2 || new Set(rows.map(lifecycleKey)).size < 2) continue
+    const ids = rows.map(row => row.id).join(', ')
+    const committedAlias = committedIds.has(alias)
+    if (!committedAlias && deprecations.some(record => record.id === alias)) throw new Error(`deprecation rows for ${ids} give their family alias ${alias} different lifecycles beside its own row`)
+    const first = rows.reduce((min, row) => row.shutdown < min ? row.shutdown : min, rows[0].shutdown)
+    const earliest = rows.filter(row => row.shutdown === first)
+    if (!first || earliest.length !== 1) throw new Error(`deprecation rows for ${ids} give their family alias ${alias} different lifecycles with no single earliest shutdown`)
+    splitAliases.set(alias, { owner: earliest[0].id, members: new Set(rows.map(row => row.id)), committedAlias })
+  }
 
   for (const record of deprecations) {
     let target = locate(record.id)
@@ -1741,17 +1758,29 @@ export function mergeFeed(committed, { deprecations = [], currentIds = null, cur
     const familyAliases = []
     for (const alias of [record.id, ...(record.aliases ?? [])]) {
       if (!alias || alias === canonicalId) continue
+      const split = splitAliases.get(alias)
+      if (split?.members.has(record.id) && split.owner !== record.id && !split.committedAlias) continue
       const owner = locate(alias)
+      if (split?.owner === record.id && owner && owner !== target && split.members.has(owner.id)) {
+        owner.aliases = owner.aliases.filter(value => value !== alias)
+        if (!owner.aliases.length) delete owner.aliases
+        notice(`notice: ${provider.publisher} alias ${alias} moved from ${owner.id} to ${target.id}`)
+        aliases.add(alias)
+        continue
+      }
       if (owner && owner !== target && owner.id === alias && familyAliasOf(record.id, alias)) {
         const repointsAlias = token => token === alias || (token?.startsWith(`${alias}-`) && familyAliasOf(token, alias))
         if ([record.replacement, ...(record.replacement_options ?? [])].some(repointsAlias)) {
           throw new Error(`deprecation row for ${record.id} names its family alias ${alias} as the replacement`)
         }
-        familyAliases.push(owner)
+        if (!split || split.owner === record.id) familyAliases.push(owner)
         continue
       }
       if (committedIds.has(alias) || (owner && owner !== target && owner.id === alias)) {
         throw new Error(`deprecation alias ${alias} for ${canonicalId} conflicts with a canonical model id`)
+      }
+      if (owner && owner !== target && lifecycleApplied.has(owner) && lifecycleApplied.get(owner).key !== lifecycleKey(record)) {
+        throw new Error(`deprecation row for ${record.id} would join ${owner.id} through alias ${alias} with a different lifecycle`)
       }
       if (owner && owner !== target) absorb(target, owner, aliases)
       aliases.add(alias)

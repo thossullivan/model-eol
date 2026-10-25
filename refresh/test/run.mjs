@@ -3597,12 +3597,17 @@ reviewTest('Family alias: one alias listed with two snapshots on the same lifecy
   const merged = familyMerge([{ id: 'gpt-fam-2025-03-20' }, { id: 'gpt-fam-2025-12-15' }, { id: 'gpt-fam' }], page)
   for (const model of merged.feed.models) strictAssert.deepEqual(familyLifecycle(model), familyDated, model.id)
 })
-reviewTest('Family alias: fails closed when two snapshot rows give the alias different lifecycles', () => {
+reviewTest('Family alias: two snapshot rows with different lifecycles date the alias from the earliest shutdown, and a tie fails closed', () => {
   const committed = [{ id: 'gpt-fam-2025-03-20' }, { id: 'gpt-fam-2025-12-15' }, { id: 'gpt-fam' }]
-  for (const rows of [[['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Jun 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')]],
-    [['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15'), 'gpt-other-next']]]) {
-    strictAssert.throws(() => familyMerge(committed, familyPage(...rows)), /gpt-fam conflicting lifecycles/)
+  const early = ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')]
+  const late = ['Jun 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')]
+  for (const rows of [[early, late], [late, early]]) {
+    const merged = familyMerge(committed, familyPage(...rows))
+    strictAssert.deepEqual(Object.fromEntries(merged.feed.models.map(model => [model.id, familyLifecycle(model)])), {
+      'gpt-fam-2025-03-20': familyDated, 'gpt-fam-2025-12-15': ['2026-10-01', '2027-06-01', 'gpt-next', PROVIDERS.openai.deprecationsUrl, undefined], 'gpt-fam': familyDated,
+    })
   }
+  strictAssert.throws(() => familyMerge(committed, familyPage(early, ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15'), 'gpt-other-next'])), /family alias gpt-fam different lifecycles with no single earliest shutdown/)
 })
 reviewTest('Family alias: fails closed when the alias has its own row with a different lifecycle, in either order', () => {
   const committed = [{ id: 'gpt-fam-2026-03-17' }, { id: 'gpt-fam' }]
@@ -3679,6 +3684,95 @@ reviewTest('PR 128 late review: alias rows that differ only in a note or option 
     deprecations: [{ id: 'claude-x-20250514', ...base }, { id: 'claude-x', ...base, shutdown: '2027-06-01' }],
     currentIds: null, provider: PROVIDERS.anthropic, notice: () => {},
   }), /conflicting lifecycles/)
+})
+const splitEarly = ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-01-01')]
+const splitLate = ['Jun 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-06-01')]
+const splitEarliest = ['Jan 1, 2027', familyCell('gpt-fam', 'gpt-fam-2024-11-01')]
+const splitShape = merged => merged.feed.models.map(model => [model.id, model.shutdown, model.aliases]).sort(([a], [b]) => a.localeCompare(b))
+const splitExpected = [['gpt-fam-2025-01-01', '2027-04-01', ['gpt-fam']], ['gpt-fam-2025-06-01', '2027-06-01', undefined]]
+reviewTest('Issue 135: two new snapshots sharing an alias with different shutdowns stay separate and the earliest keeps the alias, in either order', () => {
+  for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+    strictAssert.deepEqual(splitShape(familyMerge([], familyPage(...rows))), splitExpected)
+  }
+})
+reviewTest('Issue 135: merging the split result again with the same page changes nothing, in either order', () => {
+  for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+    const page = familyPage(...rows)
+    const first = familyMerge([], page)
+    const second = familyMerge(first.feed.models, page)
+    strictAssert.deepEqual(second.feed.models, first.feed.models)
+    strictAssert.equal(compareFeeds(first.feed, second.feed).changed, false)
+    strictAssert.deepEqual(second.unconfirmedIds, [])
+  }
+})
+reviewTest('Issue 135: a committed alias stays with the earliest snapshot when a later one joins, and moves when an earlier one joins', () => {
+  const committed = [{ id: 'gpt-fam-2025-01-01', aliases: ['gpt-fam'] }]
+  for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+    strictAssert.deepEqual(splitShape(familyMerge(committed, familyPage(...rows))), splitExpected)
+  }
+  const twoRows = familyMerge([], familyPage(splitEarly, splitLate))
+  for (const rows of [[splitEarly, splitLate, splitEarliest], [splitEarliest, splitLate, splitEarly]]) {
+    const notices = []
+    const page = familyPage(...rows)
+    const moved = familyMerge(twoRows.feed.models, page, { notice: message => notices.push(message) })
+    strictAssert.deepEqual(splitShape(moved), [['gpt-fam-2024-11-01', '2027-01-01', ['gpt-fam']], ...splitExpected.map(([id, shutdown]) => [id, shutdown, undefined])])
+    strictAssert.deepEqual(notices, ['notice: openai alias gpt-fam moved from gpt-fam-2025-01-01 to gpt-fam-2024-11-01'])
+    const diff = compareFeeds(twoRows.feed, moved.feed)
+    strictAssert.deepEqual(diff.aliasChanges, [{ id: 'gpt-fam-2025-01-01', added: [], removed: ['gpt-fam'] }])
+    strictAssert.deepEqual(diff.added.map(model => [model.id, model.aliases]), [['gpt-fam-2024-11-01', ['gpt-fam']]])
+    strictAssert.deepEqual(familyMerge(moved.feed.models, page).feed.models, moved.feed.models)
+  }
+})
+reviewTest('Issue 135: the alias\'s own row beside snapshot rows with different shutdowns fails closed, in every order', () => {
+  const permutations = items => items.length < 2 ? [items] : items.flatMap((item, index) => permutations(items.filter((_, other) => other !== index)).map(rest => [item, ...rest]))
+  for (const shutdown of ['Apr 1, 2027', 'Jun 1, 2027']) {
+    for (const rows of permutations([splitEarly, splitLate, [shutdown, familyCell('gpt-fam')]])) {
+      strictAssert.throws(() => familyMerge([], familyPage(...rows)), /family alias gpt-fam different lifecycles beside its own row/, rows.map(row => row[1]).join(' / '))
+    }
+  }
+})
+reviewTest('Issue 135: snapshot rows that tie on the earliest shutdown with different lifecycles fail closed', () => {
+  const tied = ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-01'), 'gpt-other-next']
+  for (const rows of [[splitEarly, tied], [tied, splitEarly], [splitEarly, splitLate, ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-01')]]]) {
+    strictAssert.throws(() => familyMerge([], familyPage(...rows)), /family alias gpt-fam different lifecycles with no single earliest shutdown/)
+  }
+})
+const splitLateDated = ['2026-10-01', '2027-06-01', 'gpt-next', PROVIDERS.openai.deprecationsUrl, undefined]
+reviewTest('Issue 135 round 2: a committed alias takes the earliest snapshot row\'s lifecycle in either order, and a second run changes nothing', () => {
+  for (const committed of [[{ id: 'gpt-fam' }], [{ id: 'gpt-fam-2025-06-01' }, { id: 'gpt-fam' }, { id: 'gpt-fam-2025-01-01' }]]) {
+    for (const rows of [[splitEarly, splitLate], [splitLate, splitEarly]]) {
+      const page = familyPage(...rows)
+      const first = familyMerge(committed, page)
+      strictAssert.deepEqual(Object.fromEntries(first.feed.models.map(model => [model.id, familyLifecycle(model)])), { 'gpt-fam': familyDated, 'gpt-fam-2025-01-01': familyDated, 'gpt-fam-2025-06-01': splitLateDated })
+      const second = familyMerge(first.feed.models, page)
+      strictAssert.deepEqual(second.feed.models, first.feed.models)
+      strictAssert.equal(compareFeeds(first.feed, second.feed).changed, false)
+      strictAssert.deepEqual(second.unconfirmedIds, [])
+    }
+  }
+})
+reviewTest('Issue 135 round 2: a committed alias\'s own row may match the earliest snapshot row, but a disagreeing own row or a repointing row still fails closed', () => {
+  const permutations = items => items.length < 2 ? [items] : items.flatMap((item, index) => permutations(items.filter((_, other) => other !== index)).map(rest => [item, ...rest]))
+  for (const rows of permutations([splitEarly, splitLate, ['Apr 1, 2027', familyCell('gpt-fam')]])) {
+    strictAssert.deepEqual(familyLifecycle(familyMerge([{ id: 'gpt-fam' }], familyPage(...rows)).feed.models.find(model => model.id === 'gpt-fam')), familyDated)
+  }
+  for (const rows of permutations([splitEarly, splitLate, ['Jun 1, 2027', familyCell('gpt-fam')]])) {
+    strictAssert.throws(() => familyMerge([{ id: 'gpt-fam' }], familyPage(...rows)), /gpt-fam conflicting lifecycles/)
+  }
+  for (const rows of [[splitEarly, [...splitLate.slice(0, 2), 'gpt-fam']], [[...splitLate.slice(0, 2), 'gpt-fam'], splitEarly]]) {
+    strictAssert.throws(() => familyMerge([{ id: 'gpt-fam' }], familyPage(...rows)), /names its family alias gpt-fam as the replacement/)
+  }
+})
+reviewTest('Issue 135 round 2: a row that would fold in an entry dated earlier in the run through an alias with a different lifecycle fails closed', () => {
+  const chat = ['Jul 1, 2027', familyCell('gpt-fam-chat', 'gpt-fam')]
+  const monthDay = [['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0101')], ['Jun 1, 2027', familyCell('gpt-md', 'gpt-md-0601')]]
+  for (const rows of [[splitEarly, splitLate, chat], [chat, splitEarly, splitLate], monthDay, [...monthDay].reverse()]) {
+    strictAssert.throws(() => familyMerge([], familyPage(...rows)), /would join gpt-\S+ through alias gpt-(?:fam|md) with a different lifecycle/, rows.map(row => row[1]).join(' / '))
+  }
+  const mistralRows = ['2027-04-01', '2027-06-01'].map((shutdown, index) => ({ id: `mistral-fam-250${index + 1}`, aliases: ['mistral-fam-latest'], announced: '2026-10-01', shutdown }))
+  strictAssert.throws(() => mergeFeed({ spec: 'model-eol/0.1', publisher: 'mistral', models: [] }, { deprecations: mistralRows, currentIds: null, provider: PROVIDERS.mistral, notice: () => {} }), /would join mistral-fam-2501 through alias mistral-fam-latest/)
+  const sameLifecycle = familyMerge([], familyPage(['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0101')], ['Apr 1, 2027', familyCell('gpt-md', 'gpt-md-0601')]))
+  strictAssert.deepEqual(splitShape(sameLifecycle), [['gpt-md-0601', '2027-04-01', ['gpt-md-0101', 'gpt-md']]])
 })
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
   const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
