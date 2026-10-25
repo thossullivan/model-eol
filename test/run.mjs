@@ -1173,6 +1173,7 @@ const schemaOnlyCases = [
   ['note', { ...schemaOnlyBase, note: 7, models: [{ id: 'schema-note-model' }] }, 'note'],
   ['replacement_note', { ...schemaOnlyBase, models: [{ id: 'schema-replacement-note-model', replacement_note: { x: 1 } }] }, 'models[0].replacement_note'],
   ['generated', { ...schemaOnlyBase, generated: '2026-08-01T24:00:00Z', models: [{ id: 'schema-generated-model' }] }, 'generated'],
+  ['source', { ...schemaOnlyBase, source: ' https://example.invalid/schema', models: [{ id: 'schema-source-model' }] }, 'source'],
 ]
 for (const [label, feed, field] of schemaOnlyCases) {
   const dir = path.join(tempRoot, `schema-only-${label}`)

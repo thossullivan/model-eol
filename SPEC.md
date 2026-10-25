@@ -155,8 +155,12 @@ A `via` is a non-empty string of at most 256 characters. A model may contain at
 most one distribution for each `via`. Duplicate channel records are ambiguous
 and fail validation. `via` values are compared exactly, so `aws-bedrock` and
 `AWS-Bedrock` are two different channels. `publisher` and `publisher-fallback`
-are reserved for the reference checker's own labels and aren't valid `via`
-values in any letter case.
+are reserved for the reference checker's own labels. A `via` is rejected when
+its lower-case form, by the Unicode default lowercase mapping (JavaScript's
+`toLowerCase()`), is one of those names. So `PUBLISHER` is rejected, and so is
+`publisher-fallbac` followed by the Kelvin sign (U+212A), which lowercases to
+`k`. `publiſher`, spelled with a long s (U+017F), is allowed, because ſ is
+already lower case and stays ſ.
 
 As for the model, a distribution's `shutdown` must not be earlier than its
 `announced`, and a dated distribution entry needs a `source`: its own, the
@@ -222,7 +226,8 @@ No string in a feed may contain a control character, U+0000 to U+001F or U+007F
 to U+009F. That includes newline and tab, so `notes`, `note`, and
 `replacement_note` are a single line of text.
 
-Lengths are counted in UTF-16 code units, the way JavaScript counts them:
+Lengths are counted in UTF-16 code units, the way JavaScript counts them, so a
+character outside the Basic Multilingual Plane, such as an emoji, counts as two:
 
 | Field | At most |
 |---|---|
@@ -248,13 +253,16 @@ ISO 8601 also allows forms such as `2026-07-25T00:00Z` (no seconds),
 ### URLs
 
 Every `source`, including `policy.source`, is an absolute `http` or `https`
-URL. The scheme can be in any letter case.
+URL, as parsed by the [WHATWG URL Standard](https://url.spec.whatwg.org/). The
+scheme can be in any letter case. The URL must start with its scheme, with no
+leading space.
 
 ### Rules the schema doesn't check
 
-The JSON Schema doesn't check these rules, because they compare one part of a
-feed with another, which Draft-07 can't express. Validation code checks them, in
-`model-eol validate` and when the reference tools load a feed:
+The JSON Schema doesn't check these rules, either because they compare one part
+of a feed with another or because Draft-07 can't express them portably.
+Validation code checks them, in `model-eol validate` and when the reference
+tools load a feed:
 
 - Each `id` and alias is unique within the feed. The schema catches only a
   repeated alias within one `aliases` list.
@@ -264,10 +272,23 @@ feed with another, which Draft-07 can't express. Validation code checks them, in
 - A model has at most one distribution entry for each `via`.
 - A dated entry has a `source`. A model can use its own or the feed's. A
   distribution entry can use its own, the model's, or the feed's.
+- `publisher` and `publisher-fallback` aren't valid `via` values, compared as
+  described under [`distributions`](#distributions).
+- A `source` parses as a URL under the WHATWG URL Standard. The schema checks
+  only the scheme. `https://example.com/a b` is valid, because the parser
+  encodes the space; `https://example.com:99999/` is not, because the port is
+  out of range.
+- Lengths count UTF-16 code units. JSON Schema's `maxLength` counts code points,
+  so a schema validator accepts some strings of astral characters, such as
+  emoji, that the code rejects.
 
-The JSON Schema covers the other rules. Patterns check the shape of dates and
-timestamps. Only `format` checks that a date is a real day, so `2026-02-30`
-passes a JSON Schema validator that skips `format`, as some do by default.
+The schema's own checks can also be looser in some validators. Patterns check
+the shape of dates and timestamps, but only `format` checks that a date is a
+real day, so `2026-02-30` passes a validator that skips `format`, as some do by
+default. In some regular expression engines, such as Python's and Java's, `$`
+also matches before a final newline, so those validators accept a value that
+ends in a newline. Where a JSON Schema validator and the reference validator
+disagree, the reference validator decides.
 
 ## Serving a feed
 
@@ -303,6 +324,8 @@ want to.
 
 - The checker reads every `.json` file in the feeds directory. Each file must
   be strict UTF-8 with no byte order mark, and must pass validation.
+- A feeds directory with no feed entries, including an empty one, stops the run
+  with exit code 2.
 - One invalid feed fails the whole run with exit code 2. The checker doesn't
   skip the feed and carry on.
 - An `id` or alias that appears in two feed files stops the run.
@@ -313,16 +336,19 @@ want to.
 
 ### Choosing the dates
 
-For each model it finds, the checker picks one set of dates:
+A channel can be requested with `--via`, with `via` in the config file, or with
+`via` in an `overrides` or `routes` entry for some paths. For each model it
+finds, the checker picks one set of dates:
 
-- With no `--via`, it uses the publisher's own dates. A result with a
+- With no channel requested, it uses the publisher's own dates. A result with a
   `shutdown` is labeled `publisher`; one without has `via: null`.
-- With `--via` and a distribution entry whose `via` matches exactly, it uses
-  that entry's dates and labels the result with the channel. It never mixes in
-  the publisher's dates.
-- With `--via` and no matching entry, it uses the publisher's dates and labels
-  the result `publisher-fallback`, but only when the publisher has a `shutdown`
-  or an `announced`. With neither, the result is `ok` with `via: null`.
+- With a channel requested and a distribution entry whose `via` matches it
+  exactly, it uses that entry's dates and labels the result with the channel.
+  It never mixes in the publisher's dates.
+- With a channel requested and no matching entry, it uses the publisher's dates
+  and labels the result `publisher-fallback`, but only when the publisher has a
+  `shutdown` or an `announced`. With neither, the result is `ok` with
+  `via: null`.
 
 ### Statuses
 
@@ -333,8 +359,9 @@ The first rule that matches sets the status:
 2. `scheduled` when the date is tentative. It stays `scheduled` after the date
    has passed.
 3. With a `shutdown`: `retired` once the date has passed, `retiring` when it is
-   no more than `--days` days away (90 by default), and `scheduled` when it is
-   further off. The shutdown day itself is `retiring` with 0 days left. Any
+   no more than `--days` days away (`days` in the config, 90 by default), and
+   `scheduled` when it is further off. The shutdown day itself is `retiring`
+   with 0 days left. Any
    `status` other than `retired` is ignored here, so a past `shutdown` is
    `retired` even with `status: active`.
 4. With no `shutdown`: `watch` when the chosen dates include `announced`,
@@ -345,7 +372,7 @@ them from failing.
 
 ### Notice policy
 
-The checker applies a feed's `policy` only when no `--via` is requested. A
+The checker applies a feed's `policy` only when no channel is requested. A
 model with neither `announced` nor `shutdown` then gets a `safe_until` of
 `min_notice_days` after the UTC date of `generated`. For a tentative date,
 `safe_until` is the later of the date and that floor. Distributor channels get

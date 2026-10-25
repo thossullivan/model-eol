@@ -7,8 +7,8 @@
   "required": ["spec", "publisher", "generated", "models"],
   "properties": {
     "spec": { "const": "model-eol/0.1" },
-    "publisher": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$" },
-    "generated": { "type": "string", "maxLength": 64, "format": "date-time", "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$" },
+    "publisher": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\u0000-\u001f\u007f-\u009f]*$" },
+    "generated": { "type": "string", "maxLength": 64, "format": "date-time", "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$" },
     "source": { "$ref": "#/definitions/url" },
     "note": { "$ref": "#/definitions/text" },
     "policy": {
@@ -27,9 +27,9 @@
   },
   "additionalProperties": false,
   "definitions": {
-    "isoDate": { "type": "string", "format": "date", "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])$" },
-    "text": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$" },
-    "url": { "type": "string", "maxLength": 4096, "format": "uri", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:[^\\u0000-\\u001f\\u007f-\\u009f]*$" },
+    "isoDate": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])$" },
+    "text": { "type": "string", "maxLength": 4096, "pattern": "^[^\u0000-\u001f\u007f-\u009f]*$" },
+    "url": { "type": "string", "maxLength": 4096, "format": "uri", "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:[^\u0000-\u001f\u007f-\u009f]*$" },
     "model": {
       "type": "object",
       "required": ["id"],
@@ -59,7 +59,7 @@
             "type": "object",
             "required": ["via"],
             "properties": {
-              "via": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?![Pp][Uu][Bb][Ll][Ii][Ss][Hh][Ee][Rr](?:-[Ff][Aa][Ll][Ll][Bb][Aa][Cc][Kk\\u212a])?$)[^\\u0000-\\u001f\\u007f-\\u009f]*$" },
+              "via": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\u0000-\u001f\u007f-\u009f]*$" },
               "announced": { "$ref": "#/definitions/isoDate" },
               "shutdown": { "$ref": "#/definitions/isoDate" },
               "date_precision": { "enum": ["exact", "earliest", "tentative"] },
@@ -73,6 +73,7 @@
                 "properties": {
                   "date_precision": { "const": "tentative" },
                   "announced": false,
+                  "shutdown": true,
                   "status": { "enum": ["active", "legacy", "extended-access"] }
                 }
               }
@@ -99,7 +100,8 @@
           "required": ["date_precision", "shutdown"],
           "properties": {
             "date_precision": { "const": "tentative" },
-            "announced": false
+            "announced": false,
+            "shutdown": true
           }
         }
       ],
