@@ -9,7 +9,7 @@ the weekly workflow uses this code, see [docs/FEEDS.md](../docs/FEEDS.md).
 | `refresh.mjs` | Entry point. Fetches, parses, merges, writes, and prints the semantic diff. |
 | `providers.mjs` | Publisher parsers: OpenAI, Anthropic, Google, Mistral, Cohere. |
 | `distributors.mjs` | Distributor parsers: Bedrock, Vertex AI, Azure AI Foundry. |
-| `fetch.mjs` | Bounded HTTP fetches (30-second deadline, 8 MiB limit) for Anthropic model pages and distributor pages. |
+| `fetch.mjs` | Bounded HTTP fetches (30-second deadline, 8 MiB limit) for Anthropic model pages and distributor pages. It re-exports `lib/fetch-bounded.mjs`, which the bot's `--feeds-url` download also uses. |
 | `diff.mjs` | The semantic diff used for `--check` and for refresh PR bodies. |
 | `test/` | Offline tests and recorded pages under `test/fixture/`. |
 

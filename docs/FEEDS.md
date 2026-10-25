@@ -97,8 +97,10 @@ health. Each feed is at
 
 The CLI uses the feeds bundled in its npm package, or a local directory passed
 with `--feeds DIR`. The bot can download hosted feeds instead, with
-`model-eol-bot --feeds-url URL[,URL...]`. A failed download stops the bot
-unless `feeds.allow_vendored_fallback` is set (see
+`model-eol-bot --feeds-url URL[,URL...]`. Each download has a 30-second
+deadline over the request and body and an 8 MiB body limit. A download that
+exceeds either, or returns a feed that fails validation, has failed. A failed
+download stops the bot unless `feeds.allow_vendored_fallback` is set (see
 [CONFIGURATION.md](CONFIGURATION.md#keys)).
 
 Publication is gated. Each live refresh writes a
