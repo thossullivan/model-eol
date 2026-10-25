@@ -22,9 +22,10 @@ nothing:
 - Every model ID that enters a feed passes the identifier grammar.
 - Conflicting records for one model stop the run, unless a precedence rule
   below says which source wins.
-- A row that reaches, through an alias, an entry that an earlier row of the
-  same run created or dated stops the run if the two lifecycles differ. Rows
-  with the same lifecycle still merge into one entry.
+- A row that would merge, through an alias, with an entry that an earlier row
+  of the same run created or dated stops the run if the two lifecycles differ.
+  Rows with the same lifecycle still merge into one entry, except OpenAI dated
+  snapshots (below).
 - A page on which no lifecycle table is recognized stops the run.
 - A missing fixture page stops an offline run. It is never treated as empty.
 
@@ -66,6 +67,11 @@ model overview pages for IDs and aliases.
   deadline and an 8 MiB limit.
 - When an alias is attached to a model or moves to another one, the run emits a
   notice and the change appears in the semantic diff.
+- A status row and an announcement for the same model must agree. An Active
+  status row, or a different deprecated or retirement date, stops the run;
+  otherwise the announcement is used. This also applies when one of the rows
+  names an alias of the model, and two status rows that reach one model must
+  give the same state and dates.
 - Offline runs read `test/fixture/anthropic-llms.txt` and
   `test/fixture/anthropic-model-pages/<slug>.md`.
 
@@ -108,18 +114,23 @@ replacement column, each under a heading that carries its announcement date.
   different announcement dates keep the later announcement, unless the dropped
   row names an alias the kept row doesn't, which stops the run; the same
   announcement with different shutdown dates stops the run.
+- A snapshot ending in `-YYYY-MM-DD` is always its own entry. A row that would
+  merge it with another entry stops the run, and so does a row for a snapshot
+  that the committed feed lists as another entry's alias.
 - A row listed as `alias | snapshot`, where the snapshot ends in `-YYYY-MM-DD`
   and the alias is that ID without the date, gives both committed entries the
-  row's lifecycle and merges neither. A row whose replacement is the alias or
-  the alias's own newer snapshot stops the run.
-- When several such rows name one alias with different dates, precision, or
-  replacement targets, each snapshot keeps its own row's lifecycle and the
-  alias follows the row with the earliest shutdown. A committed alias entry
-  takes that row's lifecycle. An alias that isn't committed is attached to that
-  row's snapshot, and moves there from another of the snapshots if an earlier
-  run put it there. A tie on the earliest shutdown stops the run. So does a row
-  for the alias itself, unless the alias is committed and the row agrees with
-  the earliest one.
+  row's lifecycle and merges neither. A row of this shape whose replacement is
+  the alias or any of its dated snapshots stops the run, whether or not the
+  alias is committed.
+- When several such rows name one alias, each snapshot keeps its own row's
+  lifecycle and the alias follows one row. If the rows differ in dates,
+  precision, or replacement targets, that is the row with the earliest
+  shutdown, and a tie on it stops the run. If they agree, it is the row for the
+  newest snapshot. A committed alias entry takes that row's lifecycle. An alias
+  that isn't committed is attached to that row's snapshot, and moves there from
+  another of the snapshots if an earlier run put it there. A row for the alias
+  itself stops the run, unless the alias is committed and the row agrees with
+  the chosen one.
 - The models endpoint (`https://api.openai.com/v1/models`, `OPENAI_API_KEY`) is
   paged for up to 20 pages. A repeated ID or a cursor that doesn't advance stops
   the run. Without the key, committed current-model entries are kept.
