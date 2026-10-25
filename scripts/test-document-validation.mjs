@@ -142,6 +142,139 @@ for (const via of ['publisher', 'publisher-fallback', 'Publisher', 'PUBLISHER-FA
   assert(validateFeed(reservedDistribution).some(error => error.path === 'models[0].distributions[0].via' && error.message.includes('reserved publisher clock')), `the runtime feed validator rejects reserved clock ${via}`)
 }
 
+const parityFeed = mutate => {
+  const feed = validFeed()
+  feed.models = [{ id: 'parity-model', distributions: [{ via: 'parity-cloud' }] }]
+  mutate(feed, feed.models[0], feed.models[0].distributions[0])
+  return feed
+}
+const parityRejects = [
+  ['a 257-character via', (_, __, d) => { d.via = 'v'.repeat(257) }, '$.models[0].distributions[0].via', 'models[0].distributions[0].via'],
+  ['a via with a control character', (_, __, d) => { d.via = 'parity\u007fcloud' }, '$.models[0].distributions[0].via', 'models[0].distributions[0].via'],
+  ['a publisher with a control character', feed => { feed.publisher = 'parity\u0000' }, '$.publisher', 'publisher'],
+  ['a urn feed source', feed => { feed.source = 'urn:example:parity' }, '$.source', 'source'],
+  ['an ftp model source', (_, model) => { model.source = 'ftp://example.test/parity' }, '$.models[0].source', 'models[0].source'],
+  ['a mailto distribution source', (_, __, d) => { d.source = 'mailto:parity@example.test' }, '$.models[0].distributions[0].source', 'models[0].distributions[0].source'],
+  ['an httpx policy source', feed => { feed.policy = { min_notice_days: 30, source: 'httpx://example.test/policy' } }, '$.policy.source', 'policy.source'],
+  ['a 4097-character source URL', feed => { feed.source = `https://example.test/${'a'.repeat(4076)}` }, '$.source', 'source'],
+  ['a source URL with a C1 control character', feed => { feed.source = 'https://example.test/\u0085' }, '$.source', 'source'],
+  ['a 4097-character feed note', feed => { feed.note = 'x'.repeat(4097) }, '$.note', 'note'],
+  ['4097-character model notes', (_, model) => { model.notes = 'x'.repeat(4097) }, '$.models[0].notes', 'models[0].notes'],
+  ['a 4097-character replacement_note', (_, model) => { model.replacement_note = 'x'.repeat(4097) }, '$.models[0].replacement_note', 'models[0].replacement_note'],
+  ['notes with a newline', (_, model) => { model.notes = 'Line one.\nLine two.' }, '$.models[0].notes', 'models[0].notes'],
+  ['a replacement_note with a tab', (_, model) => { model.replacement_note = 'Set\treasoning.mode' }, '$.models[0].replacement_note', 'models[0].replacement_note'],
+  ['a feed note with a C1 control character', feed => { feed.note = 'parity\u0085note' }, '$.note', 'note'],
+  ['a tentative model without shutdown', (_, model) => { model.date_precision = 'tentative' }, '$.models[0]', 'models[0].shutdown'],
+  ['a tentative model with announced', (_, model) => { Object.assign(model, { date_precision: 'tentative', shutdown: '2027-06-01', announced: '2026-08-01' }) }, '$.models[0]', 'models[0].announced'],
+  ['a tentative distribution without shutdown', (_, __, d) => { d.date_precision = 'tentative' }, '$.models[0].distributions[0]', 'models[0].distributions[0].shutdown'],
+  ['a tentative distribution with announced', (_, __, d) => { Object.assign(d, { date_precision: 'tentative', shutdown: '2027-06-01', announced: '2026-08-01' }) }, '$.models[0].distributions[0]', 'models[0].distributions[0].announced'],
+  ['a retired tentative distribution', (_, __, d) => { Object.assign(d, { date_precision: 'tentative', shutdown: '2027-06-01', status: 'retired' }) }, '$.models[0].distributions[0]', 'models[0].distributions[0].status'],
+  ['an unsafe min_notice_days', feed => { feed.policy = { min_notice_days: 9007199254740992, source: 'https://example.test/policy' } }, '$.policy.min_notice_days', 'policy.min_notice_days'],
+  ['a 65-character generated', feed => { feed.generated = `2026-08-18T00:00:00.${'0'.repeat(44)}Z` }, '$.generated', 'generated'],
+]
+for (const [label, mutate, schemaPath, codePath] of parityRejects) {
+  const feed = parityFeed(mutate)
+  assert(validateJsonSchema(feed, catalog.byType.get('feed')).some(error => error.path === schemaPath), `the feed schema rejects ${label} at ${schemaPath}`)
+  assert(validateFeed(feed).some(error => error.path === codePath), `the runtime feed validator rejects ${label} at ${codePath}`)
+}
+const parityAccepts = [
+  ['a 256-character via', (_, __, d) => { d.via = 'v'.repeat(256) }],
+  ['a via with spaces and a no-break space', (_, __, d) => { d.via = 'parity cloud\u00a0eu' }],
+  ['an upper-case HTTPS source', feed => { feed.source = 'HTTPS://EXAMPLE.TEST/parity' }],
+  ['a 4096-character source URL', feed => { feed.source = `https://example.test/${'a'.repeat(4075)}` }],
+  ['4096-character notes, note, and replacement_note', (feed, model) => { feed.note = model.notes = model.replacement_note = 'x'.repeat(4096) }],
+  ['notes with non-ASCII text', (_, model) => { model.notes = 'Fran\u00e7ais, caf\u00e9\u00a0ok' }],
+  ['a tentative model and distribution with shutdown', (_, model, d) => { Object.assign(model, { date_precision: 'tentative', shutdown: '2027-06-01' }); Object.assign(d, { date_precision: 'tentative', shutdown: '2027-07-01', status: 'legacy' }) }],
+  ['an earliest model without shutdown', (_, model) => { model.date_precision = 'earliest' }],
+  ['a retired exact distribution', (_, __, d) => { Object.assign(d, { date_precision: 'exact', shutdown: '2026-07-01', status: 'retired' }) }],
+  ['the largest safe min_notice_days', feed => { feed.policy = { min_notice_days: 9007199254740991, source: 'https://example.test/policy' } }],
+  ['a 64-character generated', feed => { feed.generated = `2026-08-18T00:00:00.${'0'.repeat(43)}Z` }],
+]
+for (const [label, mutate] of parityAccepts) {
+  const feed = parityFeed(mutate)
+  assert.deepEqual(validateJsonSchema(feed, catalog.byType.get('feed')), [], `the feed schema accepts ${label}`)
+  assert.deepEqual(validateFeed(feed), [], `the runtime feed validator accepts ${label}`)
+}
+
+const controlNotes = parityFeed((_, model) => { model.notes = 'Line one.\nLine two.' })
+assert.deepEqual(validateFeed(controlNotes), [{ path: 'models[0].notes', message: 'must not contain control characters' }], 'the runtime feed validator reports a control character once, at the field path')
+const longNote = parityFeed(feed => { feed.note = 'x'.repeat(4097) })
+assert.deepEqual(validateFeed(longNote), [{ path: 'note', message: 'must be at most 4096 characters' }], 'the runtime feed validator reports a length limit once, at the field path')
+
+for (const [field, value] of [['notes', 5], ['notes', ['Line one.\nLine two.']], ['replacement_note', { text: 'x' }], ['note', null]]) {
+  const feed = parityFeed((target, model) => { (field === 'note' ? target : model)[field] = value })
+  const at = field === 'note' ? 'note' : `models[0].${field}`
+  assert.deepEqual(validateFeed(feed), [{ path: at, message: 'must be a string' }], `the runtime feed validator rejects a non-string ${field} (${JSON.stringify(value)})`)
+}
+
+const withoutFormat = value => {
+  if (Array.isArray(value)) return value.map(withoutFormat)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'format').map(([key, child]) => [key, withoutFormat(child)]))
+}
+const formatlessFeedSchema = withoutFormat(catalog.byType.get('feed'))
+const kelvinFallback = `publisher-fallbac${String.fromCharCode(0x212a)}`
+const parityRoundTwoRejects = [
+  ['via publisher', (_, __, d) => { d.via = 'publisher' }, '$.models[0].distributions[0].via', 'models[0].distributions[0].via'],
+  ['via Publisher-Fallback', (_, __, d) => { d.via = 'Publisher-Fallback' }, '$.models[0].distributions[0].via', 'models[0].distributions[0].via'],
+  ['via PUBLISHER', (_, __, d) => { d.via = 'PUBLISHER' }, '$.models[0].distributions[0].via', 'models[0].distributions[0].via'],
+  ['via publisher-fallback with a Kelvin sign', (_, __, d) => { d.via = kelvinFallback }, '$.models[0].distributions[0].via', 'models[0].distributions[0].via'],
+  ['a repeated alias in one array', (_, model) => { model.aliases = ['parity-alias', 'parity-alias'] }, '$.models[0].aliases[1]', 'models[0].aliases[1]'],
+]
+for (const [label, mutate, schemaPath, codePath] of parityRoundTwoRejects) {
+  const feed = parityFeed(mutate)
+  assert(validateJsonSchema(feed, catalog.byType.get('feed')).some(error => error.path === schemaPath), `the feed schema rejects ${label} at ${schemaPath}`)
+  assert(validateFeed(feed).some(error => error.path === codePath), `the runtime feed validator rejects ${label} at ${codePath}`)
+}
+const parityShapeRejects = [
+  ['a basic-format shutdown date', (_, model) => { model.shutdown = '20270101' }, '$.models[0].shutdown', 'models[0].shutdown'],
+  ['a month-13 announced date', (_, model) => { Object.assign(model, { announced: '2026-13-01', shutdown: '2027-01-01' }) }, '$.models[0].announced', 'models[0].announced'],
+  ['a one-digit day in a distribution shutdown', (_, __, d) => { d.shutdown = '2027-01-1' }, '$.models[0].distributions[0].shutdown', 'models[0].distributions[0].shutdown'],
+  ['a generated without seconds', feed => { feed.generated = '2026-07-25T00:00Z' }, '$.generated', 'generated'],
+  ['a basic-format generated', feed => { feed.generated = '20260725T000000Z' }, '$.generated', 'generated'],
+  ['a generated with lower-case t and z', feed => { feed.generated = '2026-07-25t00:00:00z' }, '$.generated', 'generated'],
+  ['a generated at hour 24', feed => { feed.generated = '2026-07-25T24:00:00Z' }, '$.generated', null],
+  ['a generated with a leap second', feed => { feed.generated = '2026-07-25T23:59:60Z' }, '$.generated', 'generated'],
+]
+for (const [label, mutate, schemaPath, codePath] of parityShapeRejects) {
+  const feed = parityFeed(mutate)
+  assert(validateJsonSchema(feed, formatlessFeedSchema).some(error => error.path === schemaPath && error.keyword === 'pattern'), `the feed schema rejects ${label} by pattern, without format assertions`)
+  assert(validateJsonSchema(feed, catalog.byType.get('feed')).some(error => error.path === schemaPath), `the feed schema rejects ${label}`)
+  if (codePath) assert(validateFeed(feed).some(error => error.path === codePath), `the runtime feed validator rejects ${label}`)
+}
+const parityRoundTwoAccepts = [
+  ['via values that only contain a reserved name', (_, model) => { model.distributions = ['publishers', 'my-publisher', 'publisher-fallback-eu', 'publisher fallback'].map(via => ({ via })) }],
+  ['distinct aliases', (_, model) => { model.aliases = ['parity-alias', 'Parity-Alias'] }],
+  ['boundary dates and timestamps', (feed, model, d) => {
+    feed.generated = '2026-12-31T23:59:59.999-23:59'
+    Object.assign(model, { announced: '2024-02-29', shutdown: '2026-12-31', source: 'https://example.test/model' })
+    Object.assign(d, { announced: '0001-01-01', shutdown: '9999-12-31' })
+  }],
+]
+for (const [label, mutate] of parityRoundTwoAccepts) {
+  const feed = parityFeed(mutate)
+  assert.deepEqual(validateJsonSchema(feed, formatlessFeedSchema), [], `the feed schema without format assertions accepts ${label}`)
+  assert.deepEqual(validateJsonSchema(feed, catalog.byType.get('feed')), [], `the feed schema accepts ${label}`)
+  assert.deepEqual(validateFeed(feed), [], `the runtime feed validator accepts ${label}`)
+}
+
+const messageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-feed-messages-'))
+try {
+  const messageCases = [
+    ['tentative-no-shutdown', (_, model) => { model.date_precision = 'tentative' }, '$.models[0].shutdown: is required when date_precision is tentative'],
+    ['control-notes', (_, model) => { model.notes = 'Line one.\nLine two.' }, '$.models[0].notes: must not contain control characters'],
+  ]
+  for (const [name, mutate, message] of messageCases) {
+    const file = path.join(messageRoot, `${name}.json`)
+    writeJson(file, parityFeed(mutate))
+    const result = run(['validate', file])
+    assert.equal(result.code, 2, `validate exits 2 on ${name}`)
+    assert.equal(result.err, `${file}: ${message}\n`, `validate prints the runtime validator's message for ${name}, once`)
+  }
+} finally {
+  fs.rmSync(messageRoot, { recursive: true, force: true })
+}
+
 const credentialEnvironmentNames = [
   'GITHUB_TOKEN', 'gh_auth', 'Actions_Runtime_URL', 'ssh_auth_sock',
   'AWS_SECRET_ACCESS_KEY', 'MODEL_EOL_SECRET', 'database_password', 'credential_file',
@@ -516,7 +649,7 @@ try {
   writeJson(extraFieldPath, { ...validFeed(), unexpected: true })
   const extraField = run(['validate', extraFieldPath])
   assert.equal(extraField.code, 2, 'additional properties are rejected with exit 2')
-  assert.match(extraField.err, /\$\.unexpected: is not allowed/, 'additionalProperties reports the exact field path')
+  assert.match(extraField.err, /\$\.unexpected: unknown field/, 'an unknown field is reported at its exact path')
 
   const invalidDatePath = path.join(tempRoot, 'invalid-date.json')
   const invalidDate = validFeed()
@@ -524,13 +657,13 @@ try {
   writeJson(invalidDatePath, invalidDate)
   const invalidDateResult = run(['validate', invalidDatePath])
   assert.equal(invalidDateResult.code, 2, 'an impossible date exits 2')
-  assert.match(invalidDateResult.err, /\$\.models\[0\]\.shutdown: must match format date/, 'date validation reports the exact model field')
+  assert.match(invalidDateResult.err, /\$\.models\[0\]\.shutdown: models\[0\]\.shutdown must be a real calendar date/, 'date validation reports the exact model field')
 
   const invalidDateTimePath = path.join(tempRoot, 'invalid-date-time.json')
   writeJson(invalidDateTimePath, { ...validFeed(), generated: '2026-02-30T00:00:00Z' })
   const invalidDateTime = run(['validate', invalidDateTimePath])
   assert.equal(invalidDateTime.code, 2, 'an impossible date-time exits 2')
-  assert.match(invalidDateTime.err, /\$\.generated: must match format date-time/, 'date-time validation reports the exact metadata field')
+  assert.match(invalidDateTime.err, /\$\.generated: generated must be a real calendar date/, 'date-time validation reports the exact metadata field')
 
   const aggregated = run(['validate', feedPaths[0], malformedPath, invalidDateTimePath])
   assert.equal(aggregated.code, 2, 'batch validation exits 2 when any document fails')
@@ -609,12 +742,12 @@ try {
   fs.writeFileSync(path.join(validatorTree, 'feeds/schema-only.json'), JSON.stringify({
     spec: 'model-eol/0.1',
     publisher: 'test',
-    generated: '2026-08-01T00:00:00Z',
-    models: [{ id: 'schema-only-script-model', notes: 5 }],
+    generated: '2026-08-01T24:00:00Z',
+    models: [{ id: 'schema-only-script-model' }],
   }))
   const schemaOnlyScript = spawnSync(process.execPath, [path.join(validatorTree, 'scripts/validate-feeds.mjs')], { encoding: 'utf8' })
   assert.equal(schemaOnlyScript.status, 1, 'validate-feeds fails on a feed only the schema rejects')
-  assert.match(schemaOnlyScript.stderr, /schema-only\.json model schema-only-script-model: models\[0\]\.notes: must be string/, 'validate-feeds names the schema failure')
+  assert.match(schemaOnlyScript.stderr, /schema-only\.json model schema-only-script-model: generated: must match format date-time/, 'validate-feeds names the schema failure')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }
