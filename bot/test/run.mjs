@@ -1584,6 +1584,35 @@ assert(shapeResults.every(result => result === '') && shapeSignals.length === 6 
 const boundedWarnings = []
 const boundedFallback = await feedDownloadError(async url => new Response(boundedFeedJson(url), { headers: { 'content-length': String(MAX_SOURCE_BODY_BYTES + 1) } }), { allowVendoredFallback: true, warn: message => boundedWarnings.push(message) })
 assert(boundedFallback === 'degraded' && boundedWarnings.length === 1 && boundedWarnings[0].includes(`exceeds ${MAX_SOURCE_BODY_BYTES} bytes`) && boundedWarnings[0].includes('using vendored feeds in degraded report-only mode'), 'a --feeds-url bound violation falls back to vendored feeds with a warning when fallback is allowed')
+const MIB = 1024 * 1024
+const stringStream = (text, size = MIB) => (async function* () { for (let start = 0; start < text.length; start += size) yield text.slice(start, start + size) })()
+const byteStream = text => (async function* () { const bytes = Buffer.from(text); for (let start = 0; start < bytes.length; start += MIB) yield new Uint8Array(bytes.subarray(start, start + MIB)) })()
+for (const [label, respond] of [
+  ['a duck-typed byte stream past the cap', url => ({ status: 200, ok: true, body: byteStream(paddedFeed(url)) })],
+  ['a body that streams strings past the cap', url => ({ status: 200, body: stringStream(paddedFeed(url)) })],
+]) {
+  const reason = await feedDownloadError(async url => respond(url))
+  assert(reason.startsWith('feed download failed: ') && reason.includes(`exceeds ${MAX_SOURCE_BODY_BYTES} bytes`), `--feeds-url rejects ${label}`)
+}
+for (const [label, respond] of [
+  ['text() returning a Buffer', url => ({ status: 200, ok: true, text: async () => Buffer.from(boundedFeedJson(url)) })],
+  ['text() returning a Uint8Array', url => ({ status: 200, ok: true, text: async () => new Uint8Array(Buffer.from(boundedFeedJson(url))) })],
+  ['a duck-typed byte stream under the cap', url => ({ status: 200, ok: true, body: byteStream(boundedFeedJson(url)) })],
+  ['a body that streams strings under the cap', url => ({ status: 200, body: stringStream(boundedFeedJson(url), 16) })],
+]) {
+  const reason = await feedDownloadError(async url => respond(url))
+  assert(reason === '', `--feeds-url downloads a feed from ${label}${reason ? ` (${reason})` : ''}`)
+}
+const legacyDetailReason = await feedDownloadError(async () => ({ status: 404, text: async () => 'gone' }))
+assert(legacyDetailReason.startsWith('feed download failed: ') && legacyDetailReason.endsWith(': HTTP 404 - gone'), 'a legacy error response keeps its text() detail')
+const legacyBareReason = await feedDownloadError(async () => ({ status: 500, ok: false }))
+assert(legacyBareReason.startsWith('feed download failed: ') && legacyBareReason.endsWith(': HTTP 500'), 'a legacy error response without a body reports the status and no serialized object')
+let errorChunks = 0
+const streamedErrorReason = await feedDownloadError(async () => ({
+  status: 500,
+  body: (async function* () { for (let index = 0; index < 32 * 1024; index++) { errorChunks++; yield 'E'.repeat(512) } })(),
+}))
+assert(errorChunks <= 3 && streamedErrorReason.endsWith(`: HTTP 500 - ${'E'.repeat(300)}`), 'a string-streamed error body is read only to the detail cap')
 
 const evalDir = fs.mkdtempSync(path.join(tempRoot, 'eval-'))
 const evalPlan = path.join(evalDir, 'plan.json')

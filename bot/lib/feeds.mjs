@@ -6,13 +6,14 @@ import { fetchBoundedBody } from '../../lib/fetch-bounded.mjs'
 import { assertValidFeed } from '../../lib/validate-feed.mjs'
 import { logWarning } from './common.mjs'
 
+const asText = value => value instanceof Uint8Array ? Buffer.from(value).toString() : String(value)
+
 const asBoundedResponse = response => {
-  if (response instanceof Response) return response
   const status = typeof response?.status === 'number' ? response.status : 200
   const ok = status < 400 && response?.ok !== false
   const streamed = typeof response?.body?.[Symbol.asyncIterator] === 'function' && typeof response.body !== 'string'
   let text
-  if (typeof response?.text === 'function') text = async () => String(await response.text())
+  if (typeof response?.text === 'function') text = async () => asText(await response.text())
   else if (typeof response?.body === 'string') text = async () => response.body
   else if (response?.data !== undefined) text = async () => JSON.stringify(response.data)
   else if (ok) text = async () => JSON.stringify(response)
