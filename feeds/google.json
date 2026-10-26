@@ -418,30 +418,30 @@
     {
       "id": "imagen-4.0-generate-001",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-08-17",
-      "date_precision": "earliest",
-      "replacement": "gemini-nano-banana-2.1",
       "distributions": [
         {
           "via": "vertex-ai",
           "shutdown": "2026-06-30",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-08-17",
+      "date_precision": "earliest",
+      "replacement": "gemini-nano-banana-2.1"
     },
     {
       "id": "imagen-4.0-ultra-generate-001",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-08-17",
-      "date_precision": "earliest",
-      "replacement": "gemini-nano-banana-2.1",
       "distributions": [
         {
           "via": "vertex-ai",
           "shutdown": "2026-06-30",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-08-17",
+      "date_precision": "earliest",
+      "replacement": "gemini-nano-banana-2.1"
     },
     {
       "id": "imagen-4.0-fast-generate-001",
@@ -453,16 +453,16 @@
     {
       "id": "imagen-3.0-generate-002",
       "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2025-11-10",
-      "date_precision": "earliest",
-      "replacement": "gemini-nano-banana-2.1",
       "distributions": [
         {
           "via": "vertex-ai",
           "shutdown": "2026-06-30",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2025-11-10",
+      "date_precision": "earliest",
+      "replacement": "gemini-nano-banana-2.1"
     },
     {
       "id": "imagen-4.0-generate-preview-06-06",
