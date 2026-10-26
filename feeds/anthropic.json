@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-10-18T18:39:55.065Z",
+  "generated": "2026-10-26T11:18:07.097Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "policy": {
     "min_notice_days": 60,
@@ -507,6 +507,7 @@
         },
         {
           "via": "azure-ai-foundry",
+          "shutdown": "2027-09-01",
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
