@@ -357,7 +357,7 @@ for (const name of ['source-check.yml', 'feed-refresh.yml']) {
     }
     strictAssert.equal(workflow.match(/uses: azure\/login@/g)?.length, 1)
     const distributorRuns = workflow.match(/node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry/g)?.length
-    const scoped = workflow.match(/\(\n +azure_api_env\n +(?:check_once_more distributor )?node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry[^\n]*\n +\)\n/g)?.length
+    const scoped = workflow.match(/\(\n +azure_api_env\n +bedrock_api_env\n +(?:check_once_more distributor )?node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry[^\n]*\n +\)\n/g)?.length
     strictAssert.ok(distributorRuns > 0 && scoped === distributorRuns, 'every distributor refresh, and nothing else, runs in a subshell that exports the token')
     strictAssert.equal(workflow.match(/^ {10}AZURE_LOGIN: \$\{\{ steps\.azure-login\.outcome \}\}\n {10}AZURE_SUBSCRIPTION: \$\{\{ secrets\.AZURE_SUBSCRIPTION_ID \}\}\n/gm)?.length, distributorRuns)
     strictAssert.ok(!/AZURE_MANAGEMENT_TOKEN[^\n]*GITHUB_ENV|GITHUB_ENV[^\n]*AZURE_MANAGEMENT_TOKEN|AZURE_MANAGEMENT_TOKEN: \$\{\{/.test(workflow), 'the token never reaches GITHUB_ENV or a step env')
@@ -401,6 +401,43 @@ for (const name of ['source-check.yml', 'feed-refresh.yml']) {
     }
     const skipped = runHelper('skipped', 'echo should-not-run')
     strictAssert.match(skipped, /::notice::Azure login runs only on main; .* on refs\/heads\/topic\.\nsubscription=unset token=unset\n$/)
+  })
+
+  test(`${name} gives the AWS key from the model-apis environment only to the distributor refresh`, () => {
+    const workflow = workflowFile(name)
+    const distributorRuns = workflow.match(/node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry/g)?.length
+    strictAssert.equal(workflow.match(/^ {10}BEDROCK_ACCESS_KEY_ID: \$\{\{ secrets\.AWS_ACCESS_KEY_ID \}\}\n {10}BEDROCK_SECRET_ACCESS_KEY: \$\{\{ secrets\.AWS_SECRET_ACCESS_KEY \}\}\n {8}run: \|\n {10}# [^\n]*\n {10}bedrock_key_id=\$BEDROCK_ACCESS_KEY_ID\n {10}bedrock_secret=\$BEDROCK_SECRET_ACCESS_KEY\n {10}unset BEDROCK_ACCESS_KEY_ID BEDROCK_SECRET_ACCESS_KEY\n/gm)?.length, distributorRuns, 'each distributor step moves the key into unexported variables before running anything')
+    strictAssert.equal(workflow.match(/secrets\.AWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)/g)?.length, 2 * distributorRuns, 'the AWS secrets reach no other step')
+    strictAssert.ok(!/AWS_[A-Z_]+: \$\{\{|GITHUB_ENV[^\n]*AWS_|AWS_[^\n]*GITHUB_ENV|AWS_SESSION_TOKEN|configure-aws-credentials/.test(workflow), 'the key never reaches a step env under its AWS name or GITHUB_ENV')
+  })
+
+  test(`${name} ${name === 'source-check.yml' ? 'fails' : 'warns about'} the Bedrock source without a key on main and skips it with a notice off main`, () => {
+    const workflow = workflowFile(name)
+    const start = workflow.indexOf('          bedrock_key_id=$BEDROCK_ACCESS_KEY_ID\n')
+    const end = workflow.indexOf('\n          }\n', workflow.indexOf('bedrock_api_env() {', start))
+    strictAssert.ok(start >= 0 && end > start, 'workflow defines bedrock_api_env')
+    const helper = workflow.slice(start, end + 12).split('\n').map(line => line.slice(10)).join('\n')
+    const show = label => `sh -c 'echo "${label} id=\${AWS_ACCESS_KEY_ID-unset} secret=\${AWS_SECRET_ACCESS_KEY-unset} raw=\${BEDROCK_ACCESS_KEY_ID-unset}"'`
+    const runHelper = (ref, keyId, secret) => {
+      const script = `${helper}\n${show('provider')}\n(\n  bedrock_api_env\n  ${show('distributor')}\n)\n${show('after')}\n`
+      const env = { PATH: process.env.PATH, GITHUB_REF: ref, BEDROCK_ACCESS_KEY_ID: keyId, BEDROCK_SECRET_ACCESS_KEY: secret }
+      const result = spawnSync('bash', ['-c', script], { env, encoding: 'utf8' })
+      strictAssert.equal(result.status, 0, result.stderr)
+      return result.stdout
+    }
+    const unsetLine = label => `${label} id=unset secret=unset raw=unset\n`
+    const keyed = runHelper('refs/heads/main', 'AKIAEXAMPLEKEY12345', 'example-secret')
+    strictAssert.equal(keyed, `${unsetLine('provider')}distributor id=AKIAEXAMPLEKEY12345 secret=example-secret raw=unset\n${unsetLine('after')}`)
+    const half = runHelper('refs/heads/main', 'AKIAEXAMPLEKEY12345', '')
+    strictAssert.match(half, /distributor id=AKIAEXAMPLEKEY12345 secret= raw=unset\n/, 'one secret alone is passed on, so the refresh reports it as half-configured')
+    const missing = runHelper('refs/heads/main', '', '')
+    if (name === 'source-check.yml') {
+      strictAssert.match(missing, /::error::No AWS key in the model-apis environment; the Bedrock models API check fails\.\ndistributor id=secret-AWS_ACCESS_KEY_ID-is-empty secret=unset raw=unset\n/)
+    } else {
+      strictAssert.match(missing, /::warning::No AWS key in the model-apis environment; .* runs without the Bedrock models API cross-check\.\ndistributor id=unset secret=unset raw=unset\n/)
+    }
+    const topic = runHelper('refs/heads/topic', '', '')
+    strictAssert.match(topic, /::notice::The AWS key is available only on main; .* skips the Bedrock models API on refs\/heads\/topic\.\ndistributor id=unset secret=unset raw=unset\n/)
   })
 }
 

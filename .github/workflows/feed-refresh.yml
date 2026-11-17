@@ -8,7 +8,9 @@
 # populate. AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID sign in to
 # Azure through OIDC on main for the Azure models API cross-check; a failed
 # login or a failed cross-check is a warning, because the cross-check never
-# changes feed data, and other refs skip the cross-check with a notice. A failed
+# changes feed data, and other refs skip the cross-check with a notice. The
+# model-apis environment's AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY read the
+# Bedrock ListFoundationModels cross-check on main the same way. A failed
 # models endpoint listing, Anthropic's included, fails the run; only a bad
 # Anthropic lifecycle field is a warning.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
@@ -67,7 +69,25 @@ jobs:
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
           AZURE_LOGIN: ${{ steps.azure-login.outcome }}
           AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
+          # Unexported shell variables reach only the subshell that exports them for the distributor check.
+          bedrock_key_id=$BEDROCK_ACCESS_KEY_ID
+          bedrock_secret=$BEDROCK_SECRET_ACCESS_KEY
+          unset BEDROCK_ACCESS_KEY_ID BEDROCK_SECRET_ACCESS_KEY
+          # Exports the Bedrock key; with neither secret set it exports nothing, so the refresh skips the cross-check.
+          bedrock_api_env() {
+            if [ -z "$bedrock_key_id" ] && [ -z "$bedrock_secret" ]; then
+              if [ "$GITHUB_REF" = refs/heads/main ]; then
+                echo "::warning::No AWS key in the model-apis environment; the distributor check runs without the Bedrock models API cross-check."
+              else
+                echo "::notice::The AWS key is available only on main; the distributor check skips the Bedrock models API on $GITHUB_REF."
+              fi
+              return 0
+            fi
+            export AWS_ACCESS_KEY_ID="$bedrock_key_id" AWS_SECRET_ACCESS_KEY="$bedrock_secret"
+          }
           # Exports the models API credentials; without a token it exports nothing, so the refresh skips the cross-check after a warning.
           azure_api_env() {
             if [ "$AZURE_LOGIN" = skipped ]; then
@@ -91,6 +111,7 @@ jobs:
           providers=$?
           (
             azure_api_env
+            bedrock_api_env
             node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
           )
           distributors=$?
@@ -123,7 +144,25 @@ jobs:
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
           AZURE_LOGIN: ${{ steps.azure-login.outcome }}
           AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
+          # Unexported shell variables reach only the subshell that exports them for the distributor refresh.
+          bedrock_key_id=$BEDROCK_ACCESS_KEY_ID
+          bedrock_secret=$BEDROCK_SECRET_ACCESS_KEY
+          unset BEDROCK_ACCESS_KEY_ID BEDROCK_SECRET_ACCESS_KEY
+          # Exports the Bedrock key; with neither secret set it exports nothing, so the refresh skips the cross-check.
+          bedrock_api_env() {
+            if [ -z "$bedrock_key_id" ] && [ -z "$bedrock_secret" ]; then
+              if [ "$GITHUB_REF" = refs/heads/main ]; then
+                echo "::warning::No AWS key in the model-apis environment; the distributor refresh runs without the Bedrock models API cross-check."
+              else
+                echo "::notice::The AWS key is available only on main; the distributor refresh skips the Bedrock models API on $GITHUB_REF."
+              fi
+              return 0
+            fi
+            export AWS_ACCESS_KEY_ID="$bedrock_key_id" AWS_SECRET_ACCESS_KEY="$bedrock_secret"
+          }
           # Exports the models API credentials; without a token it exports nothing, so the refresh skips the cross-check after a warning.
           azure_api_env() {
             if [ "$AZURE_LOGIN" = skipped ]; then
@@ -145,6 +184,7 @@ jobs:
           node refresh/refresh.mjs
           (
             azure_api_env
+            bedrock_api_env
             node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
           )
           az logout > /dev/null 2>&1 || true

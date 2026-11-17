@@ -2029,6 +2029,7 @@ let activeCardRequests = 0
 let maximumCardRequests = 0
 const cardMarkdownByFetchUrl = new Map([...cardMarkdown].map(([url, markdown]) => [bedrockMarkdownUrl(url), markdown]))
 const crawledBedrock = await loadDistributorSource('aws-bedrock', {
+  env: {},
   notice: value => crawlNotices.push(value),
   fetchImpl: async (url, options) => {
     crawlRequests.push({ url, options })
@@ -2044,7 +2045,7 @@ const crawledBedrock = await loadDistributorSource('aws-bedrock', {
 assert(crawlRequests.length === 14 && maximumCardRequests === 1 && JSON.stringify(crawledBedrock.records) === JSON.stringify(loadedBedrock.records), 'mocked live crawl fetches legacy, index, and twelve cards sequentially')
 assert(JSON.stringify(crawlRequests.map(request => request.url)) === JSON.stringify([BEDROCK_LIFECYCLE_MARKDOWN_URL, BEDROCK_MODEL_CARDS_MARKDOWN_URL, ...cardUrls.map(bedrockMarkdownUrl)]) && crawlRequests.every(request => request.url.endsWith('.md')), 'the Bedrock crawl fetches only the Markdown copies')
 assert(crawledBedrock.sourceUrl === BEDROCK_LIFECYCLE_URL && crawledBedrock.records.every(record => record.source.endsWith('.html')) && crawledBedrock.skipped.every(item => item.source.endsWith('.html')), 'Bedrock records and skipped cards cite the human pages')
-assert(crawlNotices.length === 2 && crawlNotices.every(notice => /model-card-[a-z0-9-]+\.html: skipped/.test(notice) && !notice.includes('.md')), 'live crawl reports both skips with human card URLs and no floor disagreement notices')
+assert(crawlNotices.length === 3 && crawlNotices[0] === 'notice: bedrock models API skipped: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not set' && crawlNotices.slice(1).every(notice => /model-card-[a-z0-9-]+\.html: skipped/.test(notice) && !notice.includes('.md')), 'live crawl reports both skips with human card URLs and no floor disagreement notices, after the models API skip')
 assert(crawlRequests.every(request => request.options.headers['accept-language'] === 'en' && request.options.signal instanceof AbortSignal), 'all distributor requests use English and an abort deadline')
 for (const [label, response] of [
   ['HTTP failure', () => new Response('unavailable', { status: 503 })],

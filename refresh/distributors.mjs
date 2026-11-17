@@ -10,6 +10,15 @@ import {
   reconcileAzureModelsApi,
   redactAzureModelsApiMessage,
 } from './azure-models-api.mjs'
+import {
+  bedrockModelsApiConflictSummary,
+  bedrockModelsApiCredentials,
+  bedrockModelsApiNotEnabledSummary,
+  bedrockModelsApiSummary,
+  fetchBedrockModelsApi,
+  reconcileBedrockModelsApi,
+  redactBedrockModelsApiMessage,
+} from './bedrock-models-api.mjs'
 import { strictCrossChecks } from './cross-checks.mjs'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
 import {
@@ -342,6 +351,11 @@ function bedrockEntryRows(entry) {
 
 /** Parse the Markdown copy of AWS Bedrock's legacy lifecycle page: one labelled list per model under a bold provider item. */
 export function parseBedrockLifecycleMarkdown(markdown) {
+  return parseBedrockLifecycleMarkdownRows(markdown).records
+}
+
+/** The merged records and, for the models API cross-check, every regional row with its own dates. */
+export function parseBedrockLifecycleMarkdownRows(markdown) {
   let source = bedrockMarkdownSource(markdown, 'aws-bedrock lifecycle page')
   for (const table of bedrockPipeTables(source, 'aws-bedrock lifecycle page')) {
     if (table.header.some(cell => /\bmodel\s+(?:id|identifier)\b|\blegacy\b|\beol\b/i.test(markdownText(cell)))) {
@@ -355,6 +369,7 @@ export function parseBedrockLifecycleMarkdown(markdown) {
 
   const consumed = new Map()
   const records = []
+  const regionalRows = []
   for (const entry of entries) {
     for (const segment of entry.items.flatMap(item => item.segments)) consumed.set(segment.label, (consumed.get(segment.label) ?? 0) + 1)
     const { fields, rows } = bedrockEntryRows(entry)
@@ -363,6 +378,7 @@ export function parseBedrockLifecycleMarkdown(markdown) {
     const ids = isBedrockModelId(model.value) ? [model.value] : bedrockEndpointIds(model.value)
     if (!ids) throw new Error(`aws-bedrock lifecycle page has an invalid model id: ${model.value || '(empty)'}`)
     const bedrockId = ids.join(', ')
+    const mantleIds = new Set(ids.length > 1 ? model.value.split(',').map(part => part.trim().match(/^(\S+) \(bedrock-mantle\)$/)?.[1]).filter(Boolean) : [])
     for (const row of rows) {
       const missing = BEDROCK_REQUIRED_ROW_FIELDS.find(([key]) => !row.has(key))
       if (missing) throw new Error(`aws-bedrock lifecycle entry ${bedrockId} is missing its ${missing[1]}`)
@@ -396,6 +412,10 @@ export function parseBedrockLifecycleMarkdown(markdown) {
         if (eol !== undefined) record.eol = eol
         if (regions?.length) bedrockRecordRegions.set(record, regions)
         records.push(record)
+        const regional = { ...record, regions: regions ?? [] }
+        if (extendedAccess !== undefined) regional.extendedAccess = extendedAccess
+        if (mantleIds.has(id)) regional.endpoint = 'bedrock-mantle'
+        regionalRows.push(regional)
       }
     }
   }
@@ -421,7 +441,7 @@ export function parseBedrockLifecycleMarkdown(markdown) {
       unique.set(record.bedrockId, merged)
     }
   }
-  return [...unique.values()]
+  return { records: [...unique.values()], rows: regionalRows }
 }
 
 /** The Markdown copy of a Bedrock user guide page sits next to the human page. */
@@ -1176,7 +1196,7 @@ export function parseAzureModelRetirementScheduleMarkdown(markdown, options = {}
 }
 
 export function sourceConflictSummary(conflict) {
-  if (conflict.source === 'models-api') return azureModelsApiConflictSummary(conflict)
+  if (conflict.source === 'models-api') return conflict.via === 'aws-bedrock' ? bedrockModelsApiConflictSummary(conflict) : azureModelsApiConflictSummary(conflict)
   if (conflict.via === 'aws-bedrock') {
     return `${conflict.via} ${conflict.id}: kept ${conflict.kept.eol ?? conflict.kept.shutdown} (${conflict.kept.source}); discarded ${conflict.discarded.shutdown} (${conflict.discarded.source}); legacy table wins`
   }
@@ -1549,6 +1569,30 @@ async function loadBedrockCards(config, options) {
   return { records, skipped }
 }
 
+/** Run one models API cross-check of a parsed page; it may add conflicts but never changes the page records. */
+async function modelsApiCrossCheck(parsed, options, { via, label, unset, credentials: read, redact, run }) {
+  const notice = options.notice ?? console.error
+  const env = options.env ?? process.env
+  const strict = strictCrossChecks(env)
+  let credentials
+  try {
+    credentials = options.fixtures ? undefined : read(env)
+    if (options.fixtures) notice(`notice: ${label} not read in a fixture run`)
+    else if (!credentials) notice(`notice: ${label} skipped: ${unset}`)
+    else {
+      const checked = await run(credentials)
+      return { parsed: { ...parsed, records: checked.records, conflicts: [...parsed.conflicts ?? [], ...checked.conflicts] }, summary: checked.summary }
+    }
+  } catch (error) {
+    if (strict) throw error
+    // The API only cross-checks the page and never changes feed data, so by default its failure is reported, not fatal.
+    const message = redact(error.message, credentials).replace(/\s+/g, ' ')
+    notice(`warning: ${label} cross-check failed: ${message}`)
+    return { parsed: { ...parsed, conflicts: [...parsed.conflicts ?? [], { via, source: 'models-api', reason: 'cross-check-failed', message }] } }
+  }
+  return { parsed }
+}
+
 export async function loadDistributorSource(distributor = 'aws-bedrock', options = {}) {
   const config = DISTRIBUTORS[distributor]
   if (!config) throw new Error(`unknown distributor ${distributor}`)
@@ -1564,33 +1608,40 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
   const notice = options.notice ?? console.error
   let parsed = distributor === 'azure-ai-foundry'
     ? parseAzureModelRetirementScheduleMarkdown(html, { now: options.now ?? new Date() })
-    : { records: distributor === 'aws-bedrock' ? parseBedrockLifecycleMarkdown(html) : parseVertexModelVersionsMarkdown(html) }
+    : distributor === 'aws-bedrock' ? parseBedrockLifecycleMarkdownRows(html) : { records: parseVertexModelVersionsMarkdown(html) }
   if (distributor === 'aws-bedrock') {
     const cards = await loadBedrockCards(config, options)
-    parsed = { ...mergeBedrockSources(parsed.records, cards.records), skipped: cards.skipped }
+    parsed = { ...mergeBedrockSources(parsed.records, cards.records), rows: parsed.rows, skipped: cards.skipped }
   }
   let apiSummary
   if (distributor === 'azure-ai-foundry') {
-    const env = options.env ?? process.env
-    const strict = strictCrossChecks(env)
-    let credentials
-    try {
-      credentials = options.fixtures ? undefined : azureModelsApiCredentials(env)
-      if (options.fixtures) notice('notice: azure models API not read in a fixture run')
-      else if (!credentials) notice('notice: azure models API skipped: AZURE_MANAGEMENT_TOKEN and AZURE_SUBSCRIPTION_ID are not set')
-      else {
+    ;({ parsed, summary: apiSummary } = await modelsApiCrossCheck(parsed, options, {
+      via: distributor,
+      label: 'azure models API',
+      unset: 'AZURE_MANAGEMENT_TOKEN and AZURE_SUBSCRIPTION_ID are not set',
+      credentials: azureModelsApiCredentials,
+      redact: redactAzureModelsApiMessage,
+      run: async credentials => {
         const api = await fetchAzureModelsApi(credentials, { fetchImpl: options.fetchImpl, locations: options.azureLocations })
         const reconciled = reconcileAzureModelsApi(parsed.records, api.entries, { rows: parsed.rows })
-        parsed = { ...parsed, records: reconciled.records, conflicts: [...parsed.conflicts, ...reconciled.conflicts] }
-        apiSummary = azureModelsApiSummary(api, reconciled.conflicts)
-      }
-    } catch (error) {
-      if (strict) throw error
-      // The API only cross-checks the page and never changes feed data, so by default its failure is reported, not fatal.
-      const message = redactAzureModelsApiMessage(error.message, credentials).replace(/\s+/g, ' ')
-      notice(`warning: azure models API cross-check failed: ${message}`)
-      parsed = { ...parsed, conflicts: [...parsed.conflicts, { via: 'azure-ai-foundry', source: 'models-api', reason: 'cross-check-failed', message }] }
-    }
+        return { records: reconciled.records, conflicts: reconciled.conflicts, summary: azureModelsApiSummary(api, reconciled.conflicts) }
+      },
+    }))
+  }
+  if (distributor === 'aws-bedrock') {
+    ;({ parsed, summary: apiSummary } = await modelsApiCrossCheck(parsed, options, {
+      via: distributor,
+      label: 'bedrock models API',
+      unset: 'AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not set',
+      credentials: bedrockModelsApiCredentials,
+      redact: redactBedrockModelsApiMessage,
+      run: async credentials => {
+        const api = await fetchBedrockModelsApi(credentials, { fetchImpl: options.fetchImpl, regions: options.bedrockRegions })
+        if (api.notEnabled.length) notice(`notice: ${bedrockModelsApiNotEnabledSummary(api.notEnabled)}`)
+        const reconciled = reconcileBedrockModelsApi(parsed.records, api.entries, { rows: parsed.rows, regions: api.regions, now: options.now })
+        return { records: reconciled.records, conflicts: reconciled.conflicts, summary: bedrockModelsApiSummary(api, reconciled.conflicts) }
+      },
+    }))
   }
   const conflicts = parsed.conflicts ?? []
   for (const conflict of conflicts) if (!isAzureModelsApiOneDay(conflict)) notice(`notice: ${sourceConflictSummary(conflict)}`)

@@ -23,7 +23,11 @@ Distributor dates are added to the publisher feeds as `distributions` entries:
   individual [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
   for newer ones, both read from their Markdown copies (the same pages ending
   in `.md`). The feed cites the pages themselves. A card's "EOL no sooner than"
-  date becomes a tentative date, and an exact Model EOL date stays exact.
+  date becomes a tentative date, and an exact Model EOL date stays exact. When
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set, the refresh also
+  calls the Bedrock `ListFoundationModels` API in 17 Regions and lists every
+  model and Region where its lifecycle state or dates disagree with the page
+  under "Source conflicts". The pages stay the source of every Bedrock date.
 - **Vertex AI**: the [model versions page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions),
   read from its Markdown copy (`model-versions.md.txt`). The feed cites the page
   itself.
@@ -38,8 +42,8 @@ Distributor dates are added to the publisher feeds as `distributions` entries:
 
 API keys are optional. Without them the refresh still reads every page and keeps
 the current models already in the feeds, but it can't add new ones from the
-OpenAI, Google, Mistral, or Cohere models endpoints. Without the Azure
-credentials it skips the Azure models API cross-check with a notice. xAI isn't covered:
+OpenAI, Google, Mistral, or Cohere models endpoints. Without the Azure or AWS
+credentials it skips the Azure or Bedrock models API cross-check with a notice. xAI isn't covered:
 it has no lifecycle index, and its models API has no deprecation fields.
 
 How each page is parsed, and what makes a parser stop, is in
@@ -74,22 +78,35 @@ the federated credential trusts only that environment, so no other workflow on
 the environment, skips the login and the models API with a notice, and still
 checks the pages.
 
-Two checks only compare the pages with an API and never change feed data: the
-Azure models API cross-check and the lifecycle fields (`lifecycle`,
-`deprecated_at`, `retires_at`) of the Anthropic models API. The two workflows
-treat a broken cross-check differently:
+The Bedrock cross-check signs its requests with an access key for an IAM user
+whose only permissions are `bedrock:ListFoundationModels` and
+`bedrock:GetFoundationModel`. GitHub OIDC isn't possible in that AWS account,
+because its organization's service control policy denies creating an OpenID
+Connect provider (issue 149). The key is stored as the `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` secrets of the `model-apis` environment, so only jobs
+on `main` can read it. Both workflows hand it to the distributor refresh alone:
+the step keeps it in unexported shell variables and exports it only in the
+subshell that runs the distributor refresh, so the provider refresh, `npm
+test`, and the PR step never see it. On another branch the secrets are empty
+and the Bedrock cross-check is skipped with a notice.
+
+Three checks only compare the pages with an API and never change feed data:
+the Azure models API cross-check, the Bedrock `ListFoundationModels`
+cross-check, and the lifecycle fields (`lifecycle`, `deprecated_at`,
+`retires_at`) of the Anthropic models API. The two workflows treat a broken
+cross-check differently:
 
 - The weekly refresh leaves `MODEL_EOL_CROSS_CHECKS` unset. A failed Azure
-  login on `main` prints a warning and the refresh runs without the Azure
-  cross-check. A cross-check that fails (for Azure an HTTP error, a response it
-  can't read, or half-configured credentials; for Anthropic a missing or
-  unrecognised lifecycle field) prints `warning: ... cross-check failed: ...`,
-  adds a line under "Source conflicts" in the refresh PR, and the feeds are
-  still regenerated from the pages.
+  login, or a missing AWS key, on `main` prints a warning and the refresh runs
+  without that cross-check. A cross-check that fails (for Azure or Bedrock an
+  HTTP error, a response it can't read, or half-configured credentials; for
+  Anthropic a missing or unrecognised lifecycle field) prints `warning: ...
+  cross-check failed: ...`, adds a line under "Source conflicts" in the
+  refresh PR, and the feeds are still regenerated from the pages.
 - The daily source check sets `MODEL_EOL_CROSS_CHECKS=strict` for both refresh
-  checks. A failed login on `main` or a failed cross-check fails the check, and
-  it is reported through the "Source check failed" issue like any unreadable
-  source.
+  checks. A failed login or a missing AWS key on `main`, or a failed
+  cross-check, fails the check, and it is reported through the "Source check
+  failed" issue like any unreadable source.
 
 The Anthropic models API also supplies the current model IDs, which add new
 models to the feed and clear stale dates, like the OpenAI, Google, Mistral, and

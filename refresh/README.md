@@ -10,7 +10,9 @@ the weekly workflow uses this code, see [docs/FEEDS.md](../docs/FEEDS.md).
 | `providers.mjs` | Publisher parsers: OpenAI, Anthropic, Google, Mistral, Cohere. |
 | `distributors.mjs` | Distributor parsers: Bedrock, Vertex AI, Azure AI Foundry. |
 | `azure-models-api.mjs` | The Azure models API reader and its comparison with the Azure retirement page. |
-| `cross-checks.mjs` | Reads `MODEL_EOL_CROSS_CHECKS`, the policy for a failed cross-check, for the Anthropic and Azure models API readers and for `refresh.mjs`, which refuses an unknown value before reading any source. |
+| `bedrock-models-api.mjs` | The Bedrock `ListFoundationModels` reader and its comparison with the Bedrock lifecycle page. |
+| `aws-sigv4.mjs` | AWS Signature Version 4 request signing with `node:crypto`, checked against the AWS SigV4 test suite. |
+| `cross-checks.mjs` | Reads `MODEL_EOL_CROSS_CHECKS`, the policy for a failed cross-check, for the Anthropic, Azure, and Bedrock models API readers and for `refresh.mjs`, which refuses an unknown value before reading any source. |
 | `markdown.mjs` | Strict reader for GitHub-flavored Markdown pipe tables, with an HTML rendering for the HTML row readers, and the line preparation and block checks the Markdown converters share. |
 | `fetch.mjs` | Bounded HTTP fetches (30-second deadline, 8 MiB limit) for Anthropic model pages and distributor pages. It re-exports `lib/fetch-bounded.mjs`, which the bot's `--feeds-url` download also uses. |
 | `diff.mjs` | The semantic diff used for `--check` and for refresh PR bodies. |
@@ -583,6 +585,75 @@ deadline and an 8 MiB limit.
 Offline runs read `bedrock-lifecycle.md` (or `aws-bedrock.md` or
 `aws-bedrock-lifecycle.md`), `bedrock-model-cards.md`, and
 `bedrock-model-cards/<card>.md`. A missing card fixture stops the run.
+
+### Bedrock models API cross-check
+
+When `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (and optionally
+`AWS_SESSION_TOKEN`) are set, the refresh also calls
+`GET https://bedrock.{region}.amazonaws.com/foundation-models`
+(`ListFoundationModels`) in each of 17 Regions: `ap-northeast-1`,
+`ap-northeast-2`, `ap-northeast-3`, `ap-south-1`, `ap-southeast-1`,
+`ap-southeast-2`, `ca-central-1`, `eu-central-1`, `eu-north-1`, `eu-west-1`,
+`eu-west-2`, `eu-west-3`, `sa-east-1`, `us-east-1`, `us-east-2`, `us-west-1`,
+and `us-west-2`. These are the commercial Regions the lifecycle page names that
+an account has without opting in. In November 2026 the page also named
+GovCloud Regions, which need separate credentials, and 14 opt-in Regions, which
+answered `UnrecognizedClientException` for an account that had not enabled
+them. Requests are signed with AWS Signature Version 4 (`aws-sigv4.mjs`, no
+SDK). Fixture runs never read the API.
+
+- Neither key set: the cross-check is skipped with a notice and the run is
+  unchanged. Only one of the two keys, or a session token without them, is a
+  cross-check failure.
+- The cross-check can't change feed data, so its failure is not fatal by
+  default, exactly as for the Azure models API: it prints `warning: bedrock
+  models API cross-check failed: <message>`, adds a `cross-check-failed`
+  source conflict, and the page is used without the cross-check. With
+  `MODEL_EOL_CROSS_CHECKS=strict` the same failures stop the Bedrock source. A
+  failure to read the page or a card always stops the run.
+- A Region that answers HTTP 403 `UnrecognizedClientException` doesn't
+  recognise the credentials, which is what an opt-in Region the account hasn't
+  enabled answers. It is skipped and listed once in one notice. When every
+  Region answers that way the key itself is bad, and the cross-check fails. Any
+  other HTTP error is a cross-check failure.
+- An HTTP error reports only `HTTP <status> <error type>`, from the
+  `x-amzn-ErrorType` header or the body's `__type`. The body, which for
+  `AccessDeniedException` names the caller's ARN and account, is never printed.
+  Requests mark `Authorization` and `X-Amz-Security-Token` as credentials, so
+  they refuse redirects, and every message from the cross-check has the key
+  id, secret, session token, any signature, and any 12-digit number removed.
+- A response without a `modelSummaries` array, with a `nextToken`, with an
+  invalid or repeated `modelId`, without a `modelLifecycle`, with a `status`
+  other than `ACTIVE` or `LEGACY`, or with a `legacyTime`, `endOfLifeTime`, or
+  `publicExtendedAccessTime` that isn't null or a whole-hour midnight between
+  UTC and UTC-8 (`T00:00:00Z` through `T08:00:00Z`) stops the cross-check.
+  Each such time is read as its UTC calendar date. In November 2026 every
+  lifecycle time was `T08:00:00Z`, midnight at UTC-8 even for dates in
+  summer, and the UTC date matched the page's date for all three fields in
+  every one of the 101 Region rows where both listed the model.
+- Entries match the page by model ID and Region: each Region is compared with
+  the regional line that names it, not with the merged record, which keeps
+  only the earliest dates. A context-length variant (`...:128k`, `...:1m`) is
+  compared with its base model when the page lists the base. Model IDs the
+  page marks `(bedrock-mantle)` are not on the `bedrock-runtime` endpoint that
+  `ListFoundationModels` lists, so they are not compared. An ID the page
+  doesn't list but a model card does is compared with the card's EOL date.
+- The page stays authoritative and the API creates no records. A source
+  conflict is listed, with a notice, when the API's legacy, EOL, or public
+  extended access date differs from the page's line for that Region (`date`),
+  when the page has an EOL date and the API calls the model `ACTIVE` with no
+  dates (`undated`), when the API lists a `LEGACY` or dated entry that neither
+  the page names in that Region nor a card covers (`unlisted`), and when the
+  page names a Region the API was read in but the API doesn't return the model
+  there and its EOL date hasn't passed (`absent`). Each distinct page line,
+  API status, and set of dates is one conflict that names its Regions.
+  Conflicts never fail the run. No constant date offset was seen, so none is
+  grouped.
+- One summary notice follows: `bedrock models API: N entries in R regions; N
+  legacy; N conflicts with the lifecycle page`.
+- The comparison is `reconcileBedrockModelsApi` in `bedrock-models-api.mjs`.
+  It returns the page records unchanged, so letting API dates win later is a
+  change to that one function.
 
 ## Vertex AI
 

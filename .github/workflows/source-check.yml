@@ -58,7 +58,26 @@ jobs:
           MODEL_EOL_CROSS_CHECKS: strict
           AZURE_LOGIN: ${{ steps.azure-login.outcome }}
           AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
+          # Unexported shell variables reach only the subshell that exports them for the distributor check.
+          bedrock_key_id=$BEDROCK_ACCESS_KEY_ID
+          bedrock_secret=$BEDROCK_SECRET_ACCESS_KEY
+          unset BEDROCK_ACCESS_KEY_ID BEDROCK_SECRET_ACCESS_KEY
+          # Exports the Bedrock key; on main a missing key exports a placeholder id alone so the strict check fails, never skips.
+          bedrock_api_env() {
+            if [ -z "$bedrock_key_id" ] && [ -z "$bedrock_secret" ]; then
+              if [ "$GITHUB_REF" = refs/heads/main ]; then
+                echo "::error::No AWS key in the model-apis environment; the Bedrock models API check fails."
+                export AWS_ACCESS_KEY_ID=secret-AWS_ACCESS_KEY_ID-is-empty
+              else
+                echo "::notice::The AWS key is available only on main; the distributor check skips the Bedrock models API on $GITHUB_REF."
+              fi
+              return 0
+            fi
+            export AWS_ACCESS_KEY_ID="$bedrock_key_id" AWS_SECRET_ACCESS_KEY="$bedrock_secret"
+          }
           # Exports the models API credentials; without a token the subscription alone makes the Azure source fail, never skip.
           azure_api_env() {
             if [ "$AZURE_LOGIN" = skipped ]; then
@@ -97,6 +116,7 @@ jobs:
           providers=$?
           (
             azure_api_env
+            bedrock_api_env
             check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check
           )
           distributors=$?

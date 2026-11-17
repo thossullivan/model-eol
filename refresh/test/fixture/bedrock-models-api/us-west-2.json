@@ -1,0 +1,228 @@
+{
+  "modelSummaries": [
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0",
+      "modelId": "amazon.nova-pro-v1:0",
+      "modelName": "Nova Pro",
+      "providerName": "Amazon",
+      "inputModalities": [
+        "TEXT",
+        "IMAGE",
+        "VIDEO"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": [
+        "INFERENCE_PROFILE"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": null,
+        "legacyTime": null,
+        "publicExtendedAccessTime": null,
+        "startOfLifeTime": "2024-12-03T00:00:00Z",
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "modelId": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "modelName": "Claude Sonnet 4.5",
+      "providerName": "Anthropic",
+      "inputModalities": [
+        "TEXT",
+        "IMAGE"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": [
+        "INFERENCE_PROFILE"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": "2027-04-08T08:00:00Z",
+        "legacyTime": "2026-10-08T08:00:00Z",
+        "publicExtendedAccessTime": "2027-01-08T08:00:00Z",
+        "startOfLifeTime": "2025-09-29T00:00:00Z",
+        "status": "LEGACY"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-opus-4-1-20250805-v1:0",
+      "modelId": "anthropic.claude-opus-4-1-20250805-v1:0",
+      "modelName": "Claude Opus 4.1",
+      "providerName": "Anthropic",
+      "inputModalities": [
+        "TEXT",
+        "IMAGE"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": [
+        "INFERENCE_PROFILE"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": "2027-01-08T08:00:00Z",
+        "legacyTime": "2026-07-08T08:00:00Z",
+        "publicExtendedAccessTime": "2026-10-08T08:00:00Z",
+        "startOfLifeTime": "2025-08-05T00:00:00Z",
+        "status": "LEGACY"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/deepseek.v3-v1:0",
+      "modelId": "deepseek.v3-v1:0",
+      "modelName": "DeepSeek-V3.1",
+      "providerName": "DeepSeek",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": [
+        "ON_DEMAND"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": null,
+        "legacyTime": null,
+        "publicExtendedAccessTime": null,
+        "startOfLifeTime": "2025-09-15T00:00:00Z",
+        "status": "ACTIVE"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/deepseek.r1-v1:0",
+      "modelId": "deepseek.r1-v1:0",
+      "modelName": "DeepSeek-R1",
+      "providerName": "DeepSeek",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": [
+        "INFERENCE_PROFILE"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": "2027-03-30T08:00:00Z",
+        "legacyTime": "2026-09-30T08:00:00Z",
+        "publicExtendedAccessTime": null,
+        "startOfLifeTime": "2025-03-10T08:00:00Z",
+        "status": "LEGACY"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/meta.llama3-70b-instruct-v1:0",
+      "modelId": "meta.llama3-70b-instruct-v1:0",
+      "modelName": "Llama 3 70B Instruct",
+      "providerName": "Meta",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": [
+        "ON_DEMAND"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": "2027-03-30T08:00:00Z",
+        "legacyTime": "2026-09-30T08:00:00Z",
+        "publicExtendedAccessTime": null,
+        "startOfLifeTime": "2024-04-23T08:00:00Z",
+        "status": "LEGACY"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/meta.llama3-1-8b-instruct-v1:0:128k",
+      "modelId": "meta.llama3-1-8b-instruct-v1:0:128k",
+      "modelName": "Llama 3.1 8B Instruct",
+      "providerName": "Meta",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [
+        "FINE_TUNING",
+        "DISTILLATION"
+      ],
+      "inferenceTypesSupported": [
+        "PROVISIONED"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": "2027-03-30T08:00:00Z",
+        "legacyTime": "2026-09-30T08:00:00Z",
+        "publicExtendedAccessTime": null,
+        "startOfLifeTime": "2024-07-23T08:00:00Z",
+        "status": "LEGACY"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/meta.llama3-1-8b-instruct-v1:0",
+      "modelId": "meta.llama3-1-8b-instruct-v1:0",
+      "modelName": "Llama 3.1 8B Instruct",
+      "providerName": "Meta",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": [
+        "ON_DEMAND",
+        "INFERENCE_PROFILE"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": "2027-03-30T08:00:00Z",
+        "legacyTime": "2026-09-30T08:00:00Z",
+        "publicExtendedAccessTime": null,
+        "startOfLifeTime": "2024-07-23T08:00:00Z",
+        "status": "LEGACY"
+      }
+    },
+    {
+      "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/writer.palmyra-x4-v1:0",
+      "modelId": "writer.palmyra-x4-v1:0",
+      "modelName": "Palmyra X4",
+      "providerName": "Writer",
+      "inputModalities": [
+        "TEXT"
+      ],
+      "outputModalities": [
+        "TEXT"
+      ],
+      "responseStreamingSupported": true,
+      "customizationsSupported": [],
+      "inferenceTypesSupported": [
+        "INFERENCE_PROFILE"
+      ],
+      "modelLifecycle": {
+        "endOfLifeTime": "2027-03-09T08:00:00Z",
+        "legacyTime": "2026-09-09T08:00:00Z",
+        "publicExtendedAccessTime": null,
+        "startOfLifeTime": "2025-04-28T08:00:00Z",
+        "status": "LEGACY"
+      }
+    }
+  ]
+}
