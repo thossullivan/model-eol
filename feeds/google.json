@@ -1,12 +1,12 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-10-24T17:31:21.230Z",
-  "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+  "generated": "2026-11-17T05:01:30.710Z",
+  "source": "https://aistudio.google.com/docs/deprecations",
   "models": [
     {
       "id": "gemini-3.6-flash",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -18,7 +18,7 @@
     },
     {
       "id": "gemini-3.5-flash-lite",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -30,7 +30,7 @@
     },
     {
       "id": "gemini-3.5-flash",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -40,11 +40,11 @@
         }
       ],
       "replacement": "gemini-3.6-flash",
-      "replacement_note": "not available to select in Google AI Studio; the endpoint is not shutting down and automatically routes API requests to gemini-3.6-flash"
+      "replacement_note": "gemini-3.5-flash is no longer available in Google AI Studio; the endpoint is not shutting down and automatically routes API requests to gemini-3.6-flash"
     },
     {
       "id": "gemini-3.1-flash-image",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -57,7 +57,7 @@
     },
     {
       "id": "gemini-3-pro-image",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -69,7 +69,7 @@
     },
     {
       "id": "gemini-3.1-flash-lite",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -84,44 +84,44 @@
     },
     {
       "id": "gemini-3.1-flash-image-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-06-25",
       "date_precision": "earliest",
       "replacement": "gemini-nano-banana-2.1"
     },
     {
       "id": "gemini-3.1-pro-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-3-pro-image-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-06-25",
       "date_precision": "earliest",
       "replacement": "gemini-3-pro-image"
     },
     {
       "id": "gemini-3-flash-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "replacement": "gemini-3.6-flash"
     },
     {
       "id": "gemini-3-pro-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-03-09",
       "date_precision": "earliest",
       "replacement": "gemini-3.1-pro-preview"
     },
     {
       "id": "gemini-3.1-flash-lite-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-05-25",
       "date_precision": "earliest",
       "replacement": "gemini-3.1-flash-lite"
     },
     {
       "id": "gemini-2.5-pro",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -129,32 +129,36 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-12-01",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.8-flash",
+      "replacement_note": "gemini-2.5-pro is no longer available in Google AI Studio; effective December 1, 2026, API requests to gemini-2.5-pro will automatically route to gemini-3.8-flash"
     },
     {
       "id": "gemini-2.5-pro-preview-03-25",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-12-02",
       "date_precision": "earliest",
-      "replacement": "gemini-3.1-pro-preview"
+      "replacement": "gemini-3.8-flash"
     },
     {
       "id": "gemini-2.5-pro-preview-05-06",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-12-02",
       "date_precision": "earliest",
-      "replacement": "gemini-3.1-pro-preview"
+      "replacement": "gemini-3.8-flash"
     },
     {
       "id": "gemini-2.5-pro-preview-06-05",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-12-02",
       "date_precision": "earliest",
-      "replacement": "gemini-3.1-pro-preview"
+      "replacement": "gemini-3.8-flash"
     },
     {
       "id": "gemini-2.5-flash",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -162,11 +166,15 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
-      ]
+      ],
+      "shutdown": "2026-12-01",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.5-flash-lite",
+      "replacement_note": "gemini-2.5-flash is no longer available in Google AI Studio; effective December 1, 2026, API requests to gemini-2.5-flash will automatically route to gemini-3.5-flash-lite"
     },
     {
       "id": "gemini-2.5-flash-image",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -181,7 +189,7 @@
     },
     {
       "id": "gemini-2.5-flash-lite",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -193,21 +201,21 @@
     },
     {
       "id": "gemini-2.5-flash-lite-preview-09-2025",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-03-31",
       "date_precision": "earliest",
       "replacement": "gemini-3.1-flash-lite"
     },
     {
       "id": "gemini-2.5-flash-preview-05-20",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-11-18",
       "date_precision": "earliest",
       "replacement": "gemini-3.6-flash"
     },
     {
       "id": "gemini-2.5-flash-image-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-01-15",
       "date_precision": "earliest",
       "replacement": "gemini-nano-banana-2.1"
@@ -221,7 +229,7 @@
     },
     {
       "id": "gemini-2.0-flash",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -235,14 +243,14 @@
     },
     {
       "id": "gemini-2.0-flash-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-06-01",
       "date_precision": "earliest",
       "replacement": "gemini-3.6-flash"
     },
     {
       "id": "gemini-2.0-flash-lite",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -256,64 +264,62 @@
     },
     {
       "id": "gemini-2.0-flash-lite-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-06-01",
       "date_precision": "earliest",
       "replacement": "gemini-3.1-flash-lite"
     },
     {
       "id": "gemini-2.0-flash-preview-image-generation",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-11-14",
       "date_precision": "earliest",
       "replacement": "gemini-nano-banana-2.1"
     },
     {
       "id": "gemini-2.0-flash-lite-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-12-09",
       "date_precision": "earliest",
       "replacement": "gemini-3.1-flash-lite"
     },
     {
       "id": "gemini-2.0-flash-lite-preview-02-05",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-12-09",
       "date_precision": "earliest",
       "replacement": "gemini-3.1-flash-lite"
     },
     {
       "id": "gemini-2.0-flash-live-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-12-09",
       "date_precision": "earliest",
       "replacement": "gemini-3.8-live"
     },
     {
       "id": "gemini-3.1-flash-live-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-11-17",
-      "date_precision": "earliest",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "replacement": "gemini-3.8-live"
     },
     {
       "id": "gemini-2.5-flash-native-audio-preview-12-2025",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-11-17",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2027-03-31",
       "date_precision": "earliest",
       "replacement": "gemini-3.8-live"
     },
     {
       "id": "gemini-live-2.5-flash-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-12-09",
       "date_precision": "earliest",
       "replacement": "gemini-3.8-live"
     },
     {
       "id": "gemini-3.1-flash-tts-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-11-17",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2026-12-18",
       "date_precision": "earliest",
       "replacement_options": [
         "gemini-3.8-flash-tts",
@@ -322,8 +328,8 @@
     },
     {
       "id": "gemini-2.5-flash-preview-tts",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-11-17",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2026-12-18",
       "date_precision": "earliest",
       "replacement_options": [
         "gemini-3.8-flash-tts",
@@ -332,8 +338,8 @@
     },
     {
       "id": "gemini-2.5-pro-preview-tts",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
-      "shutdown": "2026-11-17",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2026-12-18",
       "date_precision": "earliest",
       "replacement_options": [
         "gemini-3.8-flash-tts",
@@ -342,7 +348,7 @@
     },
     {
       "id": "gemini-embedding-2",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -352,7 +358,7 @@
     },
     {
       "id": "gemini-embedding-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -367,7 +373,7 @@
     },
     {
       "id": "text-embedding-004",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -389,35 +395,35 @@
     },
     {
       "id": "embedding-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-10-30",
       "date_precision": "earliest",
       "replacement": "gemini-embedding-2"
     },
     {
       "id": "embedding-gecko-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-10-30",
       "date_precision": "earliest",
       "replacement": "gemini-embedding-2"
     },
     {
       "id": "gemini-embedding-exp",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-10-30",
       "date_precision": "earliest",
       "replacement": "gemini-embedding-2"
     },
     {
       "id": "gemini-embedding-exp-03-07",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-10-30",
       "date_precision": "earliest",
       "replacement": "gemini-embedding-2"
     },
     {
       "id": "imagen-4.0-generate-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -431,7 +437,7 @@
     },
     {
       "id": "imagen-4.0-ultra-generate-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -445,14 +451,14 @@
     },
     {
       "id": "imagen-4.0-fast-generate-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-08-17",
       "date_precision": "earliest",
       "replacement": "gemini-nano-banana-2.1"
     },
     {
       "id": "imagen-3.0-generate-002",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -466,21 +472,21 @@
     },
     {
       "id": "imagen-4.0-generate-preview-06-06",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-02-17",
       "date_precision": "earliest",
       "replacement": "gemini-nano-banana-2.1"
     },
     {
       "id": "imagen-4.0-ultra-generate-preview-06-06",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-02-17",
       "date_precision": "earliest",
       "replacement": "gemini-nano-banana-2.1"
     },
     {
       "id": "veo-3.0-generate-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -490,12 +496,12 @@
       ],
       "shutdown": "2026-06-30",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash",
+      "replacement": "gemini-omni-1.2-flash",
       "replacement_note": "the GA models on the Gemini Enterprise Agent Platform"
     },
     {
       "id": "veo-3.0-fast-generate-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -505,12 +511,12 @@
       ],
       "shutdown": "2026-06-30",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash",
+      "replacement": "gemini-omni-1.2-flash",
       "replacement_note": "the GA models on the Gemini Enterprise Agent Platform"
     },
     {
       "id": "veo-2.0-generate-001",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -520,74 +526,74 @@
       ],
       "shutdown": "2026-06-30",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash",
+      "replacement": "gemini-omni-1.2-flash",
       "replacement_note": "the GA models on the Gemini Enterprise Agent Platform"
     },
     {
       "id": "veo-3.1-lite-generate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-10-22",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash"
+      "replacement": "gemini-omni-1.2-flash"
     },
     {
       "id": "veo-3.1-generate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-10-22",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash"
+      "replacement": "gemini-omni-1.2-flash"
     },
     {
       "id": "veo-3.1-fast-generate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-10-22",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash"
+      "replacement": "gemini-omni-1.2-flash"
     },
     {
       "id": "veo-3.0-generate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-11-12",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash"
+      "replacement": "gemini-omni-1.2-flash"
     },
     {
       "id": "veo-3.0-fast-generate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2025-11-12",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash"
+      "replacement": "gemini-omni-1.2-flash"
     },
     {
       "id": "lyria-3-clip-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "lyria-3-pro-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "replacement": "lyria-3.5"
     },
     {
       "id": "lyria-realtime-exp",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-robotics-er-1.6-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-08-31",
       "date_precision": "earliest",
       "replacement": "gemini-robotics-er-2-preview"
     },
     {
       "id": "gemini-robotics-er-1.5-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-04-30",
       "date_precision": "earliest",
       "replacement": "gemini-robotics-er-2-preview"
     },
     {
       "id": "gemini-3.7-flash",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -597,7 +603,7 @@
         }
       ],
       "replacement": "gemini-3.8-flash",
-      "replacement_note": "not available to select in Google AI Studio; the endpoint is not shutting down and automatically routes API requests to gemini-3.8-flash"
+      "replacement_note": "gemini-3.7-flash is no longer available in Google AI Studio; the endpoint is not shutting down and automatically routes API requests to gemini-3.8-flash"
     },
     {
       "id": "gemma-4-26b-a4b-it"
@@ -630,40 +636,55 @@
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
       ],
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-omni-flash-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-10-22",
       "date_precision": "earliest",
-      "replacement": "gemini-omni-1.1-flash"
+      "replacement": "gemini-omni-1.2-flash"
     },
     {
       "id": "gemini-robotics-er-2-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-2.5-computer-use-preview-10-2025",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "shutdown": "2026-07-28",
       "date_precision": "earliest",
       "replacement": "gemini-3.8-flash"
     },
     {
-      "id": "antigravity-preview-05-2026"
+      "id": "antigravity-preview-05-2026",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2026-10-05",
+      "date_precision": "earliest",
+      "replacement": "antigravity-preview-09-2026"
     },
     {
-      "id": "deep-research-max-preview-04-2026"
+      "id": "deep-research-max-preview-04-2026",
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
-      "id": "deep-research-preview-04-2026"
+      "id": "deep-research-preview-04-2026",
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
-      "id": "deep-research-pro-preview-12-2025"
+      "id": "deep-research-pro-preview-12-2025",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2026-10-23",
+      "date_precision": "earliest",
+      "replacement": "deep-research-preview-04-2026"
     },
     {
-      "id": "gemini-embedding-2-preview"
+      "id": "gemini-embedding-2-preview",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2026-11-06",
+      "date_precision": "earliest",
+      "replacement": "gemini-embedding-2",
+      "replacement_note": "effective November 6, 2026, API requests to gemini-embedding-2-preview route to gemini-embedding-2"
     },
     {
       "id": "aqa"
@@ -676,27 +697,31 @@
     },
     {
       "id": "gemini-robotics-er-2-streaming-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-3.5-live-translate-preview",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-3.5-transcribe-live",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-3.5-transcribe",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-omni-1.1-flash",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2026-12-03",
+      "date_precision": "earliest",
+      "replacement": "gemini-omni-1.2-flash",
+      "replacement_note": "Effective December 3, 2026, the endpoint is automatically routing API requests to gemini-omni-1.2-flash"
     },
     {
       "id": "gemini-3.8-flash",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -716,11 +741,11 @@
     },
     {
       "id": "lyria-3.5",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-3.8-live",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -732,25 +757,26 @@
     },
     {
       "id": "gemini-3.8-live-extended-thinking",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
-      "id": "antigravity-preview-09-2026"
+      "id": "antigravity-preview-09-2026",
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-3.8-flash-tts",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "gemini-3.8-flash-lite-tts",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations"
+      "source": "https://aistudio.google.com/docs/deprecations"
     },
     {
       "id": "antigravity-preview-latest"
     },
     {
       "id": "gemini-nano-banana-2.1",
-      "source": "https://ai.google.dev/gemini-api/docs/deprecations",
+      "source": "https://aistudio.google.com/docs/deprecations",
       "distributions": [
         {
           "via": "vertex-ai",
@@ -767,7 +793,51 @@
           "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
+      ],
+      "source": "https://aistudio.google.com/docs/deprecations"
+    },
+    {
+      "id": "gemini-4-hydrogen",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "distributions": [
+        {
+          "via": "vertex-ai",
+          "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
+        }
       ]
+    },
+    {
+      "id": "gemini-4-carbon",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "distributions": [
+        {
+          "via": "vertex-ai",
+          "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
+        }
+      ]
+    },
+    {
+      "id": "gemini-2.5-flash-preview-09-2025",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "shutdown": "2026-02-17",
+      "date_precision": "earliest",
+      "replacement": "gemini-3.6-flash"
+    },
+    {
+      "id": "gemini-omni-1.2-flash",
+      "source": "https://aistudio.google.com/docs/deprecations",
+      "distributions": [
+        {
+          "via": "vertex-ai",
+          "shutdown": "2027-11-05",
+          "date_precision": "earliest",
+          "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
+        }
+      ]
+    },
+    {
+      "id": "gemini-decision-1",
+      "source": "https://aistudio.google.com/docs/deprecations"
     }
   ]
 }

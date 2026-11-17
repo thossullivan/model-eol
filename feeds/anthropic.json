@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "anthropic",
-  "generated": "2026-10-26T11:18:07.097Z",
+  "generated": "2026-11-17T05:01:30.710Z",
   "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
   "policy": {
     "min_notice_days": 60,
@@ -399,7 +399,7 @@
         },
         {
           "via": "azure-ai-foundry",
-          "shutdown": "2026-11-24",
+          "shutdown": "2027-02-22",
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
@@ -423,7 +423,7 @@
         },
         {
           "via": "azure-ai-foundry",
-          "shutdown": "2026-11-15",
+          "shutdown": "2027-02-22",
           "status": "active",
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
@@ -573,6 +573,36 @@
       ],
       "shutdown": "2027-10-07",
       "date_precision": "tentative"
+    },
+    {
+      "id": "claude-fable-5-2",
+      "shutdown": "2027-11-09",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-11-09",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-2.html"
+        }
+      ]
+    },
+    {
+      "id": "claude-mythos-5-2",
+      "shutdown": "2027-11-09",
+      "date_precision": "tentative",
+      "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+      "distributions": [
+        {
+          "via": "aws-bedrock",
+          "shutdown": "2027-11-09",
+          "date_precision": "tentative",
+          "status": "active",
+          "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5-2.html"
+        }
+      ]
     }
   ]
 }
