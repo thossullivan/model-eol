@@ -9,6 +9,7 @@ the weekly workflow uses this code, see [docs/FEEDS.md](../docs/FEEDS.md).
 | `refresh.mjs` | Entry point. Fetches, parses, merges, writes, and prints the semantic diff. |
 | `providers.mjs` | Publisher parsers: OpenAI, Anthropic, Google, Mistral, Cohere. |
 | `distributors.mjs` | Distributor parsers: Bedrock, Vertex AI, Azure AI Foundry. |
+| `markdown.mjs` | Strict reader for GitHub-flavored Markdown pipe tables, with an HTML rendering for the HTML row readers. |
 | `fetch.mjs` | Bounded HTTP fetches (30-second deadline, 8 MiB limit) for Anthropic model pages and distributor pages. It re-exports `lib/fetch-bounded.mjs`, which the bot's `--feeds-url` download also uses. |
 | `diff.mjs` | The semantic diff used for `--check` and for refresh PR bodies. |
 | `shapes.mjs` | The source structure check. Records the table header shapes of every source page in `source-shapes.json`. |
@@ -57,6 +58,27 @@ A change that makes a parser accept more input has to show that the new input
 can't produce a row bound to the wrong model. Add a fixture that would have
 produced a misaligned row and assert that it is refused.
 
+## Markdown pipe tables
+
+`markdown.mjs` reads GitHub-flavored pipe tables for parsers whose source is a
+Markdown page. It is stricter than GitHub, which pads or truncates rows:
+
+- A table is a header row, a delimiter row of `---`, `:--`, `--:`, or `:-:`
+  cells, then body rows up to a blank line or the start of another block.
+  Outer pipes are optional.
+- A delimiter or body row whose cell count differs from the header stops the
+  run with its line number, so a date can never land in the wrong column. So
+  does a delimiter row with no header, a second delimiter row, a line without a
+  pipe directly after a row, and a row cut off from its table by a blank line.
+- `\|` is a literal pipe, and a pipe inside a code span doesn't split a cell.
+  Fenced code, HTML comments, and YAML front matter are ignored. Tables inside
+  block quotes are read.
+- Each table records its header, rows of trimmed cell source, the line of its
+  header row, and the nearest preceding ATX heading.
+- `markdownPipeTableToHtml` renders a table as HTML for the HTML row readers.
+  Its default cell rendering keeps code spans, links with a safe target, and
+  `<br>`, drops emphasis, and escapes any other markup.
+
 ## Source structure check
 
 A parser that finds columns by label can keep working while it ignores a new
@@ -70,7 +92,12 @@ endpoints aren't checked.
   with whitespace collapsed, invisible characters removed, and `<sup>`
   footnote markers dropped. HTML tables use their `thead` rows, or else their
   leading rows of `th` cells. A table with neither is recorded as having no
-  header row. Google's Markdoc tables use their first row.
+  header row. Google's Markdoc tables use their first row, and Markdown pipe
+  tables use their header row, read with emphasis, links, code marks, and
+  `^N^` and `[^N]` footnote markers removed.
+- A page whose first markup, after any leading comments, is a tag is HTML;
+  anything else is Markdown. A Markdown page contributes its Markdoc, pipe,
+  and raw HTML tables outside fenced code.
 - Each shape ends with the table's width, such as `[5 cols]`: the widest row,
   header or body, with `colspan` counted. A wider body or a changed `colspan`
   under an unchanged header changes the shape.
@@ -84,6 +111,9 @@ endpoints aren't checked.
 - `node refresh/shapes.mjs --write` regenerates the snapshot from the live
   pages. With `--fixtures DIR` it reads the recorded pages instead, and then
   needs `--snapshot FILE` so it never overwrites the committed snapshot.
+- A provider's `deprecationsFetchHeaders` or a distributor's `sourceHeaders`
+  adds request headers to its page fetch, such as `Accept: text/markdown`. A
+  fetch with extra headers refuses redirects, like a models endpoint fetch.
 
 The daily `source-check` workflow runs this check; see
 [docs/FEEDS.md](../docs/FEEDS.md#the-daily-source-check).

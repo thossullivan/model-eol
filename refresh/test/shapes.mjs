@@ -7,28 +7,38 @@ import path from 'node:path'
 import strictAssert from 'node:assert/strict'
 import {
   SNAPSHOT_FILE,
+  collectShapes,
   compareShapes,
+  extractShapes,
   htmlTableShapes,
   markdocTableShapes,
   normalizeHeaderText,
+  pipeTableShapes,
   readSnapshot,
   renderShapeDiff,
   shapeSources,
   snapshotDocument,
+  sourceFormat,
 } from '../shapes.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const shapesCli = path.join(root, 'refresh', 'shapes.mjs')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-shapes-test-'))
 let failures = 0
+const pending = []
 
 const test = (name, check) => {
-  try {
-    check()
-    console.log(`ok: ${name}`)
-  } catch (error) {
+  const pass = () => console.log(`ok: ${name}`)
+  const fail = error => {
     console.error(`FAIL: ${name}: ${error.message}`)
     failures++
+  }
+  try {
+    const result = check()
+    if (result instanceof Promise) pending.push(result.then(pass, fail))
+    else pass()
+  } catch (error) {
+    fail(error)
   }
 }
 
@@ -116,6 +126,54 @@ test('Markdoc header rows are read with emphasis, links, and escapes removed, an
   strictAssert.throws(() => markdocTableShapes('## A\n{% table id="x" %}\n'), /malformed table tag/)
 })
 
+test('pipe table header rows are normalized like the other formats and carry their width', () => {
+  const markdown = [
+    '# Deprecations',
+    '## Upcoming',
+    '| **Shutdown date** | [Affected `model`](/m) | Retirement date<sup>1</sup> | Notice^2^ date[^3] | A \\| B |',
+    '| --- | --- | --- | --- | --- |',
+    '| x | y | z | w | v |',
+    '## Past',
+    'Shutdown date | Affected model | Retirement date | Notice date | A/B',
+    ':-- | :-: | --: | --- | ---',
+    '```',
+    '| Fenced | Example |',
+    '| --- | --- |',
+    '```',
+  ].join('\n')
+  strictAssert.deepEqual(pipeTableShapes(markdown), ['shutdown date | affected model | retirement date | notice date | a / b [5 cols]', 'shutdown date | affected model | retirement date | notice date | a/b [5 cols]'])
+  strictAssert.throws(() => pipeTableShapes('| A | B |\n| --- |\n'), /line 2: table delimiter row has 1 cells/)
+})
+
+test('a source body is classified from its content, and a Markdown body pools Markdoc, pipe, and raw HTML tables', () => {
+  strictAssert.equal(sourceFormat('\ufeff\n<!-- note --><!DOCTYPE html><table></table>'), 'html')
+  strictAssert.equal(sourceFormat(htmlTable(['Model'])), 'html')
+  strictAssert.equal(sourceFormat('---\ntitle: x\n---\n| A |\n| - |\n'), 'markdown')
+  strictAssert.equal(sourceFormat('# Models\n\n<table></table>'), 'markdown')
+  strictAssert.deepEqual(extractShapes(`<p>| A | B |</p>\n<p>| --- | --- |</p>${htmlTable(['Model'])}`), ['model [2 cols]'])
+  const markdown = `## Models\n${markdocTable(['Model', 'Date'], [['\`m\`', 'd']])}\n\n| Agent | Date |\n| --- | --- |\n| a | d |\n\n${htmlTable(['Raw', 'Html'])}\n\n\`\`\`\n<table><tr><th>Fenced</th></tr>\n\`\`\`\n`
+  strictAssert.deepEqual(extractShapes(markdown), ['agent | date [2 cols]', 'model | date [2 cols]', 'raw | html [2 cols]'])
+  strictAssert.throws(() => extractShapes('# Models\n\nNo tables, only | a pipe.\n'), /no tables found/)
+  strictAssert.throws(() => extractShapes('<p>no tables</p>'), /no tables found/)
+})
+
+test('a source can set request headers for its page fetch', async () => {
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push([url, init.headers])
+    return new Response('| Model | Date |\n| --- | --- |\n| m | d |\n', { status: 200 })
+  }
+  const sources = [
+    { name: 'plain', kind: 'distributor', url: 'https://plain.test/', headers: {} },
+    { name: 'markdown', kind: 'distributor', url: 'https://markdown.test/', headers: { accept: 'text/markdown' } },
+  ]
+  const { shapes, failures } = await collectShapes(sources, { fetchImpl })
+  strictAssert.deepEqual(failures, [])
+  strictAssert.deepEqual(shapes.markdown, { url: 'https://markdown.test/', tables: ['model | date [2 cols]'] })
+  strictAssert.deepEqual(seen, [['https://plain.test/', { 'accept-language': 'en' }], ['https://markdown.test/', { 'accept-language': 'en', accept: 'text/markdown' }]])
+  strictAssert.ok(shapeSources().every(source => source.headers && typeof source.headers === 'object'))
+})
+
 test('snapshot comparison reports added and removed shapes, new and removed sources, and moved URLs', () => {
   const before = snapshotDocument({ a: { url: 'https://a.test/', tables: ['x | y'] }, gone: { url: 'https://gone.test/', tables: ['z'] } })
   const after = snapshotDocument({ a: { url: 'https://a.test/moved', tables: ['x | y | notice date'] }, fresh: { url: 'https://fresh.test/', tables: ['q'] } })
@@ -174,6 +232,19 @@ test('a snapshot written from the sources makes --check exit 0', () => {
   const result = run(['--check', '--fixtures', fixtureDir, '--snapshot', snapshotFile])
   strictAssert.equal(result.code, 0, result.err)
   strictAssert.match(result.out, /All 8 source pages match/)
+})
+
+test('a source whose fixture switches from HTML to a pipe table with the same header still matches', () => {
+  writeFixtures({
+    'anthropic-deprecations.html': null,
+    'anthropic-deprecations.md': '---\ntitle: Model deprecations\n---\n\n## History\n\n| Retirement date | Deprecated model | Recommended replacement |\n|---|---|---|\n| 2026-01-01 | `m` | `n` |\n',
+  })
+  const result = run(['--check', '--fixtures', fixtureDir, '--snapshot', snapshotFile])
+  strictAssert.equal(result.code, 0, result.err)
+  writeFixtures({ 'anthropic-deprecations.html': null, 'anthropic-deprecations.md': '## History\n\n| Retirement date | Deprecated model |\n|---|---|\n| 2026-01-01 |\n' })
+  const misaligned = run(['--check', '--fixtures', fixtureDir, '--snapshot', snapshotFile])
+  strictAssert.equal(misaligned.code, 1)
+  strictAssert.match(misaligned.err, /source shape check failed for anthropic \(https:[^)]+\): line 5: table row has 1 cells; the header has 2/)
 })
 
 test('a new column makes --check exit 3 with a diff naming the source and both shapes', () => {
@@ -242,6 +313,7 @@ test('the public contract does not react to the source check', () => {
   strictAssert.ok(publicWorkflow.includes('workflows: [feed-refresh]') && !publicWorkflow.includes('source-check'))
 })
 
+await Promise.all(pending)
 fs.rmSync(tempRoot, { recursive: true, force: true })
 if (failures) {
   console.error(`\n${failures} failure(s)`)

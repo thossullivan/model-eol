@@ -1,6 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fetchBoundedBody } from './fetch.mjs'
+import { MARKDOWN_ESCAPABLE, escapeHtml, markdownInlineText, stripFencedCodeBlocks } from './markdown.mjs'
+
+export { markdownInlineText as googleInlineText, stripFencedCodeBlocks }
 
 export const PROVIDERS = {
   openai: {
@@ -950,21 +953,6 @@ export function parseAnthropicModelsIndex(markdown, url = PROVIDERS.anthropic.al
   return [...urls]
 }
 
-export function stripFencedCodeBlocks(markdown) {
-  let fence
-  return markdown.split(/\r?\n/).map(line => {
-    if (fence) {
-      const closing = line.match(/^\s*(`{3,}|~{3,})\s*$/)
-      if (closing && closing[1][0] === fence[0] && closing[1].length >= fence.length) fence = undefined
-      return ''
-    }
-    const opening = line.match(/^\s*(`{3,}|~{3,})/)
-    if (!opening) return line
-    fence = opening[1]
-    return ''
-  }).join('\n')
-}
-
 export function parseAnthropicModelPage(markdown, url) {
   const values = new Map()
   const uncommented = stripComments(markdown)
@@ -1072,23 +1060,8 @@ export const rowLifecycleLabel = record => `${record.shutdown ?? 'no date'} (${r
 
 const GOOGLE_TABLE_HEADER = ['Model', 'Release date', 'Shutdown date', 'Recommended replacement']
 
-const escapeHtml = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-const MARKDOWN_ESCAPABLE = /[!-/:-@[-`{-~]/
 const unescapeMarkdown = text => text.replace(/\\([!-/:-@[-`{-~])/g, '$1')
-
-// Drops Markdown emphasis and backslash escapes; an underscore inside a word is kept.
-export function googleInlineText(text) {
-  let output = ''
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index]
-    if (char === '\\' && MARKDOWN_ESCAPABLE.test(text[index + 1] ?? '')) output += text[++index]
-    else if (char === '~' && text[index + 1] === '~') index++
-    else if (char === '_' && !(/[\p{L}\p{N}]/u.test(text[index - 1] ?? '') && /[\p{L}\p{N}]/u.test(text[index + 1] ?? ''))) continue
-    else if (char !== '*') output += char
-  }
-  return output
-}
+const googleInlineText = markdownInlineText
 
 function googleCellHtml(markdown, where) {
   if (markdown.includes('{%')) throw new Error(`google deprecations table ${where} has a Markdoc tag in a cell: ${markdown}`)
