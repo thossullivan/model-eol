@@ -325,11 +325,11 @@ test('the daily source-check workflow runs both refresh checks and the structure
   strictAssert.ok(workflow.includes('contents: read') && workflow.includes('issues: write') && !/contents: write|pull-requests: write/.test(workflow), 'read-only contents')
   strictAssert.ok(!/git (push|commit)|gh pr /.test(workflow) && workflow.includes('persist-credentials: false'), 'writes nothing to the repository')
   strictAssert.ok(workflow.includes('check_once_more provider node refresh/refresh.mjs --check\n') && workflow.includes('check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check\n'), 'both refresh checks')
-  strictAssert.ok(workflow.match(/sleep 60/g)?.length === 2 && workflow.match(/node refresh\/shapes\.mjs --check > shapes-diff\.md 2> shapes-err\.txt/g)?.length === 2, 'an unhealthy check is retried once')
-  strictAssert.ok(/^    timeout-minutes: 60$/m.test(workflow) && /^        timeout-minutes: 40$/m.test(workflow) && /^        timeout-minutes: 10$/m.test(workflow) && workflow.match(/always\(\)/g)?.length === 1 && workflow.includes('      - name: Sign out of Azure\n        if: always()\n') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 2, 'a cancelled run reports nothing; only the Azure sign-out always runs')
+  strictAssert.ok(workflow.match(/sleep 60/g)?.length === 3 && workflow.match(/node refresh\/shapes\.mjs --check > shapes-diff\.md 2> shapes-err\.txt/g)?.length === 2, 'an unhealthy check is retried once')
+  strictAssert.ok(/^    timeout-minutes: 60$/m.test(workflow) && workflow.match(/^        timeout-minutes: 20$/gm)?.length === 2 && /^        timeout-minutes: 10$/m.test(workflow) && workflow.match(/always\(\)/g)?.length === 1 && workflow.includes('      - name: Sign out of Azure\n        if: always()\n') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 4 && workflow.includes('        id: distributor-check\n        if: success() || failure()\n') && workflow.includes('        id: refresh\n        if: success() || failure()\n'), 'a cancelled run reports nothing; only the Azure sign-out always runs, and a timed-out provider check still lets the distributor check run and be summarised')
   strictAssert.ok(workflow.includes("case \"$1\" in 0|3) echo ok ;;") && workflow.includes("s/(HTTP [0-9]{3}).*/\\1/"), 'failure state ignores healthy exit-code flips and HTTP response bodies')
   strictAssert.ok(workflow.includes('if [ "${REFRESH_HEALTHY:-}" != true ]; then') && workflow.includes('the weekly feed refresh is not affected'), 'a structure-check-only failure does not claim the weekly refresh will fail')
-  strictAssert.ok(workflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && workflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]'), 'refresh exit 0 and 3 are healthy')
+  strictAssert.ok(workflow.includes('case "$providers" in 0|3) ;; *) healthy=false ;; esac') && workflow.includes('case "$distributors" in 0|3) ;; *) healthy=false ;; esac'), 'refresh exit 0 and 3 are healthy, and a check that recorded no exit code is not')
   strictAssert.ok(workflow.includes('node refresh/shapes.mjs --check >') && workflow.includes('case "$SHAPES" in 0|3)'), 'structure check, exit 3 is not a failure')
   for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'MISTRAL_API_KEY', 'COHERE_API_KEY']) strictAssert.ok(workflow.includes(`${key}: \${{ secrets.${key} }}`), key)
   strictAssert.ok(workflow.includes('failed_title="Source check failed"') && workflow.includes('shapes_title="Source page structure changed"'), 'both issue titles')
@@ -338,6 +338,7 @@ test('the daily source-check workflow runs both refresh checks and the structure
 })
 
 const workflowFile = name => fs.readFileSync(path.join(root, '.github', 'workflows', name), 'utf8')
+const workflowSteps = workflow => workflow.split(/\n(?= {6}- (?:name|uses):)/).slice(1).map(text => ({ name: text.match(/^ {6}- (?:name|uses): (.*)/)[1], text: `${text}\n` }))
 const azureHelper = workflow => {
   const start = workflow.indexOf('          azure_api_env() {\n')
   const end = workflow.indexOf('\n          }\n', start)
@@ -371,7 +372,7 @@ for (const name of ['source-check.yml', 'feed-refresh.yml']) {
     const signOutAt = workflow.indexOf('      - name: Sign out of Azure\n')
     strictAssert.ok(lastDistributor < signOutAt && workflow.indexOf('      - name:', lastDistributor) === signOutAt, 'the sign-out is the step right after the last distributor refresh')
     strictAssert.equal(workflow.includes('MODEL_EOL_CROSS_CHECKS: strict'), name === 'source-check.yml', 'only the daily check makes a broken cross-check fail the run')
-    if (name === 'source-check.yml') strictAssert.equal(workflow.match(/^ {10}MODEL_EOL_CROSS_CHECKS: strict\n/gm)?.length, 1, 'the strict policy is set on the step that runs both refresh checks')
+    if (name === 'source-check.yml') strictAssert.equal(workflow.match(/^ {10}MODEL_EOL_CROSS_CHECKS: strict\n/gm)?.length, 2, 'the strict policy is set on both refresh check steps')
   })
 
   test(`${name} ${name === 'source-check.yml' ? 'fails' : 'warns about'} the Azure source after a failed login and skips it with a notice off main`, () => {
@@ -403,43 +404,72 @@ for (const name of ['source-check.yml', 'feed-refresh.yml']) {
     strictAssert.match(skipped, /::notice::Azure login runs only on main; .* on refs\/heads\/topic\.\nsubscription=unset token=unset\n$/)
   })
 
-  test(`${name} gives the AWS key from the model-apis environment only to the distributor refresh`, () => {
+  test(`${name} runs each distributor refresh in its own step, the only step that carries the AWS key or the Azure token`, () => {
     const workflow = workflowFile(name)
-    const distributorRuns = workflow.match(/node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry/g)?.length
-    strictAssert.equal(workflow.match(/^ {10}BEDROCK_ACCESS_KEY_ID: \$\{\{ secrets\.AWS_ACCESS_KEY_ID \}\}\n {10}BEDROCK_SECRET_ACCESS_KEY: \$\{\{ secrets\.AWS_SECRET_ACCESS_KEY \}\}\n {8}run: \|\n {10}# [^\n]*\n {10}bedrock_key_id=\$BEDROCK_ACCESS_KEY_ID\n {10}bedrock_secret=\$BEDROCK_SECRET_ACCESS_KEY\n {10}unset BEDROCK_ACCESS_KEY_ID BEDROCK_SECRET_ACCESS_KEY\n/gm)?.length, distributorRuns, 'each distributor step moves the key into unexported variables before running anything')
-    strictAssert.equal(workflow.match(/secrets\.AWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)/g)?.length, 2 * distributorRuns, 'the AWS secrets reach no other step')
-    strictAssert.ok(!/AWS_[A-Z_]+: \$\{\{|GITHUB_ENV[^\n]*AWS_|AWS_[^\n]*GITHUB_ENV|AWS_SESSION_TOKEN|configure-aws-credentials/.test(workflow), 'the key never reaches a step env under its AWS name or GITHUB_ENV')
+    const steps = workflowSteps(workflow)
+    const distributor = steps.filter(step => step.text.includes('node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry'))
+    const keyed = steps.filter(step => /secrets\.AWS_|BEDROCK_|AZURE_SUBSCRIPTION:|azure_api_env|bedrock_api_env|get-access-token/.test(step.text))
+    strictAssert.equal(distributor.length, name === 'source-check.yml' ? 1 : 2)
+    strictAssert.deepEqual(keyed.map(step => step.name), distributor.map(step => step.name), 'only the distributor steps see a credential for a distributor API')
+    for (const step of distributor) {
+      const env = step.text.match(/\n {8}env:\n((?: {10}\S.*\n)+)/)?.[1].trim().split('\n').map(line => line.trim().split(':')[0]).sort()
+      const expected = ['AZURE_LOGIN', 'AZURE_SUBSCRIPTION', 'BEDROCK_ACCESS_KEY_ID', 'BEDROCK_SECRET_ACCESS_KEY', ...(name === 'source-check.yml' ? ['MODEL_EOL_CROSS_CHECKS'] : [])].sort()
+      strictAssert.deepEqual(env, expected, step.name)
+      strictAssert.ok(step.text.includes('          BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}\n          BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}\n'), step.name)
+      strictAssert.equal(step.text.match(/node refresh\/refresh\.mjs/g)?.length, 1, `${step.name} runs no other refresh`)
+      strictAssert.ok(!/npm test|update-readme-freshness|gh |git /.test(step.text), `${step.name} runs nothing else`)
+    }
+    strictAssert.equal(workflow.match(/secrets\.AWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)/g)?.length, 2 * distributor.length, 'the AWS secrets reach no other step')
+    strictAssert.ok(!/AWS_[A-Z_]+: \$\{\{|GITHUB_ENV[^\n]*AWS_|AWS_[^\n]*GITHUB_ENV|AWS_SESSION_TOKEN|configure-aws-credentials|unset BEDROCK/.test(workflow), 'the key never reaches a step env under its AWS name or GITHUB_ENV')
+    for (const step of steps.filter(step => /node refresh\/refresh\.mjs(?! --distributor)|npm test/.test(step.text))) {
+      strictAssert.ok(!distributor.includes(step), `${step.name} is not a distributor step`)
+    }
   })
 
   test(`${name} ${name === 'source-check.yml' ? 'fails' : 'warns about'} the Bedrock source without a key on main and skips it with a notice off main`, () => {
     const workflow = workflowFile(name)
-    const start = workflow.indexOf('          bedrock_key_id=$BEDROCK_ACCESS_KEY_ID\n')
-    const end = workflow.indexOf('\n          }\n', workflow.indexOf('bedrock_api_env() {', start))
+    const start = workflow.indexOf('          bedrock_api_env() {\n')
+    const end = workflow.indexOf('\n          }\n', start)
     strictAssert.ok(start >= 0 && end > start, 'workflow defines bedrock_api_env')
     const helper = workflow.slice(start, end + 12).split('\n').map(line => line.slice(10)).join('\n')
-    const show = label => `sh -c 'echo "${label} id=\${AWS_ACCESS_KEY_ID-unset} secret=\${AWS_SECRET_ACCESS_KEY-unset} raw=\${BEDROCK_ACCESS_KEY_ID-unset}"'`
+    const show = `sh -c 'echo "id=\${AWS_ACCESS_KEY_ID-unset} secret=\${AWS_SECRET_ACCESS_KEY-unset}"'`
     const runHelper = (ref, keyId, secret) => {
-      const script = `${helper}\n${show('provider')}\n(\n  bedrock_api_env\n  ${show('distributor')}\n)\n${show('after')}\n`
       const env = { PATH: process.env.PATH, GITHUB_REF: ref, BEDROCK_ACCESS_KEY_ID: keyId, BEDROCK_SECRET_ACCESS_KEY: secret }
-      const result = spawnSync('bash', ['-c', script], { env, encoding: 'utf8' })
+      const result = spawnSync('bash', ['-c', `${helper}\nbedrock_api_env\n${show}\n`], { env, encoding: 'utf8' })
       strictAssert.equal(result.status, 0, result.stderr)
       return result.stdout
     }
-    const unsetLine = label => `${label} id=unset secret=unset raw=unset\n`
-    const keyed = runHelper('refs/heads/main', 'AKIAEXAMPLEKEY12345', 'example-secret')
-    strictAssert.equal(keyed, `${unsetLine('provider')}distributor id=AKIAEXAMPLEKEY12345 secret=example-secret raw=unset\n${unsetLine('after')}`)
-    const half = runHelper('refs/heads/main', 'AKIAEXAMPLEKEY12345', '')
-    strictAssert.match(half, /distributor id=AKIAEXAMPLEKEY12345 secret= raw=unset\n/, 'one secret alone is passed on, so the refresh reports it as half-configured')
+    strictAssert.equal(runHelper('refs/heads/main', 'AKIAEXAMPLEKEY12345', 'example-secret'), 'id=AKIAEXAMPLEKEY12345 secret=example-secret\n')
+    strictAssert.equal(runHelper('refs/heads/main', 'AKIAEXAMPLEKEY12345', ''), 'id=AKIAEXAMPLEKEY12345 secret=\n', 'one secret alone is passed on, so the refresh reports it as half-configured')
     const missing = runHelper('refs/heads/main', '', '')
     if (name === 'source-check.yml') {
-      strictAssert.match(missing, /::error::No AWS key in the model-apis environment; the Bedrock models API check fails\.\ndistributor id=secret-AWS_ACCESS_KEY_ID-is-empty secret=unset raw=unset\n/)
+      strictAssert.equal(missing, '::error::No AWS key in the model-apis environment; the Bedrock models API check fails.\nid=secret-AWS_ACCESS_KEY_ID-is-empty secret=unset\n')
     } else {
-      strictAssert.match(missing, /::warning::No AWS key in the model-apis environment; .* runs without the Bedrock models API cross-check\.\ndistributor id=unset secret=unset raw=unset\n/)
+      strictAssert.match(missing, /^::warning::No AWS key in the model-apis environment; .* runs without the Bedrock models API cross-check\.\nid=unset secret=unset\n$/)
     }
-    const topic = runHelper('refs/heads/topic', '', '')
-    strictAssert.match(topic, /::notice::The AWS key is available only on main; .* skips the Bedrock models API on refs\/heads\/topic\.\ndistributor id=unset secret=unset raw=unset\n/)
+    strictAssert.match(runHelper('refs/heads/topic', '', ''), /^::notice::The AWS key is available only on main; .* skips the Bedrock models API on refs\/heads\/topic\.\nid=unset secret=unset\n$/)
   })
 }
+
+test('the step that reads the split check exit codes treats a missing code as a failure', () => {
+  const runStep = (workflow, stepName, env) => {
+    const step = workflowSteps(workflowFile(workflow)).find(candidate => candidate.name === stepName)
+    const script = step.text.split('        run: |\n')[1].split('\n').map(line => line.slice(10)).join('\n')
+    const dir = fs.mkdtempSync(path.join(tempRoot, 'step-'))
+    for (const file of ['provider-err.txt', 'distributor-err.txt']) fs.writeFileSync(path.join(dir, file), '')
+    const output = path.join(dir, 'output')
+    const result = spawnSync('bash', ['-e', '-c', script], { cwd: dir, env: { PATH: process.env.PATH, GITHUB_OUTPUT: output, ...env }, encoding: 'utf8' })
+    return { status: result.status, output: fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '' }
+  }
+  const decide = (providers, distributors) => runStep('feed-refresh.yml', 'Decide whether the feeds changed', { PROVIDERS: providers, DISTRIBUTORS: distributors })
+  strictAssert.match(decide('0', '3').output, /^changed=true\n/)
+  strictAssert.match(decide('0', '0').output, /^changed=false\n/)
+  for (const [providers, distributors] of [['', '0'], ['0', ''], ['1', '0'], ['0', '2']]) strictAssert.equal(decide(providers, distributors).status, 1, `${providers}/${distributors}`)
+  const summarise = (providers, distributors) => runStep('source-check.yml', 'Summarise the refresh checks', { PROVIDERS: providers, DISTRIBUTORS: distributors }).output
+  strictAssert.equal(summarise('3', '0'), 'providers=3\ndistributors=0\nhealthy=true\n')
+  strictAssert.equal(summarise('', '0'), 'providers=\ndistributors=0\nhealthy=false\n')
+  strictAssert.equal(summarise('0', '1'), 'providers=0\ndistributors=1\nhealthy=false\n')
+})
 
 test('the public contract does not react to the source check', () => {
   const publicWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'public-contract.yml'), 'utf8')

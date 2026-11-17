@@ -105,6 +105,13 @@ const load = options => {
 }
 const apiConflicts = source => source.conflicts.filter(conflict => conflict.source === 'models-api')
 
+// Independent reference signatures for GET /foundation-models with Accept: application/json, computed with @smithy/signature-v4 5.4.3.
+const SMITHY_REFERENCES = [
+  { region: 'us-east-1', when: '2026-11-17T23:59:59.999Z', date: '20261117T235959Z', authorization: 'AWS4-HMAC-SHA256 Credential=AKIAZZZZEXAMPLE12345/20261117/us-east-1/bedrock/aws4_request, SignedHeaders=accept;host;x-amz-date, Signature=4686b3fae7829f6c9a4f918984f171ebd8b3bcb5ce799568af0cdb12deb3fc97' },
+  { region: 'eu-west-3', when: '2026-11-18T00:00:00Z', date: '20261118T000000Z', token: 'IQoJb3JpZ2luX2VjEXAMPLE/+=TOKEN', authorization: 'AWS4-HMAC-SHA256 Credential=AKIAZZZZEXAMPLE12345/20261118/eu-west-3/bedrock/aws4_request, SignedHeaders=accept;host;x-amz-date;x-amz-security-token, Signature=ced6fda61112e571f8bbdba8315881a03d5aaaa8d7c86d1db9599a8cee2ea222' },
+  { region: 'ap-northeast-3', when: '2026-12-31T23:59:59Z', date: '20261231T235959Z', authorization: 'AWS4-HMAC-SHA256 Credential=AKIAZZZZEXAMPLE12345/20261231/ap-northeast-3/bedrock/aws4_request, SignedHeaders=accept;host;x-amz-date, Signature=90837b26de0411390dd3fad8fdc1cd09c9b6cf395446bb6bf00a82d615d16e1b' },
+]
+
 // Vectors from the AWS SigV4 test suite as published in awslabs/aws-c-auth tests/aws-signing-test-suite/v4.
 const vector = { region: 'us-east-1', service: 'service', now: '2015-08-30T12:36:00Z', credentials: { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY' } }
 
@@ -189,16 +196,19 @@ await test('each Region is one signed GET that refuses redirects and marks the s
   const api = await fetchBedrockModelsApi({ accessKeyId, secretAccessKey, sessionToken }, { fetchImpl, regions: ['us-east-1', 'us-west-2'], now: signedAt })
   strictAssert.equal(api.entries.length, 18)
   strictAssert.deepEqual(api.regions, ['us-east-1', 'us-west-2'])
-  strictAssert.deepEqual(api.notEnabled, [])
   strictAssert.deepEqual(requests.map(request => request.url), [bedrockModelsApiUrl('us-east-1'), bedrockModelsApiUrl('us-west-2')])
-  for (const [index, region] of ['us-east-1', 'us-west-2'].entries()) {
-    const { init } = requests[index]
-    const expected = signAwsRequest({ url: bedrockModelsApiUrl(region), region, service: 'bedrock', credentials: { accessKeyId, secretAccessKey, sessionToken }, headers: { Accept: 'application/json' }, now: signedAt })
+  for (const { init } of requests) {
     strictAssert.equal(init.redirect, 'error')
-    strictAssert.equal(init.headers.Authorization, expected.headers.Authorization)
-    strictAssert.ok(init.headers.Authorization.includes(`/20261117/${region}/bedrock/aws4_request, SignedHeaders=accept;host;x-amz-date;x-amz-security-token, Signature=`))
+    strictAssert.equal(init.headers.Accept, 'application/json')
     strictAssert.equal(init.headers['X-Amz-Security-Token'], sessionToken)
     strictAssert.equal(init.headers['X-Amz-Date'], '20261117T050000Z')
+  }
+  for (const reference of SMITHY_REFERENCES) {
+    const credentials = { accessKeyId, secretAccessKey, ...(reference.token ? { sessionToken: reference.token } : {}) }
+    const sent = []
+    await fetchBedrockModelsApi(credentials, { fetchImpl: async (url, init) => { sent.push(init); return new Response('{"modelSummaries":[]}') }, regions: [reference.region], now: new Date(reference.when) })
+    strictAssert.equal(sent[0].headers.Authorization, reference.authorization, `${reference.region} ${reference.when}`)
+    strictAssert.equal(sent[0].headers['X-Amz-Date'], reference.date)
   }
   strictAssert.equal(BEDROCK_MODELS_API_REGIONS.length, 17)
   strictAssert.ok(!BEDROCK_MODELS_API_REGIONS.some(region => /gov|ca-west|eu-central-2|eu-south|ap-south-2|ap-southeast-[3-7]|ap-east|af-|il-|me-|mx-/.test(region)), 'no opt-in or GovCloud Region')
@@ -222,14 +232,15 @@ await test('an AccessDenied 403 reports only its status and error type, never th
   strictAssert.match(odd.error.message, /: HTTP 500$/)
 })
 
-await test('a Region that does not recognise the credentials is one notice, not a failure, unless every Region refuses them', async () => {
+await test('any HTTP error from a configured Region fails the cross-check, even when every other Region answered', async () => {
   const unrecognised = () => new Response('{"message":"The security token included in the request is invalid."}', { status: 403, headers: { 'x-amzn-ErrorType': 'UnrecognizedClientException:http://internal.amazon.com/coral/com.amazon.coral.service/' } })
-  const partly = await load({ fetchImpl: fakeFetch({ api: recorded, errors: { 'ca-west-1': unrecognised, 'il-central-1': unrecognised } }).fetchImpl, env: { ...env, ...strict }, bedrockRegions: ['us-east-1', 'ca-west-1', 'il-central-1'] })
-  strictAssert.ok(!partly.error, partly.error?.message)
-  strictAssert.deepEqual(partly.notices.filter(line => line.includes('not enabled')), ['notice: bedrock models API: 2 regions not enabled for these credentials (HTTP 403 UnrecognizedClientException), skipped: ca-west-1, il-central-1'])
-  strictAssert.ok(partly.notices.includes('notice: bedrock models API: 9 entries in 1 regions; 8 legacy; 2 conflicts with the lifecycle page'), partly.notices.join('\n'))
-  const all = await load({ fetchImpl: fakeFetch({ errors: { 'us-east-1': unrecognised, 'us-west-2': unrecognised } }).fetchImpl, env: { ...env, ...strict } })
-  strictAssert.equal(all.error.message, 'aws-bedrock models API: every region refused the credentials (HTTP 403 UnrecognizedClientException)')
+  const regions = ['us-east-1', 'us-west-2', 'eu-west-3']
+  const failed = await load({ fetchImpl: fakeFetch({ api: recorded, errors: { 'eu-west-3': unrecognised } }).fetchImpl, env: { ...env, ...strict }, bedrockRegions: regions })
+  strictAssert.equal(failed.error?.message, `aws-bedrock models API eu-west-3 fetch failed for ${bedrockModelsApiUrl('eu-west-3')}: HTTP 403 UnrecognizedClientException`)
+  const warned = await load({ fetchImpl: fakeFetch({ api: recorded, errors: { 'eu-west-3': unrecognised } }).fetchImpl, env, bedrockRegions: regions })
+  strictAssert.ok(!warned.error, warned.error?.message)
+  strictAssert.deepEqual(apiConflicts(warned.source).map(conflict => conflict.reason), ['cross-check-failed'], 'no partial comparison is reported')
+  strictAssert.ok(!warned.notices.some(line => line.startsWith('notice: bedrock models API:')), 'no summary for a partial read')
   const signature = () => new Response('{}', { status: 403, headers: { 'x-amzn-ErrorType': 'InvalidSignatureException' } })
   const bad = await load({ fetchImpl: fakeFetch({ api: recorded, errors: { 'us-west-2': signature } }).fetchImpl, env: { ...env, ...strict } })
   strictAssert.match(bad.error.message, /us-west-2 fetch failed for .*: HTTP 403 InvalidSignatureException$/)
@@ -265,14 +276,17 @@ await test('the recorded responses against the recorded page report the expected
     ['undated', 'deepseek.v3-v1:0', 'us-west-2'],
     ['unlisted', 'meta.llama3-1-8b-instruct-v1:0', 'us-east-1,us-west-2'],
     ['unlisted', 'meta.llama3-1-8b-instruct-v1:0:128k', 'us-west-2'],
+    ['absent', 'mistral.mistral-7b-instruct-v0:2', 'us-east-1,us-west-2'],
   ])
+  strictAssert.ok(plain.source.records.some(record => record.bedrockId === 'anthropic.claude-fable-5-1' && record.date_precision === 'tentative'), 'the fable card is a no-sooner-than card the API does not return, and is not absent')
+  strictAssert.deepEqual(conflicts[4].page, { card: 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-7b-instruct.html', eol: '2027-03-30' })
   strictAssert.deepEqual(conflicts[1], {
     via: 'aws-bedrock', source: 'models-api', reason: 'undated', id: 'deepseek.v3-v1:0', regions: ['us-west-2'],
     api: { status: 'ACTIVE' }, page: { legacy: '2026-09-30', eol: '2027-03-30' },
   })
   strictAssert.ok(result.notices.includes('notice: aws-bedrock models API deepseek.v3-v1:0: page legacy 2026-09-30, EOL 2027-03-30, extended access none; API ACTIVE with no lifecycle dates in us-west-2; lifecycle page kept'), result.notices.join('\n'))
   strictAssert.equal(sourceConflictSummary(conflicts[0]), 'aws-bedrock models API anthropic.claude-sonnet-4-5-20250929-v1:0: API LEGACY (legacy 2026-10-08, EOL 2027-04-08, extended access 2027-01-08) in us-east-1, us-west-2; the lifecycle page does not list it in these Regions')
-  strictAssert.deepEqual(result.notices.filter(line => line.startsWith('notice: bedrock models API:')), ['notice: bedrock models API: 18 entries in 2 regions; 15 legacy; 4 conflicts with the lifecycle page'])
+  strictAssert.deepEqual(result.notices.filter(line => line.startsWith('notice: bedrock models API:')), ['notice: bedrock models API: 18 entries in 2 regions; 15 legacy; 5 conflicts with the lifecycle page'])
   const empty = { publisher: 'anthropic', models: [] }
   const options = { sourceConflicts: result.source.conflicts }
   strictAssert.equal(compareFeeds(empty, empty, options).changed, false)
@@ -350,7 +364,7 @@ await test('a context-length variant binds to its base model on the page, and a 
   strictAssert.deepEqual(reconcileBedrockModelsApi(withCard, entries('us-east-1', model('h.card-v1:0', 'LEGACY', '2026-11-01', '2027-05-01')), { rows, now }).conflicts, [])
   const differs = reconcileBedrockModelsApi(withCard, entries('us-east-1', model('h.card-v1:0', 'LEGACY', '2026-11-01', '2027-06-01')), { rows, now }).conflicts
   strictAssert.deepEqual(differs.map(conflict => [conflict.reason, conflict.page]), [['date', { card: card.source, eol: '2027-05-01' }]])
-  strictAssert.equal(sourceConflictSummary(differs[0]), `aws-bedrock models API h.card-v1:0: model card ${card.source} EOL 2027-05-01; API LEGACY (legacy 2026-11-01, EOL 2027-06-01, extended access none) in us-east-1; lifecycle page kept`)
+  strictAssert.equal(sourceConflictSummary(differs[0]), `aws-bedrock models API h.card-v1:0: model card ${card.source} EOL 2027-05-01; API LEGACY (legacy 2026-11-01, EOL 2027-06-01, extended access none) in us-east-1; model card kept`)
 })
 
 await test('a broken cross-check warns and keeps the page by default, fails under strict, and a broken page always fails', async () => {
@@ -373,6 +387,60 @@ await test('a broken cross-check warns and keeps the page by default, fails unde
   }
   const typo = await load({ fetchImpl: fakeFetch({ api: recorded }).fetchImpl, env: { ...env, MODEL_EOL_CROSS_CHECKS: 'stirct' } })
   strictAssert.match(typo.error.message, /MODEL_EOL_CROSS_CHECKS must be/)
+})
+
+await test('a page line whose Regions are not Region codes fails the cross-check, naming the model and the raw value', async () => {
+  const noRegions = pageEntry('n.m-v1:0', 'x', 'September 30, 2026', 'March 30, 2027').replace('  - **Regions:** x\n', '')
+  const cases = [
+    [pageEntry('n.m-v1:0', 'All commercial Regions', 'September 30, 2026', 'March 30, 2027'), '"All commercial Regions"'],
+    [pageEntry('n.m-v1:0', 'us-east-1, us-west-2*', 'September 30, 2026', 'March 30, 2027'), '"us-east-1, us-west-2*"'],
+    [pageEntry('n.m-v1:0', 'US East (N. Virginia)', 'September 30, 2026', 'March 30, 2027'), '"US East (N. Virginia)"'],
+    [noRegions, '(no Regions value)'],
+  ]
+  for (const [entry, shown] of cases) {
+    const { records, rows } = pageRows(page(entry))
+    const expected = `aws-bedrock models API: the lifecycle page lists n.m-v1:0 with Regions that are not Region codes: ${shown}`
+    strictAssert.throws(() => reconcileBedrockModelsApi(records, entries('us-east-1', model('n.m-v1:0', 'LEGACY', '2026-09-30', '2027-03-30')), { rows, now }), error => error.message === expected, shown)
+  }
+  const mantleOnly = pageRows(page(pageEntry('r.run-v1:0 (bedrock-runtime), r.mantle (bedrock-mantle)', 'us-east-1', 'September 30, 2026', 'March 30, 2027')))
+  strictAssert.doesNotThrow(() => reconcileBedrockModelsApi(mantleOnly.records, [], { rows: mantleOnly.rows.map(row => row.endpoint ? { ...row, regions: [] } : row), now }))
+  const markdown = lifecycleFixture.replace('  - **Regions:** us-east-1, us-east-2, us-west-1, us-west-2\n', '  - **Regions:** All commercial Regions\n')
+  strictAssert.notEqual(markdown, lifecycleFixture)
+  const message = 'aws-bedrock models API: the lifecycle page lists writer.palmyra-x4-v1:0 with Regions that are not Region codes: "All commercial Regions"'
+  const failed = await load({ fetchImpl: fakeFetch({ markdown, api: recorded }).fetchImpl, env: { ...env, ...strict } })
+  strictAssert.equal(failed.error?.message, message)
+  const warned = await load({ fetchImpl: fakeFetch({ markdown, api: recorded }).fetchImpl, env })
+  strictAssert.deepEqual(apiConflicts(warned.source), [{ via: 'aws-bedrock', source: 'models-api', reason: 'cross-check-failed', message }])
+})
+
+await test('a model card with an exact date is held to the undated and absent rules, and a no-sooner-than card to neither', () => {
+  const source = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-h.html'
+  const exact = { bedrockId: 'h.card-v1:0', shutdown: '2027-05-01', status: 'legacy', source }
+  const tentative = { bedrockId: 't.card-v1:0', shutdown: '2027-06-01', date_precision: 'tentative', status: 'active', source }
+  const past = { bedrockId: 'p.card-v1:0', shutdown: '2026-11-01', status: 'legacy', source }
+  const undated = reconcileBedrockModelsApi([exact, tentative, past], [...entries('us-east-1', model('h.card-v1:0'), model('t.card-v1:0')), ...entries('us-west-2')], { now })
+  strictAssert.deepEqual(undated.conflicts.map(conflict => [conflict.reason, conflict.id, conflict.regions.join()]), [['undated', 'h.card-v1:0', 'us-east-1']])
+  strictAssert.equal(sourceConflictSummary(undated.conflicts[0]), `aws-bedrock models API h.card-v1:0: model card ${source} EOL 2027-05-01; API ACTIVE with no lifecycle dates in us-east-1; model card kept`)
+  const absent = reconcileBedrockModelsApi([exact, tentative, past], entries('us-east-1', model('t.card-v1:0')), { regions: ['us-east-1', 'us-west-2'], now })
+  strictAssert.deepEqual(absent.conflicts.map(conflict => [conflict.reason, conflict.id, conflict.regions.join()]), [['absent', 'h.card-v1:0', 'us-east-1,us-west-2']])
+  strictAssert.equal(sourceConflictSummary(absent.conflicts[0]), `aws-bedrock models API h.card-v1:0: model card ${source} EOL 2027-05-01; the API does not return it in any of the 2 Regions read; model card kept`)
+  const bothMissing = reconcileBedrockModelsApi([exact, tentative], [], { regions: ['us-east-1'], now }).conflicts
+  strictAssert.deepEqual(bothMissing.map(conflict => [conflict.reason, conflict.id]), [['absent', 'h.card-v1:0']], 'a no-sooner-than card the API does not return is not absent')
+  const tentativeDate = reconcileBedrockModelsApi([tentative], entries('us-east-1', model('t.card-v1:0', 'LEGACY', '2026-12-01', '2027-07-01')), { now }).conflicts
+  strictAssert.equal(sourceConflictSummary(tentativeDate[0]), `aws-bedrock models API t.card-v1:0: model card ${source} EOL no sooner than 2027-06-01; API LEGACY (legacy 2026-12-01, EOL 2027-07-01, extended access none) in us-east-1; model card kept`)
+})
+
+await test('a page line with a legacy date and no EOL date is undated when the API calls the model ACTIVE with no dates', () => {
+  const { records, rows } = pageRows(page(pageEntry('l.m-v1:0', 'us-east-1', 'September 30, 2026', 'N/A')))
+  strictAssert.equal(rows[0].eol, undefined)
+  const { conflicts } = reconcileBedrockModelsApi(records, entries('us-east-1', model('l.m-v1:0')), { rows, now })
+  strictAssert.deepEqual(conflicts.map(conflict => [conflict.reason, conflict.page]), [['undated', { legacy: '2026-09-30' }]])
+})
+
+await test('a Region that returns only a context-length variant still reports the base model absent', () => {
+  const { records, rows } = pageRows(page(pageEntry('b.m-v1:0', 'us-east-1', 'September 30, 2026', 'March 30, 2027')))
+  const { conflicts } = reconcileBedrockModelsApi(records, entries('us-east-1', model('b.m-v1:0:128k', 'LEGACY', '2026-09-30', '2027-03-30')), { rows, regions: ['us-east-1'], now })
+  strictAssert.deepEqual(conflicts.map(conflict => [conflict.reason, conflict.id, conflict.regions.join()]), [['absent', 'b.m-v1:0', 'us-east-1']])
 })
 
 await test('messages are redacted of keys, tokens, signatures, and account ids', () => {

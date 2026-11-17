@@ -13,7 +13,6 @@ import {
 import {
   bedrockModelsApiConflictSummary,
   bedrockModelsApiCredentials,
-  bedrockModelsApiNotEnabledSummary,
   bedrockModelsApiSummary,
   fetchBedrockModelsApi,
   reconcileBedrockModelsApi,
@@ -413,6 +412,7 @@ export function parseBedrockLifecycleMarkdownRows(markdown) {
         if (regions?.length) bedrockRecordRegions.set(record, regions)
         records.push(record)
         const regional = { ...record, regions: regions ?? [] }
+        if (cell('regions') !== undefined) regional.regionsText = cell('regions').text
         if (extendedAccess !== undefined) regional.extendedAccess = extendedAccess
         if (mantleIds.has(id)) regional.endpoint = 'bedrock-mantle'
         regionalRows.push(regional)
@@ -1637,7 +1637,6 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
       redact: redactBedrockModelsApiMessage,
       run: async credentials => {
         const api = await fetchBedrockModelsApi(credentials, { fetchImpl: options.fetchImpl, regions: options.bedrockRegions })
-        if (api.notEnabled.length) notice(`notice: ${bedrockModelsApiNotEnabledSummary(api.notEnabled)}`)
         const reconciled = reconcileBedrockModelsApi(parsed.records, api.entries, { rows: parsed.rows, regions: api.regions, now: options.now })
         return { records: reconciled.records, conflicts: reconciled.conflicts, summary: bedrockModelsApiSummary(api, reconciled.conflicts) }
       },

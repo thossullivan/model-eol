@@ -9,7 +9,6 @@ export const BEDROCK_MODELS_API_REGIONS = [
   'sa-east-1', 'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
 ]
 export const BEDROCK_MODELS_API_STATUSES = new Set(['ACTIVE', 'LEGACY'])
-export const BEDROCK_MODELS_API_NOT_ENABLED = 'UnrecognizedClientException'
 
 const SOURCE = 'aws-bedrock models API'
 const MODEL_ID = /^[a-z0-9][a-z0-9_-]*\.[a-z0-9][a-z0-9._:+-]*$/i
@@ -127,7 +126,7 @@ async function errorCode(response) {
 }
 
 // An AccessDenied body names the caller's ARN and account, so a failed request reports only its status and error type.
-function statusOnlyFetch(fetchImpl, refused) {
+function statusOnlyFetch(fetchImpl) {
   return async (url, init) => {
     const response = await fetchImpl(url, init)
     if (response.ok) return response
@@ -135,37 +134,24 @@ function statusOnlyFetch(fetchImpl, refused) {
     try {
       code = await errorCode(response)
     } catch {}
-    if (response.status === 403 && code === BEDROCK_MODELS_API_NOT_ENABLED) refused.add(url)
     throw new Error(`HTTP ${response.status}${code ? ` ${code}` : ''}`)
   }
 }
 
-/** Every entry in each region; a region that refuses the credentials as unrecognised is listed in notEnabled unless every region does. */
+/** Every entry in each region; any HTTP error from a configured region fails the whole read. */
 export async function fetchBedrockModelsApi(credentials, { fetchImpl = globalThis.fetch, regions = BEDROCK_MODELS_API_REGIONS, now } = {}) {
   try {
     const entries = []
-    const read = []
-    const notEnabled = []
-    const refused = new Set()
-    const guarded = statusOnlyFetch(fetchImpl, refused)
+    const guarded = statusOnlyFetch(fetchImpl)
     for (const region of regions) {
       if (!REGION.test(region)) throw new Error(`${SOURCE}: invalid region ${JSON.stringify(region)}`)
       const url = bedrockModelsApiUrl(region)
       const where = `${SOURCE} ${region}`
       const { headers } = signAwsRequest({ url, region, service: 'bedrock', credentials, headers: { Accept: 'application/json' }, now: now ?? new Date() })
-      let body
-      try {
-        body = await fetchBoundedBody(url, where, guarded, { headers, secretHeaders: ['Authorization', 'X-Amz-Security-Token'] })
-      } catch (error) {
-        if (!refused.has(url)) throw error
-        notEnabled.push(region)
-        continue
-      }
+      const body = await fetchBoundedBody(url, where, guarded, { headers, secretHeaders: ['Authorization', 'X-Amz-Security-Token'] })
       entries.push(...parseBedrockModelsApiResponse(body, region))
-      read.push(region)
     }
-    if (!read.length) throw new Error(`${SOURCE}: every region refused the credentials (HTTP 403 ${BEDROCK_MODELS_API_NOT_ENABLED})`)
-    return { entries, regions: read, notEnabled }
+    return { entries, regions: [...regions] }
   } catch (error) {
     throw new Error(redactBedrockModelsApiMessage(error.message, credentials))
   }
@@ -183,6 +169,9 @@ export function reconcileBedrockModelsApi(records, entries, { rows = [], regions
   const pageIds = new Set(rows.map(row => row.bedrockId))
   const byRegion = new Map()
   for (const row of pageRows) {
+    if (!row.regions?.length) {
+      throw new Error(`${SOURCE}: the lifecycle page lists ${row.bedrockId} with Regions that are not Region codes: ${row.regionsText === undefined ? '(no Regions value)' : JSON.stringify(row.regionsText)}`)
+    }
     for (const region of row.regions) {
       const key = `${row.bedrockId}\0${region}`
       if (!byRegion.has(key)) byRegion.set(key, row)
@@ -204,27 +193,35 @@ export function reconcileBedrockModelsApi(records, entries, { rows = [], regions
     if (apiId) group.apiIds.add(apiId)
     groups.set(key, group)
   }
+  const undated = entry => !hasDates(entry) && entry.status === 'ACTIVE'
   for (const entry of entries) {
     const id = bound(entry.id)
-    returned.add(`${id}\0${entry.region}`)
+    returned.add(`${entry.id}\0${entry.region}`)
     const row = byRegion.get(`${id}\0${entry.region}`)
     if (row) {
-      if (!hasDates(entry) && entry.status === 'ACTIVE') {
-        if (row.eol !== undefined) observe('undated', id, row, entry, entry.region, entry.id)
+      if (undated(entry)) {
+        if (hasDates(row)) observe('undated', id, row, entry, entry.region, entry.id)
       } else if (!sameDates(entry, row)) observe('date', id, row, entry, entry.region, entry.id)
       continue
     }
     const card = cards.get(id)
     if (card) {
-      if (entry.eol !== undefined && entry.eol !== card.shutdown) observe('date', id, card, entry, entry.region, entry.id)
+      if (undated(entry)) {
+        if (card.shutdown !== undefined && card.date_precision !== 'tentative') observe('undated', id, card, entry, entry.region, entry.id)
+      } else if (entry.eol !== undefined && entry.eol !== card.shutdown) observe('date', id, card, entry, entry.region, entry.id)
     } else if (entry.status === 'LEGACY' || hasDates(entry)) observe('unlisted', id, undefined, entry, entry.region, entry.id)
   }
   const date = today(now)
+  const live = item => !(item.eol ?? item.shutdown) || (item.eol ?? item.shutdown) > date
   for (const row of pageRows) {
-    if (row.eol !== undefined && row.eol <= date) continue
+    if (!live(row)) continue
     for (const region of row.regions) {
       if (read.has(region) && !returned.has(`${row.bedrockId}\0${region}`)) observe('absent', row.bedrockId, row, undefined, region)
     }
+  }
+  for (const card of cards.values()) {
+    if (card.date_precision === 'tentative' || !live(card) || [...read].some(region => returned.has(`${card.bedrockId}\0${region}`))) continue
+    for (const region of read) observe('absent', card.bedrockId, card, undefined, region)
   }
   const order = ['date', 'undated', 'unlisted', 'absent']
   const conflicts = [...groups.values()]
@@ -239,7 +236,11 @@ export function reconcileBedrockModelsApi(records, entries, { rows = [], regions
       if (group.listed) {
         conflict.page = group.listed.regions
           ? datesOf(group.listed)
-          : { card: group.listed.source, ...(group.listed.shutdown === undefined ? {} : { eol: group.listed.shutdown }) }
+          : {
+              card: group.listed.source,
+              ...(group.listed.shutdown === undefined ? {} : { eol: group.listed.shutdown }),
+              ...(group.listed.date_precision === 'tentative' ? { tentative: true } : {}),
+            }
       }
       return conflict
     })
@@ -254,16 +255,16 @@ export function bedrockModelsApiConflictSummary(conflict) {
   const label = `${conflict.via} models API ${conflict.id ?? 'cross-check'}`
   if (conflict.reason === 'cross-check-failed') return `${label} failed: ${conflict.message}; the lifecycle page was read without the cross-check`
   const regions = conflict.regions.join(', ')
-  const page = conflict.page?.card ? `model card ${conflict.page.card} EOL ${conflict.page.eol ?? 'none'}` : conflict.page && `page ${dateList(conflict.page)}`
+  const card = conflict.page?.card
+  const page = card ? `model card ${card} EOL ${conflict.page.tentative ? 'no sooner than ' : ''}${conflict.page.eol ?? 'none'}` : conflict.page && `page ${dateList(conflict.page)}`
+  const kept = card ? 'model card kept' : 'lifecycle page kept'
   if (conflict.reason === 'unlisted') return `${label}: API ${apiText(conflict.api)} in ${regions}; the lifecycle page does not list it in these Regions`
-  if (conflict.reason === 'absent') return `${label}: page ${dateList(conflict.page)} in ${regions}; the API does not return it in these Regions; lifecycle page kept`
-  return `${label}: ${page}; API ${apiText(conflict.api)} in ${regions}; lifecycle page kept`
+  if (conflict.reason === 'absent' && card) return `${label}: ${page}; the API does not return it in any of the ${conflict.regions.length} Regions read; ${kept}`
+  if (conflict.reason === 'absent') return `${label}: ${page} in ${regions}; the API does not return it in these Regions; ${kept}`
+  return `${label}: ${page}; API ${apiText(conflict.api)} in ${regions}; ${kept}`
 }
 
 export function bedrockModelsApiSummary(api, conflicts) {
   const legacy = api.entries.filter(entry => entry.status === 'LEGACY').length
   return `bedrock models API: ${api.entries.length} entries in ${api.regions.length} regions; ${legacy} legacy; ${conflicts.length} conflicts with the lifecycle page`
 }
-
-export const bedrockModelsApiNotEnabledSummary = regions =>
-  `bedrock models API: ${regions.length} ${regions.length === 1 ? 'region' : 'regions'} not enabled for these credentials (HTTP 403 ${BEDROCK_MODELS_API_NOT_ENABLED}), skipped: ${regions.join(', ')}`

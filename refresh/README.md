@@ -597,10 +597,15 @@ When `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (and optionally
 `eu-west-2`, `eu-west-3`, `sa-east-1`, `us-east-1`, `us-east-2`, `us-west-1`,
 and `us-west-2`. These are the commercial Regions the lifecycle page names that
 an account has without opting in. In November 2026 the page also named
-GovCloud Regions, which need separate credentials, and 14 opt-in Regions, which
-answered `UnrecognizedClientException` for an account that had not enabled
-them. Requests are signed with AWS Signature Version 4 (`aws-sigv4.mjs`, no
-SDK). Fixture runs never read the API.
+GovCloud Regions, which need separate credentials, and 14 opt-in Regions
+(`af-south-1`, `ap-east-2`, `ap-south-2`, `ap-southeast-3` through
+`ap-southeast-7`, `ca-west-1`, `eu-central-2`, `eu-south-1`, `eu-south-2`,
+`il-central-1`, `mx-central-1`), which all answered HTTP 403
+`UnrecognizedClientException` for an account that had not enabled them. Since
+that is also the answer to a bad key, opt-in Regions are not configured.
+Requests are signed with AWS Signature Version 4 (`aws-sigv4.mjs`, no SDK),
+checked against the AWS SigV4 test suite and against `@smithy/signature-v4`
+for the request this check sends. Fixture runs never read the API.
 
 - Neither key set: the cross-check is skipped with a notice and the run is
   unchanged. Only one of the two keys, or a session token without them, is a
@@ -611,11 +616,8 @@ SDK). Fixture runs never read the API.
   source conflict, and the page is used without the cross-check. With
   `MODEL_EOL_CROSS_CHECKS=strict` the same failures stop the Bedrock source. A
   failure to read the page or a card always stops the run.
-- A Region that answers HTTP 403 `UnrecognizedClientException` doesn't
-  recognise the credentials, which is what an opt-in Region the account hasn't
-  enabled answers. It is skipped and listed once in one notice. When every
-  Region answers that way the key itself is bad, and the cross-check fails. Any
-  other HTTP error is a cross-check failure.
+- Any HTTP error from any configured Region, `UnrecognizedClientException`
+  included, is a cross-check failure. No partial comparison is reported.
 - An HTTP error reports only `HTTP <status> <error type>`, from the
   `x-amzn-ErrorType` header or the body's `__type`. The body, which for
   `AccessDeniedException` names the caller's ARN and account, is never printed.
@@ -638,17 +640,32 @@ SDK). Fixture runs never read the API.
   page marks `(bedrock-mantle)` are not on the `bedrock-runtime` endpoint that
   `ListFoundationModels` lists, so they are not compared. An ID the page
   doesn't list but a model card does is compared with the card's EOL date.
+- Any other page line whose Regions value is missing or isn't a list of Region
+  codes (`All commercial Regions`, `us-west-2*`, `US East (N. Virginia)`) is a
+  cross-check failure that names the model and the raw value, because none of
+  its Regions could be compared. The page itself is still read.
 - The page stays authoritative and the API creates no records. A source
-  conflict is listed, with a notice, when the API's legacy, EOL, or public
-  extended access date differs from the page's line for that Region (`date`),
-  when the page has an EOL date and the API calls the model `ACTIVE` with no
-  dates (`undated`), when the API lists a `LEGACY` or dated entry that neither
-  the page names in that Region nor a card covers (`unlisted`), and when the
-  page names a Region the API was read in but the API doesn't return the model
-  there and its EOL date hasn't passed (`absent`). Each distinct page line,
-  API status, and set of dates is one conflict that names its Regions.
-  Conflicts never fail the run. No constant date offset was seen, so none is
-  grouped.
+  conflict is listed, with a notice, when:
+  - the API's legacy, EOL, or public extended access date differs from the
+    page's line for that Region, or the API's EOL date differs from a model
+    card's (`date`);
+  - the page line has any date, or a model card has an exact EOL date, and the
+    API calls the model `ACTIVE` with no dates (`undated`). A card's "EOL no
+    sooner than" date says the model is active, so it is not compared;
+  - the API lists a `LEGACY` or dated entry that neither the page names in
+    that Region nor a card covers (`unlisted`);
+  - the page names a Region the API was read in, but the API doesn't return
+    that exact model ID there and its EOL date hasn't passed (`absent`). A
+    context-length variant doesn't stand in for its missing base model. A
+    model card with an exact EOL date that hasn't passed is `absent` when the
+    API returns it in none of the Regions read. A card with only an "EOL no
+    sooner than" date is not: in November 2026 the API returned none of nine
+    such cards, four of them served only on the `bedrock-mantle` endpoint and
+    five in limited preview or for eligible customers only.
+
+  Each distinct page line or card, API status, and set of dates is one
+  conflict that names its Regions. Conflicts never fail the run. No constant
+  date offset was seen, so none is grouped.
 - One summary notice follows: `bedrock models API: N entries in R regions; N
   legacy; N conflicts with the lifecycle page`.
 - The comparison is `reconcileBedrockModelsApi` in `bedrock-models-api.mjs`.

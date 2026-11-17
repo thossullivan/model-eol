@@ -59,26 +59,31 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Check live sources for changes
-        id: check
+      - name: Check provider sources for changes
+        id: provider-check
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+        run: |
+          set +e
+          node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      # Its own step, so the Azure token and the AWS key are in no other step's environment.
+      - name: Check distributor sources for changes
+        id: distributor-check
+        env:
           AZURE_LOGIN: ${{ steps.azure-login.outcome }}
           AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          # Unexported shell variables reach only the subshell that exports them for the distributor check.
-          bedrock_key_id=$BEDROCK_ACCESS_KEY_ID
-          bedrock_secret=$BEDROCK_SECRET_ACCESS_KEY
-          unset BEDROCK_ACCESS_KEY_ID BEDROCK_SECRET_ACCESS_KEY
           # Exports the Bedrock key; with neither secret set it exports nothing, so the refresh skips the cross-check.
           bedrock_api_env() {
-            if [ -z "$bedrock_key_id" ] && [ -z "$bedrock_secret" ]; then
+            if [ -z "$BEDROCK_ACCESS_KEY_ID" ] && [ -z "$BEDROCK_SECRET_ACCESS_KEY" ]; then
               if [ "$GITHUB_REF" = refs/heads/main ]; then
                 echo "::warning::No AWS key in the model-apis environment; the distributor check runs without the Bedrock models API cross-check."
               else
@@ -86,7 +91,7 @@ jobs:
               fi
               return 0
             fi
-            export AWS_ACCESS_KEY_ID="$bedrock_key_id" AWS_SECRET_ACCESS_KEY="$bedrock_secret"
+            export AWS_ACCESS_KEY_ID="$BEDROCK_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$BEDROCK_SECRET_ACCESS_KEY"
           }
           # Exports the models API credentials; without a token it exports nothing, so the refresh skips the cross-check after a warning.
           azure_api_env() {
@@ -107,15 +112,22 @@ jobs:
             export AZURE_MANAGEMENT_TOKEN="$token"
           }
           set +e
-          node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
-          providers=$?
           (
             azure_api_env
             bedrock_api_env
             node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
           )
-          distributors=$?
-          set -e
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether the feeds changed
+        id: check
+        env:
+          PROVIDERS: ${{ steps.provider-check.outputs.code }}
+          DISTRIBUTORS: ${{ steps.distributor-check.outputs.code }}
+        run: |
+          # A check that recorded no exit code counts as failed.
+          providers=${PROVIDERS:-1}
+          distributors=${DISTRIBUTORS:-1}
           cat provider-err.txt distributor-err.txt >&2 || true
           if [ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]; then
             echo "provider refresh failed with exit code $providers - no feed written" >&2
@@ -134,7 +146,7 @@ jobs:
           echo "providers=$providers" >> "$GITHUB_OUTPUT"
           echo "distributors=$distributors" >> "$GITHUB_OUTPUT"
 
-      - name: Regenerate feeds and README freshness
+      - name: Regenerate provider feeds
         if: steps.check.outputs.changed == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -142,18 +154,20 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+        run: node refresh/refresh.mjs
+
+      # Its own step, so the Azure token and the AWS key are in no other step's environment.
+      - name: Regenerate distributor feeds
+        if: steps.check.outputs.changed == 'true'
+        env:
           AZURE_LOGIN: ${{ steps.azure-login.outcome }}
           AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          # Unexported shell variables reach only the subshell that exports them for the distributor refresh.
-          bedrock_key_id=$BEDROCK_ACCESS_KEY_ID
-          bedrock_secret=$BEDROCK_SECRET_ACCESS_KEY
-          unset BEDROCK_ACCESS_KEY_ID BEDROCK_SECRET_ACCESS_KEY
           # Exports the Bedrock key; with neither secret set it exports nothing, so the refresh skips the cross-check.
           bedrock_api_env() {
-            if [ -z "$bedrock_key_id" ] && [ -z "$bedrock_secret" ]; then
+            if [ -z "$BEDROCK_ACCESS_KEY_ID" ] && [ -z "$BEDROCK_SECRET_ACCESS_KEY" ]; then
               if [ "$GITHUB_REF" = refs/heads/main ]; then
                 echo "::warning::No AWS key in the model-apis environment; the distributor refresh runs without the Bedrock models API cross-check."
               else
@@ -161,7 +175,7 @@ jobs:
               fi
               return 0
             fi
-            export AWS_ACCESS_KEY_ID="$bedrock_key_id" AWS_SECRET_ACCESS_KEY="$bedrock_secret"
+            export AWS_ACCESS_KEY_ID="$BEDROCK_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$BEDROCK_SECRET_ACCESS_KEY"
           }
           # Exports the models API credentials; without a token it exports nothing, so the refresh skips the cross-check after a warning.
           azure_api_env() {
@@ -181,15 +195,12 @@ jobs:
             export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
             export AZURE_MANAGEMENT_TOKEN="$token"
           }
-          node refresh/refresh.mjs
           (
             azure_api_env
             bedrock_api_env
             node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
           )
           az logout > /dev/null 2>&1 || true
-          node scripts/update-readme-freshness.mjs
-          npm test
 
       # The az session in ~/.azure outlives its step, and nothing after the last distributor refresh needs it.
       - name: Sign out of Azure
@@ -199,6 +210,12 @@ jobs:
         run: |
           az logout > /dev/null 2>&1 || true
           rm -rf "${AZURE_CONFIG_DIR:-$HOME/.azure}" || true
+
+      - name: Update README freshness and run the tests
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          node scripts/update-readme-freshness.mjs
+          npm test
 
       - name: Open feed refresh PR
         if: steps.check.outputs.changed == 'true'

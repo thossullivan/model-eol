@@ -84,11 +84,12 @@ whose only permissions are `bedrock:ListFoundationModels` and
 because its organization's service control policy denies creating an OpenID
 Connect provider (issue 149). The key is stored as the `AWS_ACCESS_KEY_ID` and
 `AWS_SECRET_ACCESS_KEY` secrets of the `model-apis` environment, so only jobs
-on `main` can read it. Both workflows hand it to the distributor refresh alone:
-the step keeps it in unexported shell variables and exports it only in the
-subshell that runs the distributor refresh, so the provider refresh, `npm
-test`, and the PR step never see it. On another branch the secrets are empty
-and the Bedrock cross-check is skipped with a notice.
+on `main` can read it. Both workflows run every distributor refresh in a step
+of its own, and only that step's environment carries the AWS key and the
+Azure token. The provider refresh, `npm test`, and the PR step run in other
+steps, so no process they start can read either one, not even through its
+parent's environment. On another branch the secrets are empty and the Bedrock
+cross-check is skipped with a notice.
 
 Three checks only compare the pages with an API and never change feed data:
 the Azure models API cross-check, the Bedrock `ListFoundationModels`
