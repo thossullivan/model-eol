@@ -50,7 +50,31 @@ with the committed ones.
   instead of opening another. `last_checked` doesn't move while a refresh PR is
   waiting to merge.
 - **Parse failure:** the run fails and opens or updates one issue. It never
-  writes a partial or guessed feed. The next successful run closes the issue.
+  writes a partial or guessed feed, and its error names every source that
+  failed, not only the first. The next successful run closes the issue.
+
+## The daily source check
+
+[`source-check.yml`](../.github/workflows/source-check.yml) runs every day at
+04:47 UTC, so a broken parser shows up within a day instead of at the next
+Monday refresh. It runs the same two `--check` commands as the weekly refresh
+and then `node refresh/shapes.mjs --check`. A check that fails is retried
+once after a minute, and the second result counts. It writes nothing to the
+repository. A check that runs too long fails and is reported like any other
+failure, and a cancelled run reports nothing.
+
+- **A check can't read a source:** the run fails and opens or updates the
+  "Source check failed" issue. The next run in which every check reads every
+  source closes it.
+- **A page's table structure changed:** the run opens or updates the "Source
+  page structure changed" issue with the header shapes added and removed. The
+  run itself doesn't fail, because the parser may still read the page
+  correctly. Check whether the parser reads the new structure, for example a
+  new column, then run `node refresh/shapes.mjs --write` and commit
+  `refresh/source-shapes.json`. The next run that matches the snapshot closes
+  the issue.
+
+Neither issue gets a new comment while its findings stay the same.
 
 A feed's `generated` date changes only when its data changes. `last_checked`
 on the public site shows when the sources were last read. The refresh never
