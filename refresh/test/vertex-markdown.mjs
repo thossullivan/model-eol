@@ -176,6 +176,12 @@ await test('fixture lookup finds the Markdown fixture and its .md fallbacks, nev
   }
 })
 
+await test('inline HTML with attributes in prose fails closed instead of hiding the earliest qualifier', () => {
+  const page = prose => `# Model versions\n\n## Latest\n\n${prose}\n\n| Model ID | Release date | Retirement date | Replacement model ID |\n| --- | --- | --- | --- |\n| \`gemini-x-001\` | May 1, 2026 | October 20, 2026 | - |\n`
+  strictAssert.throws(() => parseVertexModelVersionsMarkdown(page('Retirement dates are the <span class="x">earliest</span> possible dates.')), /inline HTML the Markdown reader cannot read/)
+  strictAssert.equal(parseVertexModelVersionsMarkdown(page('Retirement dates are the <b>earliest</b> possible dates.'))[0].date_precision, 'earliest')
+})
+
 if (failures) {
   console.error(`${failures} Vertex Markdown test(s) failed`)
   process.exit(1)

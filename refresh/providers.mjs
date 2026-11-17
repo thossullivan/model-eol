@@ -7,8 +7,10 @@ import {
   MARKDOWN_THEMATIC_BREAK,
   escapeHtml,
   headingHtml,
+  htmlHeadingLineIndex,
   htmlTableLineIndex,
   isHtmlBody,
+  isListItemHeading,
   isSetextUnderline,
   markdownCellHtml,
   markdownHeading,
@@ -664,6 +666,21 @@ function openAIReplacement(fragment) {
 const OPENAI_NON_MODEL_TOKEN = /^\/v\d+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*$|^[A-Z][A-Za-z-]*(?: [A-Z][A-Za-z-]*)* API$|^OpenAI-Beta: [a-z_]+=v\d+$/
 
 /** Parse the OpenAI docs page, whose announcement date is a per-row notice date or a section heading. */
+const OPENAI_EARLIEST_ESTIMATE = /\s+earliest estimate$/i
+
+// The shutdown cell holds one date and nothing else, except the page's own "Earliest estimate" label.
+function openAIShutdownDate(text, id) {
+  const value = plainText(text)
+  const dateText = value.replace(OPENAI_EARLIEST_ESTIMATE, '')
+  let candidates = []
+  try {
+    candidates = dateCandidates(dateText)
+  } catch {}
+  const residual = dateText.replace(new RegExp(DATE_PATTERN.source, 'g'), '').replace(new RegExp(HUMAN_DATE_PATTERN.source, 'gi'), '').trim()
+  if (candidates.length !== 1 || residual) throw new Error(`openai deprecations entry ${id} has an unrecognised shutdown date: ${value}`)
+  return { shutdown: candidates[0].date, date_precision: dateText === value ? undefined : 'earliest' }
+}
+
 export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl, { now = new Date() } = {}) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('openai deprecations page is empty')
   try {
@@ -715,8 +732,8 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
 
       const announced = headers.notice >= 0 ? openAINoticeDate(row.cells[headers.notice], parsedModels[0].id) : tableAnnounced
       const shutdownCell = row.cells[headers.date]
-      const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
-      if (!shutdown) throw new Error(`openai deprecations entry ${parsedModels[0].id} has no valid shutdown date`)
+      if (!shutdownCell || !dateFromText(shutdownCell.text)) throw new Error(`openai deprecations entry ${parsedModels[0].id} has no valid shutdown date`)
+      const { shutdown, date_precision } = openAIShutdownDate(shutdownCell.text, parsedModels[0].id)
       if (headers.status >= 0) {
         const status = row.cells[headers.status]?.text.trim() ?? ''
         if (!openAIStatusAccepted(status, shutdown, today)) {
@@ -730,6 +747,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       const replacementCell = row.cells[headers.replacement]
       for (const parsedModel of parsedModels) {
         const item = { id: parsedModel.id, announced, shutdown, source: sourceUrl }
+        if (date_precision) item.date_precision = date_precision
         if (parsedModel.aliases.length) item.aliases = parsedModel.aliases
         if (replacementCell) Object.assign(item, openAIReplacement(replacementCell.html))
         records.push(item)
@@ -753,7 +771,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       unique.set(record.id, record)
       continue
     }
-    const sameLifecycle = previous.announced === record.announced && previous.shutdown === record.shutdown
+    const sameLifecycle = previous.announced === record.announced && previous.shutdown === record.shutdown && previous.date_precision === record.date_precision
     if (sameLifecycle && !sameReplacementPayload(previous, record)) {
       mergeReplacementPayloads(previous, record)
     }
@@ -780,7 +798,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       if (!previous.aliases.length) delete previous.aliases
       continue
     }
-    if (record.shutdown !== previous.shutdown) {
+    if (record.shutdown !== previous.shutdown || record.date_precision !== previous.date_precision) {
       throw new Error(`openai deprecations page has conflicting rows for ${record.id}`)
     }
     previous.aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
@@ -800,15 +818,33 @@ function sourceMarkdownPage(markdown, label) {
 
 /** Convert OpenAI's Markdown deprecations page to the headings and tables that parseOpenAIDeprecations reads. */
 export function openAIMarkdownToHtml(markdown) {
-  const { lines, tables } = sourceMarkdownPage(markdown, 'openai deprecations page')
-  const rawTable = htmlTableLineIndex(lines)
-  if (rawTable >= 0) throw new Error(`openai deprecations page: line ${rawTable + 1}: HTML table in the Markdown source`)
-  const blocks = tables.map(table => ({ line: table.line, html: markdownPipeTableToHtml(table) }))
-  for (const [index, line] of lines.entries()) {
-    const heading = markdownHeading(line)
-    if (heading) blocks.push({ line: index + 1, html: headingHtml(heading, markdownCellHtml(heading.text.trim())) })
+  const { lines, tableAt } = sourceMarkdownPage(markdown, 'openai deprecations page')
+  const fail = (index, message) => {
+    throw new Error(`openai deprecations page: line ${index + 1}: ${message}`)
   }
-  return blocks.sort((a, b) => a.line - b.line).map(block => block.html).join('\n')
+  const rawTable = htmlTableLineIndex(lines)
+  if (rawTable >= 0) fail(rawTable, 'HTML table in the Markdown source')
+  const rawHeading = htmlHeadingLineIndex(lines)
+  if (rawHeading >= 0) fail(rawHeading, 'HTML heading in the Markdown source')
+  const blocks = []
+  let paragraph = false
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+    const table = tableAt.get(index)
+    const heading = markdownHeading(line)
+    if (table) {
+      blocks.push(markdownPipeTableToHtml(table))
+      index += table.rows.length + 1
+    } else if (heading) {
+      blocks.push(headingHtml(heading, markdownCellHtml(heading.text.trim())))
+    } else if (paragraph && isSetextUnderline(line)) {
+      fail(index, 'setext heading; headings must use #')
+    } else if (isListItemHeading(line)) {
+      fail(index, 'heading inside a list item')
+    }
+    paragraph = Boolean(!table && !heading && line.trim() && !MARKDOWN_THEMATIC_BREAK.test(line))
+  }
+  return blocks.join('\n')
 }
 
 /** Parse the Markdown copy of the OpenAI docs page; the row rules stay in parseOpenAIDeprecations. */
@@ -1007,13 +1043,25 @@ const ANTHROPIC_LIFECYCLE_LABEL = /\bmodels?\b|retire|deprecat|shutdown|sunset/i
 
 function anthropicProse(line, where) {
   let text = line.trim()
+  let opened = 0
+  let closed = 0
   if (/<!--|--!?>/.test(text)) throw new Error(`anthropic deprecations page has an unbalanced comment marker ${where}`)
   for (let match; (match = text.match(ANTHROPIC_LEADING_TAG) ?? text.match(ANTHROPIC_TRAILING_TAG));) {
     if (!ANTHROPIC_COMPONENT_TAGS.has(match[1])) throw new Error(`anthropic deprecations page has unsupported markup ${where}: ${line.trim()}`)
+    if (match[0].startsWith('</')) closed++
+    else if (!match[0].endsWith('/>')) opened++
     text = (match.index ? text.slice(0, match.index) : text.slice(match[0].length)).trim()
   }
   if (ANTHROPIC_HTML_STRUCTURE.test(text)) throw new Error(`anthropic deprecations page has an HTML table or heading ${where}: ${line.trim()}`)
-  return text
+  return { text, opened, closed }
+}
+
+const countDates = text => {
+  try {
+    return dateCandidates(text).length
+  } catch {
+    return 1
+  }
 }
 
 function assertAnthropicMarkdownTable(table, html, where) {
@@ -1032,11 +1080,17 @@ export function anthropicMarkdownToHtml(markdown) {
   const output = []
   let where = 'before the first heading'
   let previous = ''
+  let componentDepth = 0
+  let dates = { heading: 0, prose: 0, component: 0 }
   for (let index = 0; index < lines.length; index++) {
     const table = tables.get(index)
     if (table) {
       const html = markdownPipeTableToHtml(table)
       assertAnthropicMarkdownTable(table, html, where)
+      const announcement = headerIndexes(tableRows(html), 'anthropic')
+      if (announcement && !announcement.rejectedReason && !dates.heading && !dates.prose && dates.component) {
+        throw new Error(`anthropic deprecations table ${where} takes its only announcement date from a <Note> or other callout`)
+      }
       output.push(html)
       index += table.rows.length + 1
       previous = ''
@@ -1045,14 +1099,24 @@ export function anthropicMarkdownToHtml(markdown) {
     const line = lines[index]
     const heading = markdownHeading(line)
     if (heading) {
-      const text = anthropicProse(heading.text, where)
+      if (componentDepth) throw new Error(`anthropic deprecations page has a heading inside a <Note> or other callout ${where}: ${line.trim()}`)
+      const { text } = anthropicProse(heading.text, where)
       output.push(headingHtml(heading, markdownCellHtml(text)))
       where = `under "${plainText(markdownCellHtml(text))}"`
-    } else if (/^ {0,3}=+[ \t]*$/.test(line) || (/^ {0,3}-{2,}[ \t]*$/.test(line) && previous)) {
+      dates = { heading: countDates(markdownCellHtml(text)), prose: 0, component: 0 }
+    } else if (/^ {0,3}=+[ \t]*$/.test(line) || (isSetextUnderline(line) && previous)) {
       throw new Error(`anthropic deprecations page has a setext heading ${where}: ${previous || line.trim()}`)
+    } else if (isListItemHeading(line)) {
+      throw new Error(`anthropic deprecations page has a heading inside a list item ${where}: ${line.trim()}`)
     } else if (line.trim()) {
-      const text = anthropicProse(line, where)
-      if (text) output.push(`<p>${markdownCellHtml(text)}</p>`)
+      const { text, opened, closed } = anthropicProse(line, where)
+      const inComponent = componentDepth > 0 || opened > 0
+      componentDepth = Math.max(0, componentDepth + opened - closed)
+      if (text) {
+        const html = markdownCellHtml(text)
+        dates[inComponent ? 'component' : 'prose'] += countDates(html)
+        output.push(`<p>${html}</p>`)
+      }
     }
     previous = heading || /^ {0,3}(?:[-*_][ \t]*){3,}$/.test(line) ? '' : line.trim()
   }
@@ -1255,7 +1319,7 @@ function googleMarkdocTable(lines, where) {
     if (row.length !== header.length) throw new Error(`google deprecations table ${where} row ${index + 1} has ${row.length} cells; the header has ${header.length}`)
     if (!row[0]) throw new Error(`google deprecations table ${where} row ${index + 1} has an empty model cell`)
     const bare = unescapeMarkdown(row[0])
-    if (!GOOGLE_MODEL_CELL.test(row[0]) && !(MODEL_ID_PATTERN.test(bare) && googleInlineText(row[0]) === bare)) {
+    if (!GOOGLE_MODEL_CELL.test(row[0]) && !(MODEL_ID_PATTERN.test(bare) && !/[*_~]/.test(row[0].replace(/\\[!-/:-@[-`{-~]/g, '')) && googleInlineText(row[0]) === bare)) {
       throw new Error(`google deprecations table ${where} row ${index + 1} model cell is not one model ID: ${row[0]}`)
     }
   }
@@ -1786,6 +1850,7 @@ export function cohereMarkdownToHtml(markdown) {
     }
     const wasBlank = blank
     blank = false
+    if (!lists.length && !paragraph.length && indent.length >= 4) fail(index, 'indented code block')
     const table = tableAt.get(index)
     if (table) {
       if (lists.length && indent.length >= lists.at(-1).content) fail(index, 'table inside a list item')
@@ -1796,11 +1861,12 @@ export function cohereMarkdownToHtml(markdown) {
       continue
     }
     if (paragraph.length && isSetextUnderline(line)) fail(index, 'setext heading; headings must use #')
-    if (!lists.length && !paragraph.length && indent.length >= 4) fail(index, 'indented code block')
+    if (isListItemHeading(line)) fail(index, 'heading inside a list item')
     const item = MARKDOWN_THEMATIC_BREAK.test(line) ? undefined : line.match(MARKDOWN_LIST_ITEM)
     if (item) {
       if ((item[3]?.length ?? 0) > 4) fail(index, 'list item content is indented code')
       const tag = /\d/.test(item[2]) ? 'ol' : 'ul'
+      const marker = item[2].at(-1)
       const content = indent.length + item[2].length + (item[3]?.length ?? 1)
       flushParagraph()
       while (lists.length) {
@@ -1810,13 +1876,14 @@ export function cohereMarkdownToHtml(markdown) {
         closeLists(lists.length - 1)
       }
       const list = lists.at(-1)
+      if (list && indent.length === list.indent && tag === list.tag && marker !== list.marker) fail(index, 'list marker changes, which starts a new list')
       flushItem()
       if (list && indent.length === list.indent && tag === list.tag) {
         html.push('</li><li>')
         list.content = content
       } else {
         html.push(`<${tag}><li>`)
-        lists.push({ indent: indent.length, content, tag, text: [] })
+        lists.push({ indent: indent.length, content, tag, marker, text: [] })
       }
       lists.at(-1).text.push(item[4] ?? '')
       continue
@@ -2108,8 +2175,8 @@ export function parseAnthropicModelsLifecyclePage(body) {
     }
     const deprecated = anthropicApiDate(row.deprecated_at, id, 'deprecated_at')
     const retires = anthropicApiDate(row.retires_at, id, 'retires_at')
-    if (row.lifecycle === 'active' && (deprecated || retires)) {
-      throw new Error(`anthropic models response entry ${id} is active but has deprecated_at ${row.deprecated_at} and retires_at ${row.retires_at}`)
+    if (row.lifecycle === 'active' && deprecated) {
+      throw new Error(`anthropic models response entry ${id} is active but has deprecated_at ${row.deprecated_at}`)
     }
     if (row.lifecycle !== 'active' && !deprecated) throw new Error(`anthropic models response entry ${id} is ${row.lifecycle} without deprecated_at`)
     if (deprecated && retires && retires.date < deprecated.date) {
@@ -2162,6 +2229,7 @@ export function compareAnthropicLifecycle(deprecations, apiModels) {
     }
   }
   const conflicts = []
+  const apiIds = new Set(apiModels.map(model => model.id))
   for (const model of apiModels) {
     counts[model.lifecycle]++
     const base = { publisher: 'anthropic', via: 'models-api', id: model.id, lifecycle: model.lifecycle, deprecated: model.deprecated, retires: model.retires }
@@ -2173,10 +2241,15 @@ export function compareAnthropicLifecycle(deprecations, apiModels) {
     const state = anthropicPageStates.get(record)
     if (state && state !== model.lifecycle) conflicts.push({ ...base, field: 'lifecycle', page: { state } })
     if ((record.announced ?? null) !== (model.deprecated?.date ?? null)) conflicts.push({ ...base, field: 'deprecated', page: { announced: record.announced } })
-    const pageRetirement = record.date_precision === 'tentative' ? undefined : record.shutdown
+    const pageRetirement = record.date_precision === 'tentative' && !(model.lifecycle === 'active' && model.retires) ? undefined : record.shutdown
     if ((pageRetirement ?? null) !== (model.retires?.date ?? null)) {
       conflicts.push({ ...base, field: 'retirement', page: { shutdown: record.shutdown, date_precision: record.date_precision } })
     }
+  }
+  for (const record of deprecations) {
+    const state = anthropicPageStates.get(record)
+    if (!['active', 'deprecated'].includes(state) || [record.id, ...(record.aliases ?? [])].some(id => apiIds.has(id))) continue
+    conflicts.push({ publisher: 'anthropic', via: 'models-api', id: record.id, field: 'missing', page: { state } })
   }
   return { counts, conflicts }
 }
@@ -2185,7 +2258,11 @@ const apiDateLabel = value => value ? value.raw : 'null'
 
 /** One line for a publisher source conflict, as the semantic diff and the refresh notices print it. */
 export function providerSourceConflictSummary(conflict) {
+  if (conflict.reason === 'cross-check-failed') {
+    return `${conflict.publisher} models API cross-check failed: ${conflict.message}; the deprecations page was used without it`
+  }
   const label = `${conflict.publisher} models API ${conflict.id}`
+  if (conflict.field === 'missing') return `${label}: ${conflict.page.state} on the deprecations page but not returned by the API; page kept`
   if (conflict.field === 'uncovered') {
     return `${label}: ${conflict.lifecycle} (deprecated_at ${apiDateLabel(conflict.deprecated)}, retires_at ${apiDateLabel(conflict.retires)}) but not on the deprecations page; API dates not applied`
   }
@@ -2522,9 +2599,18 @@ function fetchBody(url, headers, provider, fetchImpl = globalThis.fetch) {
   return fetchBoundedBody(url, provider, fetchImpl, { headers })
 }
 
+/** True when MODEL_EOL_CROSS_CHECKS asks a failed cross-check source to fail the run. */
+export function strictCrossChecks(env = process.env) {
+  const value = env.MODEL_EOL_CROSS_CHECKS ?? ''
+  if (!['', 'warn', 'strict'].includes(value)) throw new Error(`MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not ${JSON.stringify(value)}`)
+  return value === 'strict'
+}
+
 /** Load and parse both source classes for one provider. */
 export async function loadProviderSources(config, options = {}) {
   const { fixtures, env = process.env, fetchImpl = globalThis.fetch, notice = console.error } = options
+  const strict = strictCrossChecks(env)
+  let crossCheckFailure
   let currentIds = null
   let endpointAvailable = false
   let currentModels = []
@@ -2535,8 +2621,13 @@ export async function loadProviderSources(config, options = {}) {
     const modelFixture = findFixture(fixtures, config.publisher, 'models')
     const modelBody = fs.readFileSync(modelFixture, 'utf8')
     if (config.publisher === 'anthropic') {
-      anthropicLifecycle = parseAnthropicModelsLifecyclePage(modelBody).models
-      currentIds = anthropicLifecycle.filter(model => model.lifecycle !== 'retired').map(model => model.id)
+      try {
+        anthropicLifecycle = parseAnthropicModelsLifecyclePage(modelBody).models
+        currentIds = anthropicLifecycle.filter(model => model.lifecycle !== 'retired').map(model => model.id)
+      } catch (error) {
+        if (strict) throw error
+        crossCheckFailure = error.message
+      }
     } else if (config.publisher === 'mistral') {
       const parsed = parseMistralModelsResponse(modelBody)
       currentIds = parsed.ids
@@ -2550,7 +2641,7 @@ export async function loadProviderSources(config, options = {}) {
         ? parseGoogleModelsResponse(modelBody)
         : parseModelsResponse(modelBody, config.publisher)
     }
-    endpointAvailable = true
+    endpointAvailable = !crossCheckFailure
     notice(`notice: ${config.publisher} models endpoint fixture: ${path.relative(process.cwd(), modelFixture)}`)
   } else {
     const keyEnvs = config.keyEnvs ?? [config.keyEnv]
@@ -2575,12 +2666,17 @@ export async function loadProviderSources(config, options = {}) {
         currentIds = parsed.ids
         deprecatedIds = parsed.deprecatedIds
       } else if (config.publisher === 'anthropic') {
-        anthropicLifecycle = await fetchAnthropicModels(config, headers, fetchImpl)
-        currentIds = anthropicLifecycle.filter(model => model.lifecycle !== 'retired').map(model => model.id)
+        try {
+          anthropicLifecycle = await fetchAnthropicModels(config, headers, fetchImpl)
+          currentIds = anthropicLifecycle.filter(model => model.lifecycle !== 'retired').map(model => model.id)
+        } catch (error) {
+          if (strict) throw error
+          crossCheckFailure = error.message.split(key).join('[redacted]')
+        }
       } else {
         currentIds = await fetchPaginatedModels(config, headers, fetchImpl)
       }
-      endpointAvailable = true
+      endpointAvailable = !crossCheckFailure
     }
   }
 
@@ -2617,6 +2713,10 @@ export async function loadProviderSources(config, options = {}) {
   }
   if (config.publisher === 'anthropic') currentModels = await loadAnthropicModelPages(config, { fixtures, fetchImpl })
   const sourceConflicts = []
+  if (crossCheckFailure) {
+    notice(`warning: anthropic models API cross-check failed: ${crossCheckFailure}`)
+    sourceConflicts.push({ via: 'models-api', publisher: config.publisher, reason: 'cross-check-failed', message: crossCheckFailure })
+  }
   if (anthropicLifecycle) {
     const { counts, conflicts } = compareAnthropicLifecycle(deprecations, anthropicLifecycle)
     for (const conflict of conflicts) notice(`notice: ${providerSourceConflictSummary(conflict)}`)

@@ -1039,14 +1039,14 @@ const anthropicApiConflicting = [
   anthropicApiRow('claude-mystery-0', 'retired', '2025-01-01T00:00:00.123Z', '2025-06-01T00:00:00Z'),
   anthropicApiRow('claude-new-active', 'active'),
 ]
-const anthropicApiLoad = async (pages, { notices = [], requests = [] } = {}) => loadProviderSources(PROVIDERS.anthropic, {
-  env: { ANTHROPIC_API_KEY: 'fixture-key' },
+const anthropicApiLoad = async (pages, { notices = [], requests = [], env = {} } = {}) => loadProviderSources(PROVIDERS.anthropic, {
+  env: { ANTHROPIC_API_KEY: 'fixture-key', ...env },
   notice: message => notices.push(message),
   fetchImpl: async (url, options) => {
     const parsed = new URL(url)
     requests.push({ url: parsed, options })
     const text = body => ({ ok: true, status: 200, text: async () => body })
-    if (parsed.hostname === 'api.anthropic.com') return text(pages[parsed.searchParams.get('after_id') ?? ''])
+    if (parsed.hostname === 'api.anthropic.com') return typeof pages === 'function' ? pages() : text(pages[parsed.searchParams.get('after_id') ?? ''])
     if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return text(anthropicMarkdown)
     if (url === PROVIDERS.anthropic.aliasesUrl) return text(anthropicIndex)
     return text(anthropicModelMarkdown(url))
@@ -1081,7 +1081,7 @@ reviewTest('Anthropic models API: an offset timestamp compares by its UTC calend
   strictAssert.ok(!conflictLines.some(line => line.includes('claude-opus-4-1-20250805: deprecated_at')))
   strictAssert.ok(!conflictLines.some(line => line.includes('claude-fable-5-1') || line.includes('claude-new-active')))
   const tentative = compareAnthropicLifecycle(anthropicEntries, [{ id: 'claude-opus-4-6', lifecycle: 'deprecated', deprecated: { date: '2026-11-01', raw: '2026-11-01T00:00:00Z' }, retires: { date: '2027-02-05', raw: '2027-02-05T00:00:00Z' } }])
-  strictAssert.deepEqual(tentative.conflicts.map(providerSourceConflictSummary).at(-1), 'anthropic models API claude-opus-4-6: retires_at 2027-02-05T00:00:00Z on the API, retirement 2027-02-05 (tentative) on the deprecations page; page kept')
+  strictAssert.deepEqual(tentative.conflicts.filter(conflict => conflict.field === 'retirement').map(providerSourceConflictSummary), ['anthropic models API claude-opus-4-6: retires_at 2027-02-05T00:00:00Z on the API, retirement 2027-02-05 (tentative) on the deprecations page; page kept'])
 })
 reviewTest('Anthropic models API conflicts render in the semantic diff Source conflicts section without counting as a change', () => {
   const committed = { ...anthropicFeed, models: [{ id: 'claude-opus-4-6' }] }
@@ -1109,7 +1109,7 @@ reviewTest('Anthropic models API: an undocumented lifecycle value, date, or miss
     [page({ deprecated_at: '2026-06-05T00:00:00' }), /unparseable deprecated_at/],
     [page({ deprecated_at: 1780617600 }), /unparseable deprecated_at: 1780617600/],
     [page({ lifecycle: 'active' }), /entry claude-x is active but has deprecated_at/],
-    [page({ lifecycle: 'active', deprecated_at: null }), /entry claude-x is active but has deprecated_at null and retires_at/],
+    [page({ lifecycle: 'active', retires_at: null }), /entry claude-x is active but has deprecated_at 2026-06-05T00:00:00Z$/],
     [page({ deprecated_at: null }), /entry claude-x is deprecated without deprecated_at/],
     [page({ lifecycle: 'retired', deprecated_at: null, retires_at: null }), /entry claude-x is retired without deprecated_at/],
     [page({ retires_at: '2026-06-04T00:00:00Z' }), /entry claude-x retires before it was deprecated/],
@@ -1123,26 +1123,105 @@ reviewTest('Anthropic models API: an undocumented lifecycle value, date, or miss
 })
 let anthropicApiUnknownReason = ''
 try {
-  await anthropicApiLoad({ '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) })
+  await anthropicApiLoad({ '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) }, { env: { MODEL_EOL_CROSS_CHECKS: 'strict' } })
 } catch (error) { anthropicApiUnknownReason = error.message }
-assert(anthropicApiUnknownReason.includes('unrecognised lifecycle: "sunset"'), 'an unknown models API lifecycle value fails the Anthropic source load')
+assert(anthropicApiUnknownReason.includes('unrecognised lifecycle: "sunset"'), 'with MODEL_EOL_CROSS_CHECKS=strict an unknown models API lifecycle value fails the Anthropic source load')
 const anthropicApiPagedRequests = []
 const anthropicApiPaged = await anthropicApiLoad({
   '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
   'claude-fable-5-1': anthropicApiPage([anthropicApiRow('claude-opus-4-1-20250805', 'retired', '2026-06-05T00:00:00Z', '2026-08-05T00:00:00Z')]),
 }, { requests: anthropicApiPagedRequests })
 const pagedModelsUrls = anthropicApiPagedRequests.filter(request => request.url.hostname === 'api.anthropic.com').map(request => request.url)
-assert(pagedModelsUrls.length === 2 && pagedModelsUrls[1].searchParams.get('after_id') === 'claude-fable-5-1' && pagedModelsUrls.every(url => url.searchParams.getAll('lifecycle[]').join() === 'active,deprecated,retired') && anthropicApiPaged.currentIds.join() === 'claude-fable-5-1' && !anthropicApiPaged.sourceConflicts.length, 'Anthropic models API pages through every lifecycle stage and compares the retired model on page two')
+assert(pagedModelsUrls.length === 2 && pagedModelsUrls[1].searchParams.get('after_id') === 'claude-fable-5-1' && pagedModelsUrls.every(url => url.searchParams.getAll('lifecycle[]').join() === 'active,deprecated,retired') && anthropicApiPaged.currentIds.join() === 'claude-fable-5-1' && JSON.stringify(anthropicApiPaged.sourceConflicts.map(providerSourceConflictSummary)) === JSON.stringify(['anthropic models API claude-opus-4-6: active on the deprecations page but not returned by the API; page kept']), 'Anthropic models API pages through every lifecycle stage and compares the retired model on page two')
 let anthropicApiDuplicateReason = ''
 try {
   await anthropicApiLoad({
     '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
     'claude-fable-5-1': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
-  })
+  }, { env: { MODEL_EOL_CROSS_CHECKS: 'strict' } })
 } catch (error) { anthropicApiDuplicateReason = error.message }
 assert(anthropicApiDuplicateReason.includes('duplicate model id across pages: claude-fable-5-1'), 'Anthropic models API pagination stops on a model repeated across pages')
 assert(anthropicModelsListUrl(`${PROVIDERS.anthropic.modelsUrl}?lifecycle=active&limit=5&after_id=x`) === 'https://api.anthropic.com/v1/models?lifecycle%5B%5D=active&lifecycle%5B%5D=deprecated&lifecycle%5B%5D=retired&limit=1000', 'Anthropic models list URL replaces any lifecycle, limit, or cursor with all three stages and the maximum page size')
 
+reviewTest('Anthropic models API: a page model in Active or Deprecated state that the API omits is reported, and a retired one is not', () => {
+  const deprecated = { id: 'claude-page-deprecated', announced: '2026-06-01', shutdown: '2026-09-01', source: PROVIDERS.anthropic.deprecationsUrl }
+  const markdown = `## Model status\n\n| API model name | Current state | Deprecated | Tentative retirement date |\n| :-- | :-- | :-- | :-- |\n| claude-page-active | Active | N/A | N/A |\n| claude-page-deprecated | Deprecated | June 1, 2026 | September 1, 2026 |\n| claude-page-retired | Retired | January 1, 2026 | March 1, 2026 |\n`
+  const records = parseAnthropicDeprecations(markdown)
+  strictAssert.deepEqual(records.find(record => record.id === deprecated.id), deprecated)
+  const { conflicts } = compareAnthropicLifecycle(records, [{ id: 'claude-other', lifecycle: 'active', deprecated: undefined, retires: undefined }])
+  strictAssert.deepEqual(conflicts.map(providerSourceConflictSummary), [
+    'anthropic models API claude-page-active: active on the deprecations page but not returned by the API; page kept',
+    'anthropic models API claude-page-deprecated: deprecated on the deprecations page but not returned by the API; page kept',
+  ])
+  strictAssert.deepEqual(compareAnthropicLifecycle(records, ['claude-page-active', 'claude-page-deprecated'].map(id => ({ id, lifecycle: id.endsWith('active') ? 'active' : 'deprecated', deprecated: id.endsWith('active') ? undefined : { date: '2026-06-01', raw: '2026-06-01T00:00:00Z' }, retires: id.endsWith('active') ? undefined : { date: '2026-09-01', raw: '2026-09-01T00:00:00Z' } }))).conflicts, [])
+})
+reviewTest('Anthropic models API: an active model with a tentative retires_at is accepted and compared with the page\'s tentative date', () => {
+  const row = anthropicApiRow('claude-x', 'active', null, '2027-11-30T00:00:00-08:00')
+  const [model] = parseAnthropicModelsLifecyclePage(anthropicApiPage([row])).models
+  strictAssert.deepEqual(model, { id: 'claude-x', lifecycle: 'active', deprecated: undefined, retires: { date: '2027-11-30', raw: '2027-11-30T00:00:00-08:00' } })
+  const status = date => parseAnthropicDeprecations(`## Model status\n\n| API model name | Current state | Deprecated | Tentative retirement date |\n| :-- | :-- | :-- | :-- |\n| claude-x | Active | N/A | Not sooner than ${date} |\n`)
+  strictAssert.deepEqual(compareAnthropicLifecycle(status('November 30, 2027'), [model]).conflicts, [])
+  strictAssert.deepEqual(compareAnthropicLifecycle(status('November 29, 2027'), [model]).conflicts.map(providerSourceConflictSummary), ['anthropic models API claude-x: retires_at 2027-11-30T00:00:00-08:00 on the API, retirement 2027-11-29 (tentative) on the deprecations page; page kept'])
+  const lateOffset = parseAnthropicModelsLifecyclePage(anthropicApiPage([anthropicApiRow('claude-x', 'active', null, '2027-11-29T20:00:00-08:00')])).models
+  strictAssert.deepEqual(compareAnthropicLifecycle(status('November 30, 2027'), lateOffset).conflicts, [])
+  strictAssert.deepEqual(compareAnthropicLifecycle(status('November 29, 2027'), lateOffset).conflicts.map(providerSourceConflictSummary), ['anthropic models API claude-x: retires_at 2027-11-29T20:00:00-08:00 on the API, retirement 2027-11-29 (tentative) on the deprecations page; page kept'])
+})
+for (const [label, pages] of [
+  ['an unknown lifecycle value', { '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) }],
+  ['a malformed response', { '': '{"data": "nope"}' }],
+  ['an HTTP error', () => new Response('upstream rejected key fixture-key', { status: 503 })],
+]) {
+  const notices = []
+  const sources = await anthropicApiLoad(pages, { notices })
+  reviewTest(`Anthropic models API: ${label} is a reported cross-check failure that keeps the page and treats the endpoint as unavailable`, () => {
+    const [conflict] = sources.sourceConflicts
+    strictAssert.equal(sources.sourceConflicts.length, 1)
+    strictAssert.deepEqual(Object.keys(conflict).sort(), ['message', 'publisher', 'reason', 'via'])
+    strictAssert.deepEqual([conflict.via, conflict.publisher, conflict.reason], ['models-api', 'anthropic', 'cross-check-failed'])
+    strictAssert.ok(!conflict.message.includes('fixture-key'), conflict.message)
+    strictAssert.ok(notices.includes(`warning: anthropic models API cross-check failed: ${conflict.message}`), notices.join('\n'))
+    strictAssert.deepEqual(sources.deprecations, anthropicEntries)
+    strictAssert.equal(sources.currentIds, null)
+    strictAssert.equal(sources.endpointAvailable, false)
+    const line = `- ${providerSourceConflictSummary(conflict)}`
+    strictAssert.ok(line.startsWith('- anthropic models API cross-check failed: ') && line.endsWith('; the deprecations page was used without it'), line)
+    const committed = { ...anthropicFeed, models: [{ id: 'claude-opus-4-6' }] }
+    strictAssert.ok(renderSemanticDiff(committed, committed, { sourceConflicts: sources.sourceConflicts }).includes(`## Source conflicts\n\n${line}\n`))
+    strictAssert.ok(!compareFeeds(committed, committed, { sourceConflicts: sources.sourceConflicts }).changed)
+  })
+}
+let strictMalformedReason = ''
+try { await anthropicApiLoad({ '': '{"data": "nope"}' }, { env: { MODEL_EOL_CROSS_CHECKS: 'strict' } }) } catch (error) { strictMalformedReason = error.message }
+const unknownPolicyReasons = []
+for (const value of ['Strict', 'stirct']) {
+  try { await anthropicApiLoad({ '': anthropicApiPage(anthropicApiAgreeing) }, { env: { MODEL_EOL_CROSS_CHECKS: value } }) } catch (error) { unknownPolicyReasons.push(error.message) }
+}
+const warnPolicySources = await anthropicApiLoad({ '': '{"data": "nope"}' }, { env: { MODEL_EOL_CROSS_CHECKS: 'warn' } })
+const emptyPolicySources = await anthropicApiLoad({ '': '{"data": "nope"}' }, { env: { MODEL_EOL_CROSS_CHECKS: '' } })
+reviewTest('Anthropic models API: MODEL_EOL_CROSS_CHECKS=strict turns a cross-check failure back into a failed run, warn or empty keeps it a warning, and any other value is refused', () => {
+  strictAssert.match(strictMalformedReason, /anthropic models response/)
+  strictAssert.deepEqual(unknownPolicyReasons, ['MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not "Strict"', 'MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not "stirct"'])
+  strictAssert.deepEqual([warnPolicySources, emptyPolicySources].map(sources => sources.sourceConflicts.map(conflict => conflict.reason)), [['cross-check-failed'], ['cross-check-failed']])
+})
+const anthropicBadModelsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-anthropic-bad-models-'))
+try {
+  for (const name of ['anthropic-deprecations.md', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(anthropicBadModelsDir, name))
+  fs.cpSync(path.join(fixtures, 'anthropic-model-pages'), path.join(anthropicBadModelsDir, 'anthropic-model-pages'), { recursive: true })
+  fs.writeFileSync(path.join(anthropicBadModelsDir, 'anthropic-models.json'), anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]))
+  const notices = []
+  const lenient = await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicBadModelsDir, env: {}, notice: message => notices.push(message) })
+  let strictReason = ''
+  try { await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicBadModelsDir, env: { MODEL_EOL_CROSS_CHECKS: 'strict' }, notice: () => {} }) } catch (error) { strictReason = error.message }
+  reviewTest('Anthropic models API: a bad fixture models response follows the same cross-check policy as a live one', () => {
+    strictAssert.deepEqual(lenient.sourceConflicts.map(conflict => [conflict.reason, conflict.message]), [['cross-check-failed', 'anthropic models response entry claude-x has an unrecognised lifecycle: "sunset"']])
+    strictAssert.ok(notices.includes('warning: anthropic models API cross-check failed: anthropic models response entry claude-x has an unrecognised lifecycle: "sunset"'))
+    strictAssert.equal(lenient.endpointAvailable, false)
+    strictAssert.equal(lenient.currentIds, null)
+    strictAssert.match(strictReason, /unrecognised lifecycle: "sunset"/)
+  })
+} finally {
+  fs.rmSync(anthropicBadModelsDir, { recursive: true, force: true })
+}
 const anthropicApiCliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-anthropic-api-cli-'))
 try {
   for (const name of ['anthropic-deprecations.md', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(anthropicApiCliDir, name))
@@ -1235,7 +1314,7 @@ for (const [name, markdown, pattern] of [
   ['an EOL date with or later', bedrockEntry(bedrockFields('amazon.later-v1:0', 'March 1, 2026', 'January 8, 2027 or later')), /amazon\.later-v1:0 has an unrecognised EOL date: January 8, 2027 or later/],
   ['a tentative EOL date', bedrockEntry(bedrockFields('amazon.tentative-v1:0', 'March 1, 2026', 'January 8, 2027 (tentative)')), /unrecognised EOL date: January 8, 2027 \(tentative\)/],
   ['an EOL value with two dates', bedrockEntry(bedrockFields('amazon.two-dates-v1:0', 'March 1, 2026', 'March 8, 2027 (us-gov-west-1); January 8, 2027 elsewhere')), /unrecognised EOL date: March 8, 2027 \(us-gov-west-1\); January 8, 2027 elsewhere/],
-  ['a struck-through EOL date', bedrockEntry(bedrockFields('amazon.struck-v1:0', 'March 1, 2026', '~~January 8, 2027~~ March 8, 2027')), /unrecognised EOL date: January 8, 2027 March 8, 2027/],
+  ['a struck-through EOL date', bedrockEntry(bedrockFields('amazon.struck-v1:0', 'March 1, 2026', '~~January 8, 2027~~ March 8, 2027')), /struck-through text in Markdown is refused: ~~January 8, 2027~~ March 8, 2027/],
   ['a Legacy date with a qualifier', bedrockEntry(bedrockFields('amazon.legacy-floor-v1:0', 'No earlier than March 1, 2026')), /unrecognised legacy date: No earlier than March 1, 2026/],
   ['an extended access date with a qualifier', bedrockEntry(bedrockFields('amazon.extended-floor-v1:0', 'March 1, 2026', 'September 1, 2026', 'June 1, 2026 or later')), /unrecognised public extended access date: June 1, 2026 or later/],
   ['a labelled sub-bullet one level deeper', bedrockEntry(bedrockFields('amazon.deeper-v1:0')).replace('  - **Regions:** us-east-1\n', '').replace(/(\*\*Public extended access start date:\*\* .*\n)/, '$1    - **Regions:** us-gov-west-1\n'), /labelled item at a different list depth in the Example entry: - \*\*Regions:\*\* us-gov-west-1/],
@@ -3111,7 +3190,7 @@ for (const failure of ['HTTP', 'empty', 'oversized-header', 'oversized-stream'])
 }
 const boundedPublishers = {
   openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiMarkdown, credential: 'Authorization' },
-  anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key' }, html: anthropicMarkdown, credential: 'x-api-key' },
+  anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key', MODEL_EOL_CROSS_CHECKS: 'strict' }, html: anthropicMarkdown, credential: 'x-api-key' },
   google: { env: { GEMINI_API_KEY: 'fixture-key' }, html: googleMarkdown, credential: 'x-goog-api-key' },
   mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralMarkdown, credential: 'Authorization' },
   cohere: { env: { COHERE_API_KEY: 'fixture-key' }, html: cohereMarkdown, credential: 'Authorization' },
@@ -4866,10 +4945,16 @@ reviewTest('Google Markdown: emphasis and inline Markdoc tags in prose still car
   for (const note of [
     'Note: The shutdown dates indicate the *earliest*\n  possible dates on which a model might be retired.',
     'Note: The shutdown dates indicate the **earliest** possible dates.',
-    'Note: The shutdown dates indicate the _earliest_ ~~possible~~ possible dates.',
+    'Note: The shutdown dates indicate the _earliest_ possible dates.',
     '{% callout type="note" %}Note: The shutdown dates indicate the earliest possible dates.{% /callout %}',
   ]) {
     strictAssert.deepEqual(googleMarkdownPrecisions(googleMarkdocPage(table, note)), { 'gemini-a': 'earliest' }, note)
+  }
+})
+reviewTest('Google Markdown: struck-through prose stops the run instead of being read with the struck words', () => {
+  const table = googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])
+  for (const note of ['Note: The shutdown dates indicate the _earliest_ ~~possible~~ possible dates.', 'Note: The shutdown dates are ~not~ the earliest possible dates.']) {
+    strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage(table, note)), /struck-through text in Markdown is refused/, note)
   }
 })
 reviewTest('Google Markdown: reworded earliest wording stops the run instead of turning dates exact', () => {
@@ -4980,6 +5065,102 @@ reviewTest('PR 126 review: a table with no heading above it reads the whole root
   const lifecycle = precisionVertexTable(['gemini-z', 'October 20, 2026'])
   strictAssert.deepEqual(vertexPrecisions(`${lifecycle}<p>Retirement timelines may be extended, but they will not be moved to an earlier date.</p>`), { 'gemini-z': 'earliest' })
   strictAssert.deepEqual(vertexPrecisions(`${lifecycle}<h2>Quotas</h2><p>Quotas rise for projects created on or later than 2026.</p>`), { 'gemini-z': 'exact' })
+})
+
+const reviewNow = new Date('2026-11-17T12:00:00Z')
+const reviewMistralHeader = '| Model | API name | Status | Context | Summary | Deprecation | Retirement | Replacement |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n'
+const reviewMistralRow = (id, deprecation, retirement) => `| X | \`${id}\` | Deprecated | 1k | s | ${deprecation} | ${retirement} | Y |\n`
+const reviewMistral = markdown => parseMistralDeprecationsMarkdown(markdown, undefined, { now: reviewNow }).records.map(record => [record.id, record.announced, record.shutdown])
+const reviewOpenAIHeader = '| Shutdown date | Affected model | Status | Recommended replacement | Notice date |\n| --- | --- | --- | --- | --- |\n'
+const reviewOpenAIRow = (shutdown, id = 'gpt-x') => `| ${shutdown} | \`${id}\` | Deprecated | \`gpt-y\` | Jun 2, 2026 |\n`
+const reviewOpenAI = markdown => parseOpenAIDeprecationsMarkdown(markdown, undefined, { now: reviewNow }).map(record => [record.id, record.announced, record.shutdown, record.date_precision])
+const reviewOpenAIDated = '| Shutdown date | Model | Recommended replacement |\n| --- | --- | --- |\n'
+const reviewAnthropicStatus = '## Model status\n\n| API model name | Current state | Deprecated | Tentative retirement date |\n| :-- | :-- | :-- | :-- |\n| claude-a-1 | Deprecated | September 30, 2026 | November 30, 2026 |\n\n## Deprecation history\n\n'
+const reviewAnthropicTable = '| Retirement date | Deprecated model | Recommended replacement |\n| --- | --- | --- |\n'
+const reviewAnthropicA = `### 2026-09-30: A\n\n${reviewAnthropicTable}| November 30, 2026 | \`claude-a-1\` | \`claude-b\` |\n`
+const reviewCohere = body => parseCohereDeprecationsMarkdown(`# Deprecations\n\n## Deprecation History\n\n${body}\n# Best Practices\n\n1. x\n`)
+const reviewCohereTable = '| Shutdown Date | Deprecated Model | Recommended Replacement |\n| --- | --- | --- |\n'
+const reviewCohereRetirement = ids => `### 2026-04-04: Embed v2.0\n\nEffective April 4th, 2026, the following models will be retired:\n\n${ids}\nWe encourage you to migrate:\n\n* Chat tasks alternatives:\n  * \`command-a-03-2025\`\n`
+
+reviewTest('S1: a lone trailing * footnote marker on a date is refused by every Markdown provider instead of publishing the date as exact', () => {
+  strictAssert.throws(() => reviewMistral(`${reviewMistralHeader}${reviewMistralRow('mistral-a-1', '2026-01-01', '2027-06-01*')}\n\\* Tentative: the retirement date may move.\n`), /mistral deprecations row mistral-a-1 has an invalid retirement date: 2027-06-01\*/)
+  strictAssert.deepEqual(reviewMistral(`${reviewMistralHeader}${reviewMistralRow('mistral-a-1', '2026-01-01', '**2027-06-01**')}`), [['mistral-a-1', '2026-01-01', '2027-06-01']])
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus.replace('| November 30, 2026 |', '| November 30, 2026* |')}${reviewAnthropicA}\n\\* Subject to change.\n`), /claude-a-1 has an unrecognised retirement date: November 30, 2026\*/)
+  strictAssert.throws(() => reviewCohere(`### 2024-12-02: Rerank v2.0\n\n${reviewCohereTable}| 2025-04-30* | \`rerank-english-v2.0\` | \`rerank-v3.5\` |\n\n\\* Earliest date.\n`), /invalid date: 2025-04-30\*/)
+  strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026*')}`), /^Error: openai deprecations entry gpt-x has an unrecognised shutdown date: Dec 1, 2026\*$/)
+})
+reviewTest('S1: an OpenAI shutdown cell holds exactly one date, and the page\'s own "Earliest estimate" label makes it earliest', () => {
+  for (const cell of ['Dec 1, 2026 (tentative)', 'Dec 1, 2026 or later', 'Dec 1, 2026 / Jan 5, 2027', 'Dec 1, 2026 Earliest estimates']) {
+    strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow(cell)}`), /has an unrecognised shutdown date/, cell)
+  }
+  strictAssert.deepEqual(reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('**Dec 1, 2026** Earliest estimate')}`), [['gpt-x', '2026-06-02', '2026-12-01', 'earliest']])
+  strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('**Dec 1, 2026** Earliest estimate')}${reviewOpenAIRow('Dec 1, 2026')}`), /openai deprecations page has conflicting rows for gpt-x$/)
+})
+reviewTest('S2: struck-through dates in OpenAI, Anthropic, Mistral, and Cohere tables and prose stop the run', () => {
+  for (const [label, parse] of [
+    ['openai double tilde', () => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('~~Jan 5, 2027~~ **Dec 1, 2026**')}`)],
+    ['openai single tilde', () => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('~Jan 5, 2027~ Dec 1, 2026')}`)],
+    ['openai <s>', () => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('<s>Jan 5, 2027</s> Dec 1, 2026')}`)],
+    ['anthropic', () => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\n### 2026-08-01: Z\n\n${reviewAnthropicTable}| ~~November 15, 2026~~ December 30, 2026 | \`claude-z-1\` | \`claude-b\` |\n`)],
+    ['mistral', () => reviewMistral(`${reviewMistralHeader}${reviewMistralRow('mistral-a-1', '2026-01-01', '~~2026-10-31~~')}`)],
+    ['cohere table', () => reviewCohere(`### 2024-12-02: Rerank v2.0\n\n${reviewCohereTable}| ~~2025-04-30~~ | \`rerank-english-v2.0\` | \`rerank-v3.5\` |\n`)],
+    ['cohere prose', () => reviewCohere(reviewCohereRetirement('* `embed-english-v2.0`\n').replace('April 4th, 2026', '~~March 1, 2026~~ April 4th, 2026'))],
+  ]) strictAssert.throws(parse, /struck-through text in Markdown is refused/, label)
+})
+reviewTest('S3: tables that render as code or are hidden by a comment stop the Mistral, OpenAI, Anthropic, and Cohere readers', () => {
+  const real = `${reviewMistralHeader}${reviewMistralRow('mistral-a-1', '2026-01-01', '2026-06-01')}`
+  const hiddenTable = `${reviewMistralHeader}${reviewMistralRow('mistral-b-1', '2026-02-01', '2026-03-01')}`
+  strictAssert.throws(() => reviewMistral(`${real}\n<!-- draft below, not published\n\n${hiddenTable}`), /line 5: unbalanced comment marker: an unclosed HTML comment hides the rest of the page/)
+  strictAssert.throws(() => reviewMistral(`${real}\nExample:\n\n${hiddenTable.split('\n').map(line => line && `    ${line}`).join('\n')}`), /table indented 4 or more spaces renders as code/)
+  strictAssert.throws(() => reviewMistral(`${real.replace('| Y |', '| `<!--` |')}\nText\n\n${hiddenTable}\nmore \`-->\`\n`), /line 3: HTML comment marker inside a code span/)
+  const fake = '| Jan 1, 2028 | `gpt-x` | Deprecated | `gpt-z` | Jul 1, 2026 |'
+  const quoted = text => text.split('\n').map(line => line ? `> ${line}` : '>').join('\n')
+  strictAssert.deepEqual(reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026')}\nExample:\n\n${quoted(`\`\`\`\n${reviewOpenAIHeader}${fake}\n\n\`\`\``)}\n`), [['gpt-x', '2026-06-02', '2026-12-01', undefined]])
+  strictAssert.deepEqual(reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026')}\n\`\`\`\nexample\n    \`\`\`\n${reviewOpenAIHeader}${fake}\n\`\`\`\n`), [['gpt-x', '2026-06-02', '2026-12-01', undefined]])
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\nOld example:\n\n    ${reviewAnthropicTable.replace('\n', '\n    ')}    | January 1, 2020 | \`claude-z-1\` | \`claude-b\` |\n`), /table indented 4 or more spaces/)
+  strictAssert.throws(() => reviewCohere(`### 2024-12-02: Rerank v2.0\n\nSee:\n\n    ${reviewCohereTable.replace('\n', '\n    ')}    | 2025-04-30 | \`rerank-english-v2.0\` | \`rerank-v3.5\` |\n`), /table indented 4 or more spaces/)
+})
+reviewTest('S3: an indented code block stops the Cohere run even when its first line is a table header', () => {
+  const lines = ['# Deprecations', '', '    | Shutdown Date | Model |', '| --- | --- |']
+  strictAssert.throws(() => cohereMarkdownToHtml(lines.join('\n')), /^Error: cohere deprecations page: line 3: (?:indented code block|table indented 4 or more spaces renders as code or inside a list item)$/)
+})
+reviewTest('S4: an OpenAI table row that starts with inline HTML stops the run instead of being dropped', () => {
+  strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026')}<s>Jan 1, 2027</s> Dec 2, 2026 | \`gpt-q\` | Deprecated | \`gpt-y\` | Jun 2, 2026 |\n`), /line 6: table row starts with block or HTML markup/)
+  strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026')}<b>Jan 1, 2027</b> | \`gpt-q\` | Deprecated | \`gpt-y\` | Jun 2, 2026 |\n`), /line 6: table row starts with block or HTML markup/)
+})
+reviewTest('P1: an OpenAI setext heading, raw HTML heading, or heading in a list item stops the run instead of leaving a table under an older date', () => {
+  const page = heading => `## 2025-01-01: old\n\n${reviewOpenAIDated}| 2025-06-01 | \`a-1\` | \`b-1\` |\n\n${heading}\n\n${reviewOpenAIDated}| 2026-09-01 | \`c-1\` | \`d-1\` |\n`
+  for (const [heading, message] of [
+    ['2026-03-01: newer\n---', 'line 8: setext heading; headings must use #'],
+    ['2026-03-01: newer\n=', 'line 8: setext heading; headings must use #'],
+    ['2026-03-01: newer\n-', 'line 8: setext heading; headings must use #'],
+    ['<h2>2026-03-01: newer</h2>', 'line 7: HTML heading in the Markdown source'],
+    ['- ## 2026-03-01: newer', 'line 7: heading inside a list item'],
+    ['1. - ### 2026-03-01: newer', 'line 7: heading inside a list item'],
+  ]) strictAssert.throws(() => reviewOpenAI(page(heading)), new RegExp(`^Error: openai deprecations page: ${message}$`), heading)
+  strictAssert.deepEqual(reviewOpenAI(page('## 2026-03-01: newer\n\n---')).map(record => record[1]), ['2025-01-01', '2026-03-01'])
+})
+reviewTest('P2: an Anthropic one-dash setext underline or a heading inside a list item stops the run', () => {
+  const later = `\n${reviewAnthropicTable}| December 30, 2026 | \`claude-z-1\` | \`claude-b\` |\n`
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\n2026-10-15: Claude Z model\n-\n${later}`), /has a setext heading under "2026-09-30: A": 2026-10-15: Claude Z model/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\n- ### 2026-10-15: Claude Z model\n${later}`), /has a heading inside a list item under "2026-09-30: A": - ### 2026-10-15: Claude Z model/)
+})
+reviewTest('P3: an Anthropic section whose only date sits in a <Note> stops the run instead of using it as the announcement', () => {
+  const table = `${reviewAnthropicTable}| December 30, 2026 | \`claude-z-1\` | \`claude-b\` |\n`
+  for (const note of ['<Note>\n  Retired 2026-12-30.\n</Note>', '<Note>Retired 2026-12-30.</Note>', '<Warning>\nNotice\n\nRetired 2026-12-30.\n</Warning>']) {
+    strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}### Claude Z model\n\n${note}\n\n${table}`), /table under "Claude Z model" takes its only announcement date from a <Note> or other callout/, note)
+  }
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\n<Note>\n### 2026-10-15: Claude Z model\n</Note>\n\n${table}`), /has a heading inside a <Note> or other callout/)
+  strictAssert.deepEqual(parseAnthropicDeprecations(`${reviewAnthropicStatus}### 2026-10-01: Claude Z model\n\n<Note>\n  Retired 2026-12-30.\n</Note>\n\n${table}`).find(record => record.id === 'claude-z-1').announced, '2026-10-01')
+  strictAssert.deepEqual(parseAnthropicDeprecations(`${reviewAnthropicStatus}### Claude Z model\n\n<Note>See the guide.</Note>\n\nOn October 1, 2026 we notified developers.\n\n${table}`).find(record => record.id === 'claude-z-1').announced, '2026-10-01')
+})
+reviewTest('P4: a Cohere list whose bullet character changes is two lists in GFM, so the run stops', () => {
+  strictAssert.throws(() => reviewCohere(reviewCohereRetirement('* `embed-english-v2.0`\n- `c4ai-aya-expanse-8b`\n')), /line 10: list marker changes, which starts a new list/)
+  strictAssert.throws(() => reviewCohere(reviewCohereRetirement('1. `embed-english-v2.0`\n2) `c4ai-aya-expanse-8b`\n')), /line 10: list marker changes, which starts a new list/)
+  strictAssert.deepEqual(reviewCohere(reviewCohereRetirement('* `embed-english-v2.0`\n* `c4ai-aya-expanse-8b`\n')).map(record => record.id), ['embed-english-v2.0', 'c4ai-aya-expanse-8b'])
+})
+reviewTest('P1 for Cohere: a heading inside a list item stops the run', () => {
+  strictAssert.throws(() => reviewCohere(`${reviewCohereRetirement('* `embed-english-v2.0`\n')}\n* ### 2026-05-01: Something\n\n### 2024-12-02: Rerank v2.0\n\n${reviewCohereTable}| 2025-04-30 | \`rerank-english-v2.0\` | \`rerank-v3.5\` |\n`), /heading inside a list item/)
 })
 
 fs.rmSync(outputDir, { recursive: true, force: true })

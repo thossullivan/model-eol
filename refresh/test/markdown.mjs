@@ -11,6 +11,7 @@ import {
   MARKDOWN_THEMATIC_BREAK,
   markdownCellHtml,
   markdownHeading,
+  markdownInlineText,
   markdownLines,
   markdownPage,
   markdownPipeTables,
@@ -18,6 +19,7 @@ import {
   splitPipeRow,
 } from '../markdown.mjs'
 import { htmlTableShapes, pipeTableShapes } from '../shapes.mjs'
+import { parseAzureModelRetirementScheduleMarkdown, parseVertexModelVersionsMarkdown } from '../distributors.mjs'
 
 const fixtureDir = path.join(import.meta.dirname, 'fixture', 'pipe-tables')
 let failures = 0
@@ -201,6 +203,89 @@ test('shared block checks match ATX headings, setext underlines, thematic breaks
   strictAssert.equal(htmlTableLineIndex(['<tables>']), -1)
   strictAssert.ok(isHtmlBody('\uFEFF\n<!-- a --><!DOCTYPE html>'))
   strictAssert.ok(!isHtmlBody('# Models\n<table></table>'))
+})
+
+test('S1: an unmatched * or _ stays literal, so a footnote marker survives; matched emphasis is still dropped', () => {
+  for (const [source, text] of [
+    ['2027-06-01*', '2027-06-01*'],
+    ['November 30, 2026*', 'November 30, 2026*'],
+    ['*Dec 1, 2026', '*Dec 1, 2026'],
+    ['gemini-a_', 'gemini-a_'],
+    ['a * b', 'a * b'],
+    ['**x*', '*x'],
+    ['*Note:* see **Dec 1, 2026**', 'Note: see Dec 1, 2026'],
+    ['__init__ and _em_ and snake_case_id', 'init and em and snake_case_id'],
+    ['**`gpt-5`**', '<code>gpt-5</code>'],
+    ['*[docs](/a)*', '<a href="/a">docs</a>'],
+  ]) strictAssert.equal(markdownCellHtml(source), text, source)
+  strictAssert.equal(markdownInlineText('2025-04-30*'), '2025-04-30*')
+  strictAssert.equal(markdownInlineText('**2025-04-30**'), '2025-04-30')
+})
+
+test('S2: struck-through text in Markdown or raw HTML is refused; a lone tilde and code are not', () => {
+  for (const source of ['~~Jan 5, 2027~~ **Dec 1, 2026**', '~Jan 5, 2027~ Dec 1, 2026', '~~2026-10-31~~', '`a` ~~b `c` d~~', '<s>Jan 1, 2027</s> Dec 2, 2026', '<DEL>x</DEL>', '<strike class="old">x</strike>']) {
+    strictAssert.throws(() => markdownCellHtml(source), /struck-through text in Markdown is refused/, source)
+  }
+  strictAssert.throws(() => markdownInlineText('~~2026-10-31~~'), /struck-through/)
+  strictAssert.equal(markdownCellHtml('~50 models, a ~ b, ~~~ and `~~x~~`'), '~50 models, a ~ b, ~~~ and <code>~~x~~</code>')
+})
+
+test('S3: tables an indented code block, a quoted fence, or a comment would hide are refused or blanked as CommonMark renders them', () => {
+  const table = ['| A | B |', '| - | - |', '| 1 | 2 |']
+  strictAssert.throws(() => markdownPipeTables(doc(['Example:', '', ...table.map(line => `    ${line}`)])), /^Error: line 3: table indented 4 or more spaces renders as code/)
+  strictAssert.throws(() => markdownPipeTables(doc(table.map(line => `\t${line}`))), /table indented 4 or more spaces/)
+  strictAssert.deepEqual(markdownPipeTables(doc(['> ```', ...table.map(line => `> ${line}`), '>', '> ```', ...table])).map(found => found.line), [7])
+  strictAssert.deepEqual(markdownPipeTables(doc(['> ```', '> x', 'lazy line ends the quote and its fence', ...table])).map(found => found.line), [4])
+  strictAssert.deepEqual(markdownPipeTables(doc(['```', '> ```', ...table, '```', ...table])).map(found => found.line), [7])
+  strictAssert.deepEqual(markdownPipeTables(doc(['```', 'x', '    ```', ...table, '```'])), [])
+  strictAssert.deepEqual(markdownPipeTables(doc(['```', 'x', '   ```', ...table])).map(found => found.line), [4])
+  strictAssert.deepEqual(markdownPipeTables(doc(['- item', '  ```', '  x', '  ```', ...table])).map(found => found.line), [5])
+  strictAssert.throws(() => markdownPipeTables(doc(['- item', '  ```', '  x', '     ```', ...table])), /^Error: line 4: closing code fence indentation is ambiguous$/)
+  strictAssert.throws(() => markdownPipeTables(doc(['- item', '  ```', '  x', '```', ...table])), /^Error: line 4: closing code fence indentation is ambiguous$/)
+  strictAssert.throws(() => markdownPipeTables(doc(['- item', '  ```', 'x', '  ```'])), /^Error: line 3: code fence content is indented less than its opening fence$/)
+  strictAssert.throws(() => markdownPipeTables(doc(['Text', '', '    ```', ...table])), /^Error: line 3: code fence indented 4 or more spaces$/)
+  strictAssert.deepEqual(markdownPipeTables(doc(['```js `x`', ...table])).map(found => found.line), [2])
+  strictAssert.throws(() => markdownPipeTables(doc([...table, '', '<!-- draft below', '', ...table])), /^Error: line 5: unbalanced comment marker: an unclosed HTML comment hides the rest of the page$/)
+  strictAssert.throws(() => markdownPipeTables(doc(['| A | B |', '| - | - |', '| 1 | `<!--` |', '', ...table, '', 'more `-->`'])), /^Error: line 3: HTML comment marker inside a code span$/)
+  strictAssert.throws(() => markdownPipeTables(doc(['a `x', '<!--` b', '', '<!-- real -->'])), /HTML comment marker inside a code span/)
+  strictAssert.deepEqual(markdownPipeTables(doc(['<!-- a `b` -->', ...table])).map(found => found.line), [2])
+  for (const hidden of ['<div hidden>', '<details hidden="">', '<span style="display: none">']) {
+    strictAssert.throws(() => markdownPipeTables(doc([hidden, '', ...table])), /^Error: line 1: HTML element hidden from the rendered page$/, hidden)
+  }
+})
+
+test('S4: a table row that starts with block or HTML markup but carries pipes is refused instead of dropped', () => {
+  for (const row of ['<s>Jan 1, 2027</s> Dec 2, 2026 | 3', '<b>1</b> | 2', '- 1 | 2', '## 1 | 2']) {
+    strictAssert.throws(() => markdownPipeTables(doc(['| A | B |', '| - | - |', '| 1 | 2 |', row])), /^Error: line 4: table row starts with block or HTML markup$/, row)
+  }
+  strictAssert.deepEqual(markdownPipeTables(doc(['| A | B |', '| - | - |', '| 1 | 2 |', '<br />']))[0].rows, [['1', '2']])
+})
+
+test('S5: bare inline phrasing tags render as tags so text readers see the words; attributes, unknown tags, and strike tags do not pass', () => {
+  strictAssert.equal(markdownCellHtml('Retirement is <b>no earlier</b> than this date.'), 'Retirement is <b>no earlier</b> than this date.')
+  strictAssert.equal(markdownCellHtml('<em>subject</em> to <SPAN>change</SPAN> <strong>x</strong>'), '<em>subject</em> to <span>change</span> <strong>x</strong>')
+  strictAssert.equal(markdownCellHtml('<span class="x">no earlier</span> than <sup>3</sup> <table>'), '&lt;span class=&quot;x&quot;&gt;no earlier</span> than &lt;sup&gt;3&lt;/sup&gt; &lt;table&gt;')
+  strictAssert.equal(markdownCellHtml('<b>*x*</b>'), '<b>x</b>')
+})
+
+test('S6: a backslash hard line break reads as whitespace, and a table cell that ends in a backslash is refused', () => {
+  strictAssert.equal(markdownCellHtml('no earlier\\\nthan'), 'no earlier \nthan')
+  strictAssert.equal(markdownCellHtml('may be\\'), 'may be ')
+  strictAssert.equal(markdownCellHtml('a \\\\ b \\* c'), 'a \\ b * c')
+  const [table] = markdownPipeTables('| A | B |\n| - | - |\n| 2026-10-31\\ | x |\n| y\\\\ | z |\n')
+  strictAssert.throws(() => markdownPipeTableToHtml(table), /^Error: line 3: table cell ends with a backslash: 2026-10-31\\$/)
+  strictAssert.ok(markdownPipeTableToHtml({ ...table, rows: table.rows.slice(1) }).includes('<td>y\\</td>'))
+})
+
+test('S5 and S6 through the shared reader: Azure and Vertex see precision wording split by inline tags or a hard line break', () => {
+  const azure = after => `# T\n\n## G\n\n### Azure OpenAI\n\n| Model | Version | Lifecycle | Retirement date | Replacement |\n| --- | --- | --- | --- | --- |\n| gpt-4o | 2024-08-06 | Deprecated | 2027-04-14^3^ | - |\n\n${after}`
+  for (const note of ['Retirement is <b>no earlier</b> than this date.', 'Retirement is <span>no earlier</span> than this date.', 'This date is <em>subject</em> to change.', 'Retirement no earlier\\\nthan this date.']) {
+    strictAssert.throws(() => parseAzureModelRetirementScheduleMarkdown(azure(`^3^ April 14, 2027 applies. ${note}\n`), { now: new Date('2026-11-17') }), /retirement footnote 3 makes the date approximate/, note)
+  }
+  const vertex = prose => parseVertexModelVersionsMarkdown(`## Latest\n\n${prose}\n\n| Model ID | Release date | Retirement date | Replacement model ID |\n|---|---|---|---|\n| \`gemini-a\` | May 1, 2025 | October 20, 2026 |   |\n`)
+  for (const prose of ['While retirement timelines may be\\\nextended, they won\'t move.', 'Retirement dates are the <b>earliest</b> possible dates.']) {
+    strictAssert.deepEqual(vertex(prose), [{ vertexId: 'gemini-a', shutdown: '2026-10-20', date_precision: 'earliest' }], prose)
+  }
 })
 
 if (failures) {

@@ -782,7 +782,13 @@ export const parseVertexModelLifecycle = parseVertexModelVersionsHtml
 export const parseVertexModelVersions = parseVertexModelVersionsHtml
 
 // Google's Markdown generator backslash-escapes punctuation even inside code spans, where CommonMark keeps it literal.
-const vertexCellHtml = text => markdownCellHtml(text).replace(/<code>([\s\S]*?)<\/code>/g, (_, code) => `<code>${code.replace(/\\([!-/:-@[-`{-~])/g, '$1')}</code>`)
+// A raw tag the cell renderer keeps as escaped text (one with attributes, or not a bare phrasing tag) could hide wording such as "no earlier".
+function refuseEscapedTags(html, label, source) {
+  if (/&lt;\/?[a-z][a-z0-9-]*(?:\s[^]*?)?&gt;/i.test(html.replace(/<code>[\s\S]*?<\/code>/g, ''))) throw new Error(`${label} page has inline HTML the Markdown reader cannot read: ${source.trim()}`)
+  return html
+}
+
+const vertexCellHtml = text => refuseEscapedTags(markdownCellHtml(text), 'vertex-ai lifecycle', text).replace(/<code>([\s\S]*?)<\/code>/g, (_, code) => `<code>${code.replace(/\\([!-/:-@[-`{-~])/g, '$1')}</code>`)
 
 /** markdownPage of a page that is neither an HTML document nor carries a raw HTML table. */
 function markdownPageLines(markdown, label) {
@@ -1108,7 +1114,7 @@ const AZURE_RESERVED_CHARACTERS = /[\uE000\uE001]/
 
 // Learn writes footnote markers as ^N^; outside code spans they become the <sup>N</sup> of the HTML page.
 function azureInlineHtml(text) {
-  return markdownCellHtml(text.replace(/(?<!\\)\^(\d+)\^/g, '\uE000$1\uE001')).replace(
+  return refuseEscapedTags(markdownCellHtml(text.replace(/(?<!\\)\^(\d+)\^/g, '\uE000$1\uE001')), 'azure-ai-foundry lifecycle', text).replace(
     /<code>[\s\S]*?<\/code>|\uE000(\d+)\uE001/g,
     (match, number) => number === undefined ? match.replace(/\uE000(\d+)\uE001/g, '^$1^') : `<sup>${number}</sup>`,
   )

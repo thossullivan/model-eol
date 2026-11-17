@@ -82,11 +82,35 @@ Markdown page. It is stricter than GitHub, which pads or truncates rows:
 - `\|` is a literal pipe, and a pipe inside a code span doesn't split a cell.
   Fenced code, HTML comments, and YAML front matter are ignored. Tables inside
   block quotes are read.
+- Content the rendered page shows as code or hides is never read as live
+  rows. A fence inside a block quote ends with the quote, a backtick fence
+  whose info string holds a backtick is not a fence, and a closing fence
+  indented 4 or more spaces past its opening fence is code. Where the
+  indentation could belong to a list item, so CommonMark's reading depends on
+  context the reader doesn't track, the run stops: an opening fence indented 4
+  or more spaces, a closing fence indented differently from its opening fence
+  past column 3, and fenced content indented less than its fence. So does a
+  table header indented 4 or more spaces, an unclosed `<!--`, an HTML comment
+  marker inside a code span, and an element with a `hidden` attribute or
+  `display: none` style.
+- A line that would end a table because it starts like another block (a
+  heading, list item, thematic break, or HTML tag) but still carries a pipe
+  stops the run, since GitHub reads it as a row.
 - Each table records its header, rows of trimmed cell source, the line of its
   header row, and the nearest preceding ATX heading.
 - `markdownPipeTableToHtml` renders a table as HTML for the HTML row readers.
   Its default cell rendering keeps code spans, links with a safe target, and
-  `<br>`, drops emphasis, and escapes any other markup.
+  `<br>`, and escapes any other markup. A table cell that ends in a lone
+  backslash stops the run.
+- Cells and prose go through the same inline reader. Emphasis is matched by
+  the CommonMark delimiter rules and dropped; an unmatched `*` or `_`, such as
+  a footnote marker after a date, stays as text, so the date reader refuses
+  it. Strikethrough (`~x~`, `~~x~~`, `<s>`, `<del>`, `<strike>`) stops the
+  run, because the struck words would otherwise be read as live. A bare
+  phrasing tag (`<b>`, `<em>`, `<span>`, and similar, without attributes) is
+  kept as that tag, so the HTML readers see the words inside it the way they
+  do on an HTML page. A backslash at the end of a line is a hard line break
+  and reads as a space.
 - `markdownPage` returns the prepared source lines together with the tables,
   keyed by header line, so a converter that walks the page sees the same lines
   the table reader numbered. The converters for OpenAI, Anthropic, Cohere,
@@ -169,8 +193,11 @@ current IDs and a lifecycle cross-check.
   run.
 - `<Note>`, `<Warning>`, `<Tip>`, and `<Info>` tags are read as prose. Any
   other tag at the start or end of a line, an HTML table or heading, a setext
-  heading, or an unbalanced comment marker stops the run. Front matter, HTML
-  comments, and fenced code are ignored.
+  heading (including a one-dash underline), a heading inside a list item or
+  inside one of those components, or an unbalanced comment marker stops the
+  run. So does an announcement table whose section heading has no date when
+  the only date before it is inside a component. Front matter, HTML comments,
+  and fenced code are ignored.
 - A pipe table must be the status table, an announcement table, an endpoint
   table, or a table whose header names neither a model nor a retirement,
   deprecation, shutdown, or sunset, such as the API parameter table, which
@@ -198,14 +225,18 @@ current IDs and a lifecycle cross-check.
   practice the cross-check covers active and deprecated models only.
 - Every listed model must carry `lifecycle` (`active`, `deprecated`, or
   `retired`), `deprecated_at`, and `retires_at`, each date an RFC 3339
-  date-time with a `Z` or numeric offset, or null. An active model must have
-  both dates null, a deprecated or retired model must have `deprecated_at`,
-  and `retires_at` can't precede it. Anything else stops the run.
+  date-time with a `Z` or numeric offset, or null. An active model must have a
+  null `deprecated_at` and may have a tentative `retires_at`, a deprecated or
+  retired model must have `deprecated_at`, and `retires_at` can't precede it.
+  Anything else is a cross-check failure.
 - The page stays authoritative. The API's lifecycle is compared with the
   page's stated state, `deprecated_at` (as a UTC calendar date) with the
-  page's deprecated date, and `retires_at` with the page's exact retirement
-  date (a tentative page date matches a null `retires_at`). Each disagreement,
-  and each deprecated or retired API model the page doesn't list, becomes a
+  page's deprecated date, and `retires_at` (as a UTC calendar date) with the
+  page's exact retirement date. A tentative page date matches a null
+  `retires_at` and is compared with the `retires_at` of an active model.
+  Conflict lines show the API's raw timestamp, so an offset is visible. Each
+  disagreement, each deprecated or retired API model the page doesn't list,
+  and each Active or Deprecated page model the API doesn't return becomes a
   `Source conflicts` line in the semantic diff and a `notice:` line on stderr.
   Neither fails the run, puts an API date or state in the feed, or counts as a
   material change. A deprecated model the page doesn't list is still a current
@@ -214,6 +245,15 @@ current IDs and a lifecycle cross-check.
   run then prints `notice: anthropic models API lifecycle: N active, N
   deprecated, N retired; N conflicts with the deprecations page`. Without the
   key, none of this runs.
+- The models API can't change feed data, so its failure (an HTTP error, a
+  response shape or value the rules above refuse) doesn't fail the run. The
+  run prints `warning: anthropic models API cross-check failed: <message>`,
+  adds a `cross-check-failed` line to `Source conflicts`, and continues as if
+  the key were unset: the page is used and the committed entries are kept.
+  `MODEL_EOL_CROSS_CHECKS=strict` makes such a failure stop the run instead;
+  `warn` or an empty value keeps the default, and any other value stops the
+  run as a configuration error. A failure of the deprecations page itself
+  always stops the run.
 - Offline runs read `test/fixture/anthropic-deprecations.md`,
   `test/fixture/anthropic-models.json` (with the lifecycle fields),
   `test/fixture/anthropic-llms.txt`, and
@@ -235,8 +275,14 @@ it.
   order and read by the HTML parser, so every rule below applies to both. Pipe
   tables follow the [Markdown pipe table](#markdown-pipe-tables) rules: a row
   whose cell count differs from its header stops the run with its line number.
-  An HTML `<table>` in the Markdown stops the run, and a page without a
-  recognised table has no deprecations content and stops it too.
+  An HTML `<table>` or heading, a setext heading, and a heading inside a list
+  item stop the run, since any of them could put a table under the wrong
+  date. A page without a recognised table has no deprecations content and
+  stops it too.
+- A shutdown cell holds exactly one date. The page's own `Earliest estimate`
+  label after it makes the date `earliest`; any other text in the cell stops
+  the run. Two rows for one model with the same announcement must agree on
+  the date and its precision.
 - When the HTML parser reads a rendered page directly, `script`, `style`,
   `nav`, `header`, and `footer` elements are removed first. The rendered page
   curls apostrophes that the Markdown keeps straight, so a replacement note
@@ -327,8 +373,9 @@ feed cite the human page as `source`. The page has no announcement dates.
   separated by `---`, with one `* ` list item per cell. A cell may be empty and
   may continue on more deeply indented lines. Headings keep their
   `{% id="..." %}` as an anchor id. Markdoc tags elsewhere are removed and the
-  text around them is read as prose. Emphasis markers (`*`, `_` at a word edge,
-  `~~`) and backslash escapes are removed from prose and cells.
+  text around them is read as prose. Matched emphasis markers and backslash
+  escapes are removed from prose and cells; an unmatched `*` or `_` stays as
+  text, and strikethrough stops the run.
 - The header must be exactly Model (or Agent), Release date, Shutdown date,
   Recommended replacement. Any other layout stops the run, as do a row whose
   cell count differs from the header, a model cell that is not exactly one
@@ -413,10 +460,12 @@ headed Shutdown Date, Deprecated Model, and Recommended Replacement.
   by indentation), and pipe tables are rendered as HTML in page order and read
   by the HTML parser, so every rule here applies to both. Block quotes are read
   as their contents.
-- A raw HTML block or `<table>`, a setext heading, an indented code block, tab
-  indentation, a list item indented between two list levels, a table or
-  heading inside a list item, an HTML body, and a misaligned pipe table row
-  each stop the run with a line number where there is one.
+- A raw HTML block or `<table>`, a setext heading, an indented code block
+  (checked before the line is read as a table), tab indentation, a list item
+  indented between two list levels, a change of bullet or numbering character
+  within a list (GitHub starts a new list there), a table or heading inside a
+  list item, an HTML body, and a misaligned pipe table row each stop the run
+  with a line number where there is one.
 - Identities and aliases are collected from every section first. Records are
   then merged in ascending order of the section's heading date.
 

@@ -214,6 +214,16 @@ await test('fixture lookup finds the Markdown fixture and its .md fallbacks, nev
   }
 })
 
+await test('inline HTML with attributes in prose fails closed instead of hiding loosening wording', () => {
+  const now = new Date('2026-11-17T12:00:00Z')
+  const table = '### Azure OpenAI\n\n| Model | Version | Lifecycle | Retirement date | Replacement |\n| --- | --- | --- | --- | --- |\n| gpt-x | 1 | GA | 2027-04-14^3^ | - |\n\n'
+  for (const wrapped of ['<span class="x">no earlier</span>', '<em title="t">no earlier</em>', '<font color="red">no earlier</font>']) {
+    strictAssert.throws(() => parseAzureModelRetirementScheduleMarkdown(`${table}^3^ April 14, 2027 applies. Retirement is ${wrapped} than this date.\n`, { now }), /inline HTML the Markdown reader cannot read/, wrapped)
+  }
+  strictAssert.throws(() => parseAzureModelRetirementScheduleMarkdown(`${table}^3^ April 14, 2027 applies. Retirement is <b>no earlier</b> than this date.\n`, { now }), /approximate/)
+  strictAssert.equal(parseAzureModelRetirementScheduleMarkdown(`${table}^3^ April 14, 2027 applies. Use \`<span class="x">\` in code.\n`, { now }).records[0].shutdown, '2027-04-14')
+})
+
 if (failures) {
   console.error(`${failures} Azure Markdown test(s) failed`)
   process.exit(1)
