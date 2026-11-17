@@ -3526,8 +3526,14 @@ reviewTest('2026-10-18 shapes: OpenAI splits a row that lists several dated snap
     [['gpt-4o-2024-08-06', undefined, '2027-01-14', 'gpt-6-luna'], ['gpt-4o-2024-11-20', undefined, '2027-01-14', 'gpt-6-luna']])
   strictAssert.deepEqual(parseOpenAIDeprecations(shapesOpenAIPage('<code>o1-2024-12-17</code> <code>o1</code>')).map(record => [record.id, record.aliases]), [['o1-2024-12-17', ['o1']]])
 })
-reviewTest('2026-10-18 shapes: OpenAI fails closed when several dated snapshots share an undated alias', () => {
-  strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')), /ambiguous alias gpt-4o/)
+reviewTest('2026-10-18 shapes: OpenAI fails closed when several dated snapshots share an undated alias outside their family', () => {
+  strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage('<code>chatgpt-4o-latest</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')), /ambiguous alias chatgpt-4o-latest/)
+  strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-mini-2024-07-18</code>')), /ambiguous alias gpt-4o/)
+  strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-0806</code>')), /ambiguous alias gpt-4o/)
+})
+reviewTest('Notice-date layout: OpenAI gives a family alias to every dated snapshot of its family listed in one cell', () => {
+  const records = parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>'))
+  strictAssert.deepEqual(records.map(record => [record.id, record.aliases]), [['gpt-4o-2024-08-06', ['gpt-4o']], ['gpt-4o-2024-11-20', ['gpt-4o']]])
 })
 reviewTest('2026-10-23 review: an OpenAI endpoint token beside dated snapshots refuses the row instead of dropping the snapshots', () => {
   const page = shapesOpenAIPage('<code>/v1/foo</code> <code>gpt-4o-2024-08-06</code> <code>gpt-4o-2024-11-20</code>')
@@ -3887,6 +3893,172 @@ reviewTest('Issue 135 late pass: an ID that only contains a date is not a dated 
     strictAssert.equal(ids.length, 1)
     strictAssert.deepEqual(ids[0], ['gpt-fam-2025-01-01-preview', 'gpt-fam-pre', 'gpt-fam-pre-chat'])
   }
+})
+const noticeDateHtml = fs.readFileSync(path.join(fixtures, 'openai-deprecations-notice-date.html'), 'utf8')
+const noticeNow = new Date('2026-11-16T12:00:00Z')
+const noticeParse = (page, now = noticeNow) => parseOpenAIDeprecations(page, undefined, { now })
+const noticeDateRecords = () => noticeParse(noticeDateHtml)
+const noticeDateRecord = id => noticeDateRecords().find(record => record.id === id)
+const noticeDateEdit = (from, to) => {
+  strictAssert.equal(noticeDateHtml.split(from).length, 2, from)
+  return noticeDateHtml.replace(from, to)
+}
+const noticeCyberRow = '<td><span data-deprecation-status="deprecated">Deprecated</span></td>\n<td>The most capable cyber model available to you.</td>\n<td>Nov 5, 2026</td>'
+reviewTest('Notice-date layout: each OpenAI row takes its announcement from its own notice date', () => {
+  const lifecycle = id => { const { announced, shutdown } = noticeDateRecord(id) ?? {}; return [announced, shutdown] }
+  strictAssert.deepEqual(lifecycle('gpt-5-2025-08-07'), ['2026-06-11', '2026-12-11'])
+  strictAssert.deepEqual(lifecycle('gpt-5.5-cyber-preview'), ['2026-11-05', '2027-02-01'])
+  strictAssert.deepEqual(lifecycle('gpt-4o-mini-transcribe-2025-03-20'), ['2026-07-20', '2027-01-20'])
+  strictAssert.deepEqual(lifecycle('gpt-4o-mini-transcribe-2025-12-15'), ['2026-08-26', '2027-02-26'])
+  strictAssert.deepEqual(lifecycle('gpt-4-32k-0314'), ['2023-06-13', '2025-06-06'])
+  strictAssert.deepEqual(lifecycle('babbage-002'), ['2025-09-26', '2026-09-28'])
+  strictAssert.deepEqual(lifecycle('gpt-4-0314'), ['2025-09-26', '2026-03-26'])
+  strictAssert.deepEqual(lifecycle('code-davinci-002'), ['2023-07-06', '2024-01-04'])
+  const dated = noticeParse(noticeDateHtml.replace('<span class="min-w-0">Upcoming deprecations</span>', '2026-01-01: Upcoming deprecations'))
+  strictAssert.deepEqual(dated, noticeDateRecords())
+})
+reviewTest('Notice-date layout: every OpenAI record carries the shutdown, notice date, replacement, and aliases of a row that names it', () => {
+  const rows = [...noticeDateHtml.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].flatMap(table => {
+    const cells = [...table[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map(row => [...row[1].matchAll(/<(?:th|td)\b[^>]*>([\s\S]*?)<\/(?:th|td)>/gi)].map(cell => cell[1]))
+    const header = cells[0].map(cell => cell.replace(/<[^>]+>/g, '').trim())
+    const at = label => header.indexOf(label)
+    const model = at('Affected model') >= 0 ? at('Affected model') : at('Affected model or feature')
+    if (model < 0) return []
+    const replacement = at('Recommended replacement') >= 0 ? at('Recommended replacement') : at('Listed replacement')
+    const codes = html => [...html.matchAll(/<code>([^<]*)<\/code>/g)].map(match => match[1])
+    return cells.slice(1).map(row => ({ ids: codes(row[model]), shutdown: dateFromText(row[at('Shutdown date')]), announced: dateFromText(row[at('Notice date')]), replacements: codes(row[replacement]) }))
+  })
+  strictAssert.equal(rows.length, 24)
+  for (const record of noticeDateRecords()) {
+    const own = rows.filter(row => row.ids.includes(record.id) && row.shutdown === record.shutdown && row.announced === record.announced)
+    strictAssert.ok(own.length, record.id)
+    const targets = [record.replacement, ...(record.replacement_options ?? [])].filter(Boolean)
+    strictAssert.ok(own.some(row => targets.every(target => row.replacements.includes(target))), `${record.id} replacement`)
+    for (const alias of record.aliases ?? []) strictAssert.ok(own.some(row => row.ids.includes(alias)), `${record.id} alias ${alias}`)
+    const latest = Math.max(...rows.filter(row => row.ids.includes(record.id)).map(row => Date.parse(row.announced)))
+    strictAssert.equal(Date.parse(record.announced), latest, `${record.id} keeps the latest notice`)
+  }
+})
+reviewTest('Notice-date layout: an OpenAI model row with an empty, unparseable, or ambiguous notice date fails closed naming the model', () => {
+  for (const notice of ['', 'TBD', 'Nov 5, 2026 (updated Nov 9, 2026)', 'Nov 31, 2026']) {
+    const page = noticeDateEdit('<td>Nov 5, 2026</td>', `<td>${notice}</td>`)
+    strictAssert.throws(() => noticeParse(page), notice === 'Nov 31, 2026' ? /entry gpt-5\.5-cyber-preview has no valid notice date: invalid date "Nov 31, 2026"$/ : /entry gpt-5\.5-cyber-preview has no valid notice date$/, notice)
+  }
+})
+const noticeStatusPage = status => noticeDateEdit(noticeCyberRow, noticeCyberRow.replace('>Deprecated<', `>${status}<`))
+reviewTest('Notice-date layout: an OpenAI Status other than Deprecated or a past Shut down fails closed naming the model', () => {
+  for (const status of ['Read-only', 'Retired', 'Deprecated soon', '']) {
+    strictAssert.throws(() => noticeParse(noticeStatusPage(status), new Date('2027-06-01T00:00:00Z')), new RegExp(`entry gpt-5\\.5-cyber-preview has an unrecognised status for shutdown 2027-02-01 on 2027-06-01: ${status || '\\(empty\\)'}$`), status)
+  }
+})
+reviewTest('Notice-date layout: OpenAI accepts Shut down only on or after the shutdown date of its row, read from the injected clock', () => {
+  for (const status of ['Shut down', 'shut down', 'Shutdown', 'SHUTDOWN']) {
+    strictAssert.throws(() => noticeParse(noticeStatusPage(status), new Date('2027-01-31T23:59:59Z')), new RegExp(`entry gpt-5\\.5-cyber-preview has an unrecognised status for shutdown 2027-02-01 on 2027-01-31: ${status}$`), status)
+    for (const now of ['2027-02-01T00:00:00Z', '2027-02-02T00:00:00Z']) {
+      strictAssert.deepEqual(noticeParse(noticeStatusPage(status), new Date(now)), noticeDateRecords(), `${status} ${now}`)
+    }
+  }
+  strictAssert.throws(() => noticeParse(noticeDateHtml, new Date('not a date')), /refresh clock is not a valid date/)
+})
+reviewTest('Notice-date layout: the OpenAI feature and endpoint table and the fine-tuning timeline produce no records', () => {
+  const ids = noticeDateRecords().flatMap(record => [record.id, ...(record.aliases ?? [])])
+  for (const token of ['/v1/prompts', '/v1/audio/translations', '/v1/realtime/translations', 'Agent Builder', 'Videos API', 'Assistants API', 'OpenAI-Beta: realtime=v1', '/v1/edits']) {
+    strictAssert.ok(!ids.includes(token), token)
+  }
+  strictAssert.ok(noticeDateRecords().every(record => record.announced !== '2026-06-03' && record.announced !== '2026-05-07'))
+  strictAssert.ok(noticeDateRecords().every(record => record.shutdown !== '2026-11-30'))
+  const modelTables = noticeDateHtml.replace(/<table\b[^>]*>(?:(?!<\/table>)[\s\S])*?Affected model[\s\S]*?<\/table>/g, '')
+  strictAssert.throws(() => noticeParse(modelTables), /has no recognisable deprecations content: endpoint-or-product-deprecation-table$/)
+})
+reviewTest('Notice-date layout: OpenAI multi-ID cells keep their aliases as before', () => {
+  const aliases = id => noticeDateRecord(id)?.aliases
+  strictAssert.deepEqual(aliases('gpt-3.5-turbo-0125'), ['gpt-3.5-turbo', 'gpt-3.5-turbo-completions'])
+  strictAssert.deepEqual(aliases('gpt-4-0613'), ['gpt-4', 'gpt-4-0613-completions', 'gpt-4-completions'])
+  strictAssert.deepEqual(aliases('gpt-4-0125-preview'), ['gpt-4-turbo-preview', 'gpt-4-turbo-preview-completions'])
+  strictAssert.deepEqual(aliases('gpt-5-2025-08-07'), ['gpt-5'])
+  strictAssert.deepEqual(aliases('gpt-4o-mini-transcribe-2025-12-15'), ['gpt-4o-mini-transcribe'])
+  strictAssert.deepEqual([aliases('gpt-4o-2024-08-06'), aliases('gpt-4o-2024-11-20')], [undefined, undefined])
+  strictAssert.deepEqual([aliases('gpt-4o-mini-tts-2025-03-20'), aliases('gpt-4o-mini-tts-2025-12-15')], [['gpt-4o-mini-tts'], ['gpt-4o-mini-tts']])
+  strictAssert.ok(!noticeDateRecord('gpt-4o-mini-tts') && !noticeDateRecord('GPT-4o'))
+})
+reviewTest('Notice-date layout: one OpenAI cell listing a family alias and its snapshots merges like one row per snapshot', () => {
+  const oneCell = familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20', 'gpt-fam-2025-12-15')])
+  const twoRows = familyPage(['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-03-20')], ['Apr 1, 2027', familyCell('gpt-fam', 'gpt-fam-2025-12-15')])
+  for (const committed of [[], [{ id: 'gpt-fam' }], [{ id: 'gpt-fam-2025-03-20', aliases: ['gpt-fam'] }]]) {
+    strictAssert.deepEqual(familyMerge(committed, oneCell).feed, familyMerge(committed, twoRows).feed, JSON.stringify(committed))
+  }
+})
+reviewTest('Notice-date layout: an OpenAI replacement cell without code elements is a note unless it is a plain list of IDs', () => {
+  strictAssert.deepEqual(Object.entries(noticeDateRecord('sora-2')).filter(([key]) => key.startsWith('replacement')), [['replacement_note', 'No one-to-one replacement']])
+  strictAssert.deepEqual(Object.entries(noticeDateRecord('gpt-5.5-cyber-preview')).filter(([key]) => key.startsWith('replacement')), [['replacement_note', 'The most capable cyber model available to you.']])
+  strictAssert.equal(noticeDateRecord('gpt-5-pro-2025-10-06').replacement, 'gpt-6.1-sol')
+  const bare = parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o-2024-08-06</code>').replace('<code>gpt-6-luna</code>', 'gpt-6-luna'))
+  strictAssert.equal(bare[0].replacement, 'gpt-6-luna')
+  const replacementOf = cell => {
+    const [record] = parseOpenAIDeprecations(shapesOpenAIPage('<code>gpt-4o-2024-08-06</code>').replace('<code>gpt-6-luna</code>', cell))
+    return Object.fromEntries(Object.entries(record).filter(([key]) => key.startsWith('replacement')))
+  }
+  for (const cell of ['gpt-5 or gpt-4.1', 'gpt-5, gpt-4.1', 'gpt-5 / gpt-4.1', 'gpt-5, or gpt-4.1', 'gpt-5 and gpt-4.1']) {
+    strictAssert.deepEqual(replacementOf(cell), { replacement_options: ['gpt-5', 'gpt-4.1'] }, cell)
+  }
+  strictAssert.deepEqual(replacementOf('gpt-6-luna'), { replacement: 'gpt-6-luna' })
+  for (const cell of ['No one-to-one replacement', 'gpt-5 or later', 'gpt-5 for most tasks', 'GPT-5 / GPT-4.1', 'Text-to-speech / Speech-to-text', 'TBD', 'None.', 'Discontinued']) {
+    strictAssert.deepEqual(replacementOf(cell), { replacement_note: cell }, cell)
+  }
+  for (const cell of ['---', 'N/A', 'none']) strictAssert.deepEqual(replacementOf(cell), {}, cell)
+})
+reviewTest('Notice-date layout: an OpenAI table with neither a notice-date column nor a dated heading still fails', () => {
+  const page = '<h2>Past deprecations</h2><table><tr><th>Shutdown date</th><th>Affected model or feature</th><th>Listed replacement</th></tr><tr><td>Oct 23, 2026</td><td><code>gpt-4o-2024-05-13</code></td><td><code>gpt-5.6-sol</code></td></tr></table>'
+  strictAssert.throws(() => parseOpenAIDeprecations(page), /^Error: openai deprecations table has no announcement date$/)
+  const dated = parseOpenAIDeprecations(page.replace('Past deprecations', '2026-04-22: Past deprecations'))
+  strictAssert.deepEqual(dated.map(record => [record.id, record.announced, record.shutdown, record.replacement]), [['gpt-4o-2024-05-13', '2026-04-22', '2026-10-23', 'gpt-5.6-sol']])
+})
+const noticeHeaders = ['Shutdown date', 'Affected model', 'Status', 'Recommended replacement', 'Notice date']
+const noticeRow = ['Jan 6, 2027', '<code>m-1</code>', 'Deprecated', '<code>gpt-next</code>', 'Oct 1, 2026']
+const noticeTable = (headers = noticeHeaders, rows = [noticeRow]) => `<h1>2026-01-01: Deprecations</h1><h2>Upcoming deprecations</h2><table><tr>${headers.map(label => `<th>${label}</th>`).join('')}</tr>${rows.map(cells => `<tr>${cells.map(cell => cell.startsWith('<td') ? cell : `<td>${cell}</td>`).join('')}</tr>`).join('')}</table>`
+const noticeTableRecords = (...args) => noticeParse(noticeTable(...args)).map(record => [record.id, record.announced, record.shutdown, record.replacement ?? record.replacement_options])
+reviewTest('Notice-date layout: an OpenAI row whose cells do not line up with the notice-date header stops the run naming the row', () => {
+  strictAssert.deepEqual(noticeTableRecords(), [['m-1', '2026-10-01', '2027-01-06', 'gpt-next']])
+  const sixCells = ['Jan 6, 2027', '<code>m-1</code>', 'Deprecated', '<code>gpt-next</code>', 'Updated Nov 1, 2026', 'Oct 1, 2026']
+  strictAssert.throws(() => noticeTableRecords(undefined, [noticeRow, sixCells]), /table row "Jan 6, 2027 m-1 Deprecated gpt-next Updated Nov 1, 2026 Oct 1, 2026" has 6 cells, but its header has 5 columns$/)
+  strictAssert.throws(() => noticeTableRecords(undefined, [noticeRow.slice(0, 4)]), /table row "Jan 6, 2027 m-1 Deprecated gpt-next" has 4 cells, but its header has 5 columns$/)
+  const colspan = ['Jan 6, 2027', '<code>m-1</code>', '<td colspan="2">Deprecated</td>', 'Oct 1, 2026']
+  strictAssert.throws(() => noticeTableRecords(undefined, [colspan]), /table row "Jan 6, 2027 m-1 Deprecated Oct 1, 2026" has a spanning cell, but its header has 5 columns$/)
+  const rowspan = ['<td rowspan="2">Jan 6, 2027</td>', ...noticeRow.slice(1)]
+  strictAssert.throws(() => noticeTableRecords(undefined, [rowspan]), /has a spanning cell, but its header has 5 columns$/)
+  const spanningHeader = noticeTable(noticeHeaders).replace('<th>Recommended replacement</th>', '<th colspan="2">Recommended replacement</th>')
+  strictAssert.throws(() => noticeParse(spanningHeader), /table row "Shutdown date Affected model Status Recommended replacement Notice date" has a spanning cell, but its header has 5 columns$/)
+  const missingNotice = noticeDateEdit(noticeCyberRow, noticeCyberRow.replace('\n<td>Nov 5, 2026</td>', ''))
+  strictAssert.throws(() => noticeParse(missingNotice), /table row "Feb 1, 2027 gpt-5\.5-cyber-preview Deprecated The most capable cyber model available to you\." has 4 cells, but its header has 5 columns$/)
+})
+reviewTest('Notice-date layout: an OpenAI notice header the parser does not accept stops the run instead of falling back to a dated heading', () => {
+  strictAssert.deepEqual(noticeTableRecords(noticeHeaders.map(label => label === 'Notice date' ? 'Announcement date' : label)), [['m-1', '2026-10-01', '2027-01-06', 'gpt-next']])
+  for (const label of ['Notice date (UTC)', 'Notice date¹', 'Date announced', 'Last notice date', 'Notice', 'Announced', 'Notice dates']) {
+    const headers = noticeHeaders.filter(header => header !== 'Status').map(header => header === 'Notice date' ? label : header)
+    const rows = [noticeRow.filter(cell => cell !== 'Deprecated')]
+    strictAssert.throws(() => noticeTableRecords(headers, rows), new RegExp(`table has an unrecognised notice header: ${label.toLowerCase().replace(/[()]/g, '\\$&')}$`), label)
+  }
+  const fallback = noticeTable(noticeHeaders.filter(header => header !== 'Status' && header !== 'Notice date'), [noticeRow.filter(cell => cell !== 'Deprecated' && cell !== 'Oct 1, 2026')])
+  strictAssert.deepEqual(noticeParse(fallback).map(record => record.announced), ['2026-01-01'])
+})
+reviewTest('Notice-date layout: an OpenAI status column needs a notice-date column, and only one status column is allowed', () => {
+  const withoutNotice = noticeHeaders.filter(header => header !== 'Notice date')
+  strictAssert.throws(() => noticeTableRecords(withoutNotice, [noticeRow.slice(0, 4)]), /table has a status column but no notice date column$/)
+  const twoStatuses = [...noticeHeaders, 'Migration status']
+  strictAssert.throws(() => noticeTableRecords(twoStatuses, [[...noticeRow, 'Deprecated']]), /table has more than one status column$/)
+})
+reviewTest('Notice-date layout: an OpenAI status column is any label naming a status, such as Current status', () => {
+  const headers = noticeHeaders.map(label => label === 'Status' ? 'Current status' : label)
+  strictAssert.deepEqual(noticeTableRecords(headers), [['m-1', '2026-10-01', '2027-01-06', 'gpt-next']])
+  const shutDown = noticeRow.map(cell => cell === 'Deprecated' ? 'Shut down' : cell)
+  strictAssert.throws(() => noticeTableRecords(headers, [shutDown]), /entry m-1 has an unrecognised status for shutdown 2027-01-06 on 2026-11-16: Shut down$/)
+  strictAssert.throws(() => noticeTableRecords(headers.map(label => label === 'Current status' ? 'Status (GA)' : label), [shutDown]), /entry m-1 has an unrecognised status/)
+})
+reviewTest('Notice-date layout: an OpenAI family cell needs exactly one undated ID and only -YYYY-MM-DD snapshots of it', () => {
+  for (const ids of [['f', 'f-latest', 'f-2025-03-20', 'f-2025-12-15'], ['f', '/v1/foo', 'f-2025-03-20', 'f-2025-12-15'], ['f', 'f-2025_03_20', 'f-2025-12-15']]) {
+    strictAssert.throws(() => parseOpenAIDeprecations(shapesOpenAIPage(openAICodes(...ids))), /with ambiguous alias f$/, ids.join(', '))
+  }
+  strictAssert.deepEqual(openAISnapshots('f', 'f-2025-03-20', 'f-2025-12-15'), [['f-2025-03-20', ['f']], ['f-2025-12-15', ['f']]])
 })
 const anthropicAnnouncement = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-y-20250101</code></td><td><code>claude-next</code></td></tr></table>'
 const anthropicStatusRows = rows => `<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>${rows.map(cells => `<tr>${cells.map((cell, index) => `<td>${index ? cell : `<code>${cell}</code>`}</td>`).join('')}</tr>`).join('')}</table>`

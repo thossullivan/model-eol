@@ -181,6 +181,7 @@ export async function run(options) {
       ? await generateProviderFeed(name, {
         fixtures: options.fixtures,
         generated: generatedTimestamp,
+        now: generatedTimestamp === undefined ? new Date() : new Date(generatedTimestamp),
       })
       : generateCommittedFeed(name, { generated: generatedTimestamp }))
   }

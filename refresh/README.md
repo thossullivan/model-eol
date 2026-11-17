@@ -80,7 +80,8 @@ model overview pages for IDs and aliases.
 The refresh reads the
 [OpenAI deprecations page](https://developers.openai.com/api/docs/deprecations)
 and expects tables with a shutdown date column, a model column, and a
-replacement column, each under a heading that carries its announcement date.
+replacement column. Each row's announcement date comes from the table's notice
+date column, or, in a table without one, from the heading above it.
 
 - The URL fetched is the `source` of the committed `feeds/openai.json`. The
   constant in `providers.mjs` is used only when the feed has no `source`.
@@ -91,15 +92,34 @@ replacement column, each under a heading that carries its announcement date.
   replacement; and a replacement, substitute, or successor label.
 - A table whose date label sits beside an endpoint, product, service,
   operation, or capability label is skipped as an endpoint table.
-- The announcement date comes from the nearest heading above the table, or the
-  nearest earlier higher-level heading if that one has no date. A table with
-  no dated heading above it stops the run.
+- The notice column is the one labelled exactly `Notice date` or
+  `Announcement date` (case-insensitive). Any other header label that mentions
+  a notice or an announcement, such as `Notice date (UTC)` or `Date announced`,
+  stops the run.
+- A table with a notice column takes each row's announcement date from that
+  row. A model row whose notice cell is empty, has no date, or has more than
+  one date stops the run. Every row must have as many cells as the header and
+  no `colspan` or `rowspan` cell, so a cell can't be read from the wrong
+  column.
+- A table without a notice column takes its announcement date from the nearest
+  heading above it, or the nearest earlier higher-level heading if that one has
+  no date. A table with neither stops the run.
+- A status column is any header label containing the word `status`. A table
+  with more than one, or with a status column but no notice column, stops the
+  run. The feed has no publisher status field, so a model row's status must
+  agree with its dates: `Deprecated` is accepted, and so is `Shut down` or
+  `Shutdown` when the row's shutdown date is on or before the refresh day.
+  Any other value stops the run. The refresh day is the UTC date of
+  `MODEL_EOL_GENERATED` when it is set, and of the current time otherwise.
 - Model IDs come from the `code` elements in the model cell, or from the cell
   text when there are none. A token with a `YYYY-MM-DD` date or a valid `-MMDD`
   suffix (optionally followed by `-preview`) is a snapshot and becomes the
   record ID. The other tokens become its aliases.
 - A cell with two or more snapshots plus an undated ID stops the run, because
-  the alias can't be assigned to one snapshot.
+  the alias can't be assigned to one snapshot. The exception is a cell whose
+  snapshots all end in `-YYYY-MM-DD` and whose undated ID is each of them
+  without the date: it is read as one `alias | snapshot` row per snapshot, and
+  the family alias rules below decide which entry keeps the alias.
 - A row is skipped only when every token is endpoint- or product-shaped
   (`/vN/...`, `Name API`, `OpenAI-Beta: name=vN`). Any other token that fails
   the ID grammar, or a real model ID beside an endpoint token, stops the run.
@@ -107,8 +127,12 @@ replacement column, each under a heading that carries its announcement date.
   records never set `date_precision`.
 - Replacement cells: `-`, `N/A`, and `none` give nothing. One code token becomes
   `replacement`, several become `replacement_options`, and leftover prose
-  becomes `replacement_note`. A single replacement stays `replacement` only if
-  it resolves to an ID or alias in the feed; otherwise it becomes a one-item
+  becomes `replacement_note`. A cell with no code elements is read as IDs only
+  when it is one ID, or a list split by `,`, `/`, `or`, or `and` whose parts are
+  all IDs containing a digit or hyphen (`gpt-5 or gpt-4.1`). Any other such
+  cell is all `replacement_note`, so prose such as "No one-to-one replacement"
+  never becomes an ID. A single replacement stays `replacement` only if it
+  resolves to an ID or alias in the feed; otherwise it becomes a one-item
   `replacement_options`.
 - Duplicate rows for one ID: identical dates merge aliases and replacements;
   different announcement dates keep the later announcement, unless the dropped

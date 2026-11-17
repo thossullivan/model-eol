@@ -523,6 +523,8 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
   return [...unique.values()]
 }
 
+const OPENAI_NOTICE_HEADER = /^(?:notice|announcement) date$/
+
 function openAIHeaderIndexes(rows) {
   for (const [index, row] of rows.entries()) {
     const labels = row.cells.map(cell => cell.text.toLowerCase())
@@ -530,7 +532,16 @@ function openAIHeaderIndexes(rows) {
     const model = labels.findIndex(label => /\b(model|system)\b/i.test(label) && !/replacement|substitute/i.test(label))
     const replacement = labels.findIndex(label => /recommended\s+replacement|replacement|substitute\s+model|successor/i.test(label))
     if (date >= 0 && endpointLikeLabels(labels)) return { rejectedReason: 'endpoint-or-product-deprecation-table' }
-    if (date >= 0 && model >= 0 && replacement >= 0) return { row: index, date, model, replacement }
+    if (date >= 0 && model >= 0 && replacement >= 0) {
+      const notice = labels.findIndex(label => OPENAI_NOTICE_HEADER.test(label.trim()))
+      const unrecognised = labels.find((label, column) => column !== notice && /notice|announc/i.test(label))
+      if (unrecognised !== undefined) throw new Error(`openai deprecations table has an unrecognised notice header: ${unrecognised.trim()}`)
+      const statuses = labels.flatMap((label, column) => /\bstatus\b/i.test(label) ? [column] : [])
+      if (statuses.length > 1) throw new Error('openai deprecations table has more than one status column')
+      const status = statuses[0] ?? -1
+      if (status >= 0 && notice < 0) throw new Error('openai deprecations table has a status column but no notice date column')
+      return { row: index, date, model, replacement, notice, status }
+    }
   }
   return undefined
 }
@@ -557,6 +568,30 @@ function openAIAnnouncementDate(headings, tableStart) {
   return heading?.date
 }
 
+function openAINoticeDate(cell, id) {
+  let dates
+  try {
+    dates = cell ? dateCandidates(cell.text) : []
+  } catch (error) {
+    throw new Error(`openai deprecations entry ${id} has no valid notice date: ${error.message}`)
+  }
+  if (dates.length !== 1) throw new Error(`openai deprecations entry ${id} has no valid notice date`)
+  return dates[0].date
+}
+
+function openAIAssertRowShape(row, header) {
+  const span = /<t[hd]\b[^>]*\b(?:col|row)span\b/i.test(row.html)
+  if (span || row.cells.length !== header.cells.length) {
+    const text = plainText(row.html).replace(/\s+/g, ' ').trim().slice(0, 200)
+    throw new Error(`openai deprecations table row "${text}" has ${span ? 'a spanning cell' : `${row.cells.length} cells`}, but its header has ${header.cells.length} columns`)
+  }
+}
+
+function openAIStatusAccepted(status, shutdown, today) {
+  if (/^deprecated$/i.test(status)) return true
+  return /^shut ?down$/i.test(status) && shutdown <= today
+}
+
 const OPENAI_MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 function openAIMonthDaySnapshot(token) {
@@ -574,6 +609,8 @@ function openAIModelIds(fragment) {
   const snapshots = candidates.filter(token => !candidates.some(snapshot => token === `${snapshot}-completions`))
   if (snapshots.length > 1) {
     const undated = tokens.filter(token => !snapshots.includes(token))
+    const family = undated.length === 1 && snapshots.every(snapshot => /-(?:19|20)\d{2}-\d{2}-\d{2}$/.test(snapshot) && snapshot.slice(0, -11) === undated[0])
+    if (family) return snapshots.map(id => ({ id, aliases: [undated[0]] }))
     const completionsOf = token => snapshots.find(snapshot => token === `${snapshot}-completions`)
     const ambiguous = undated.find(token => MODEL_ID_PATTERN.test(token) && !completionsOf(token))
     if (ambiguous) throw new Error(`openai deprecations row lists snapshots ${snapshots.join(', ')} with ambiguous alias ${ambiguous}`)
@@ -587,18 +624,31 @@ function openAIModelIds(fragment) {
   }]
 }
 
-const openAIReplacement = extractReplacementFields
+// Without code elements, IDs come only from a cell that is a plain list of IDs, never from prose.
+function openAIReplacement(fragment) {
+  const text = plainText(fragment).trim()
+  if (codeText(fragment).length) return extractReplacementFields(fragment)
+  if (!Object.keys(extractReplacementFields(fragment)).length) return {}
+  const parts = [...new Set(text.split(/\s*(?:[,/]|\bor\b|\band\b)\s*/i).filter(Boolean))]
+  if (parts.length && parts.every(part => /^[a-z0-9][a-z0-9._-]*$/.test(part) && /[\d-]/.test(part))) {
+    return parts.length === 1 ? { replacement: parts[0] } : { replacement_options: parts }
+  }
+  const note = replacementNote(text, [])
+  return note ? { replacement_note: note } : {}
+}
 
 const OPENAI_NON_MODEL_TOKEN = /^\/v\d+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*$|^[A-Z][A-Za-z-]*(?: [A-Z][A-Za-z-]*)* API$|^OpenAI-Beta: [a-z_]+=v\d+$/
 
-/** Parse the OpenAI docs page, whose announcement date is a section heading. */
-export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl) {
+/** Parse the OpenAI docs page, whose announcement date is a per-row notice date or a section heading. */
+export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl, { now = new Date() } = {}) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('openai deprecations page is empty')
   try {
     new URL(sourceUrl)
   } catch {
     throw new Error(`openai deprecations source is not a URL: ${sourceUrl}`)
   }
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new Error('openai deprecations refresh clock is not a valid date')
+  const today = now.toISOString().slice(0, 10)
 
   const content = stripOpenAIChrome(html)
   const headings = openAIHeadings(content)
@@ -617,10 +667,12 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     }
     recognisedTables++
 
-    const announced = openAIAnnouncementDate(headings, table.index)
-    if (!announced) throw new Error('openai deprecations table has no announcement date')
+    const tableAnnounced = headers.notice >= 0 ? undefined : openAIAnnouncementDate(headings, table.index)
+    if (headers.notice < 0 && !tableAnnounced) throw new Error('openai deprecations table has no announcement date')
+    if (headers.notice >= 0) openAIAssertRowShape(rows[headers.row], rows[headers.row])
 
     for (const row of rows.slice(headers.row + 1)) {
+      if (headers.notice >= 0) openAIAssertRowShape(row, rows[headers.row])
       const modelCell = row.cells[headers.model]
       if (!modelCell || !modelCell.text) continue
       const parsedModels = openAIModelIds(modelCell.html)
@@ -637,9 +689,16 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
         continue
       }
 
+      const announced = headers.notice >= 0 ? openAINoticeDate(row.cells[headers.notice], parsedModels[0].id) : tableAnnounced
       const shutdownCell = row.cells[headers.date]
       const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
       if (!shutdown) throw new Error(`openai deprecations entry ${parsedModels[0].id} has no valid shutdown date`)
+      if (headers.status >= 0) {
+        const status = row.cells[headers.status]?.text.trim() ?? ''
+        if (!openAIStatusAccepted(status, shutdown, today)) {
+          throw new Error(`openai deprecations entry ${parsedModels[0].id} has an unrecognised status for shutdown ${shutdown} on ${today}: ${status || '(empty)'}`)
+        }
+      }
       if (shutdown < announced) {
         throw new Error(`openai deprecations entry ${parsedModels[0].id} has shutdown before announcement`)
       }
@@ -2014,7 +2073,7 @@ export async function loadProviderSources(config, options = {}) {
 
   const mistral = config.publisher === 'mistral' ? parseMistralDeprecations(html, config.deprecationsUrl) : undefined
   const deprecations = config.publisher === 'openai'
-    ? parseOpenAIDeprecations(html, config.deprecationsUrl)
+    ? parseOpenAIDeprecations(html, config.deprecationsUrl, { now: options.now })
     : config.publisher === 'google'
       ? parseGoogleDeprecations(html, config.deprecationsUrl)
       : config.publisher === 'anthropic'
