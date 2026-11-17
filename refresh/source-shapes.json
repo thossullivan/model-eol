@@ -4,58 +4,58 @@
     "anthropic": {
       "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "tables": [
-        "api model name | current state | deprecated | tentative retirement date",
-        "parameter | status | behavior | recommended replacement",
-        "retirement date | deprecated model | recommended replacement"
+        "api model name | current state | deprecated | tentative retirement date [4 cols]",
+        "parameter | status | behavior | recommended replacement [4 cols]",
+        "retirement date | deprecated model | recommended replacement [3 cols]"
       ]
     },
     "aws-bedrock": {
       "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
       "tables": [
-        "model provider | model name | model id | regions | legacy date | eol date | public extended access start date"
+        "model provider | model name | model id | regions | legacy date | eol date | public extended access start date [7 cols]"
       ]
     },
     "azure-ai-foundry": {
       "url": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
       "tables": [
-        "model | version | lifecycle | retirement date | replacement",
-        "model | version | training retirement date | deployment retirement date"
+        "model | version | lifecycle | retirement date | replacement [5 cols]",
+        "model | version | training retirement date | deployment retirement date [4 cols]"
       ]
     },
     "cohere": {
       "url": "https://docs.cohere.com/docs/deprecations",
       "tables": [
-        "shutdown date | deprecated model | deprecated model price | recommended replacement"
+        "shutdown date | deprecated model | deprecated model price | recommended replacement [4 cols]"
       ]
     },
     "google": {
       "url": "https://aistudio.google.com/docs/deprecations.md",
       "tables": [
-        "agent | release date | shutdown date | recommended replacement",
-        "model | release date | shutdown date | recommended replacement"
+        "agent | release date | shutdown date | recommended replacement [4 cols]",
+        "model | release date | shutdown date | recommended replacement [4 cols]"
       ]
     },
     "mistral": {
       "url": "https://docs.mistral.ai/models",
       "tables": [
-        "(no header row, 5 columns)",
-        "model | version | api | deprecation retirement | alternative"
+        "(no header row) [5 cols]",
+        "model | version | api | deprecation retirement | alternative [5 cols]"
       ]
     },
     "openai": {
       "url": "https://developers.openai.com/api/docs/deprecations",
       "tables": [
-        "date | update",
-        "shutdown date | affected feature or endpoint | status | recommended replacement | notice date",
-        "shutdown date | affected model or feature | listed replacement | notice date",
-        "shutdown date | affected model | status | recommended replacement | notice date"
+        "date | update [2 cols]",
+        "shutdown date | affected feature or endpoint | status | recommended replacement | notice date [5 cols]",
+        "shutdown date | affected model or feature | listed replacement | notice date [4 cols]",
+        "shutdown date | affected model | status | recommended replacement | notice date [5 cols]"
       ]
     },
     "vertex-ai": {
       "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions",
       "tables": [
-        "model id | release date | retirement date | recommended upgrade",
-        "model id | release date | retirement date | replacement model id"
+        "model id | release date | retirement date | recommended upgrade [4 cols]",
+        "model id | release date | retirement date | replacement model id [4 cols]"
       ]
     }
   }

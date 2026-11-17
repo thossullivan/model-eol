@@ -43,25 +43,54 @@ const markdocTable = (headers, rows) => ['{% table %}', ...headers.map(label => 
 test('header text normalization folds case, whitespace, entities, and invisible characters', () => {
   strictAssert.equal(normalizeHeaderText('  Shutdown\u00a0\u200bDate\n'), 'shutdown date')
   strictAssert.equal(normalizeHeaderText('Retire\u00adment\u2014date'), 'retirement-date')
-  strictAssert.deepEqual(htmlTableShapes(htmlTable(['Shutdown&nbsp;<b>Date</b>', 'Affected&#x200B; Model<br>', '<code>Notice</code> date'])), ['shutdown date | affected model | notice date'])
+  strictAssert.deepEqual(htmlTableShapes(htmlTable(['Shutdown&nbsp;<b>Date</b>', 'Affected&#x200B; Model<br>', '<code>Notice</code> date'])), ['shutdown date | affected model | notice date [3 cols]'])
 })
 
-test('HTML header rows come from thead, then from leading all-th rows, and headerless tables record only a column count', () => {
+test('HTML header rows come from thead, then from leading all-th rows, and headerless tables record only their width', () => {
   const vertexStyle = '<table><tr><th>Model ID</th><th>Retirement date</th></tr><tr><td>x</td><td>y</td></tr></table>'
   const headerless = '<table><tr><td>Z.ai GLM</td><td>5.2</td><td colspan="2">9/29/2026</td></tr></table>'
   const rowHeaders = '<table><tr><th>Key</th><td>value</td></tr></table>'
-  strictAssert.deepEqual(htmlTableShapes(vertexStyle + headerless + rowHeaders), ['(no header row, 2 columns)', '(no header row, 4 columns)', 'model id | retirement date'])
+  strictAssert.deepEqual(htmlTableShapes(vertexStyle + headerless + rowHeaders), ['(no header row) [2 cols]', '(no header row) [4 cols]', 'model id | retirement date [2 cols]'])
 })
 
 test('HTML extraction ignores comments and scripts, reads nested tables separately, and rejects an unbalanced table', () => {
   const page = `<!-- ${htmlTable(['Hidden'])} --><script>const t = '${htmlTable(['Scripted'])}'</script><table><tr><th>Outer</th></tr><tr><td>${htmlTable(['Inner'])}</td></tr></table>`
-  strictAssert.deepEqual(htmlTableShapes(page), ['inner', 'outer'])
+  strictAssert.deepEqual(htmlTableShapes(page), ['inner [2 cols]', 'outer [1 cols]'])
   strictAssert.throws(() => htmlTableShapes(`${htmlTable(['Model'])}<table><tr><th>Open</th></tr>`), /unbalanced <table> tag/)
 })
 
 test('two dated sections sharing one HTML header shape give one fingerprint entry', () => {
   const page = ['2026-09-01', '2026-11-01'].map(date => `<h3>${date}: Retirement</h3>${htmlTable(['Shutdown Date', 'Deprecated Model'], [[date, `model-${date}`]])}`).join('')
-  strictAssert.deepEqual(htmlTableShapes(page), ['shutdown date | deprecated model'])
+  strictAssert.deepEqual(htmlTableShapes(page), ['shutdown date | deprecated model [2 cols]'])
+})
+
+test('the table width counts colspan over every row, so a wider body or a colspan change under one header changes the shape', () => {
+  const headers = ['Model', 'Date']
+  const known = htmlTable(headers, [['m', 'd']])
+  strictAssert.deepEqual(htmlTableShapes(known), ['model | date [2 cols]'])
+  strictAssert.deepEqual(htmlTableShapes(`<h3>2026-09-01</h3>${known}<h3>2026-11-01</h3>${htmlTable(headers, [['n', 'e'], ['o', 'f']])}`), ['model | date [2 cols]'])
+  strictAssert.deepEqual(htmlTableShapes(htmlTable(headers, [['m', 'd', 'note']])), ['model | date [3 cols]'])
+  const spanned = '<table><thead><tr><th colspan="2">Model</th><th>Date</th></tr></thead><tr><td>m</td><td>x</td><td>d</td></tr></table>'
+  strictAssert.deepEqual(htmlTableShapes(spanned), ['model | date [3 cols]'])
+  const markdown = rows => `## A\n${markdocTable(['Model', 'Date'], rows)}\n`
+  strictAssert.deepEqual(markdocTableShapes(markdown([['`m`', 'd']])), ['model | date [2 cols]'])
+  strictAssert.deepEqual(markdocTableShapes(`${markdown([['`m`', 'd']])}## B\n${markdocTable(['Model', 'Date'], [['`n`', 'e']])}\n`), ['model | date [2 cols]'])
+  strictAssert.deepEqual(markdocTableShapes(markdown([['`m`', 'd', 'extra']])), ['model | date [3 cols]'])
+})
+
+test('footnote markers in header cells are dropped, so adding or renumbering one does not change the shape', () => {
+  const shape = label => htmlTableShapes(htmlTable(['Model', label]))
+  strictAssert.deepEqual(shape('Retirement date<sup>1</sup>'), ['model | retirement date [2 cols]'])
+  strictAssert.deepEqual(shape('Retirement date<sup class="fn"><a href="#n2">2</a></sup>'), shape('Retirement date'))
+  strictAssert.deepEqual(markdocTableShapes(`## A\n${markdocTable(['Model', 'Shutdown date<sup>3</sup>'], [['`m`', 'd']])}\n`), ['model | shutdown date [2 cols]'])
+})
+
+test('custom elements whose names start with table or a cell tag are not read as tables', () => {
+  const page = `<table-wrapper class="scroll">${htmlTable(['Model', 'Date'])}</table-wrapper><table-of-contents><p>x</p></table-of-contents>`
+  strictAssert.deepEqual(htmlTableShapes(page), ['model | date [2 cols]'])
+  const custom = '<table><thead><tr><th>Model</th><th-sort>ignored</th-sort></tr></thead><tr-group></tr-group><tr><td>m</td></tr></table>'
+  strictAssert.deepEqual(htmlTableShapes(custom), ['model [1 cols]'])
+  strictAssert.throws(() => htmlTableShapes('<table-wrapper><table><tr><th>Open</th></tr></table-wrapper>'), /unbalanced <table> tag/)
 })
 
 test('Markdoc header rows are read with emphasis, links, and escapes removed, and model and agent tables stay distinct', () => {
@@ -78,8 +107,8 @@ test('Markdoc header rows are read with emphasis, links, and escapes removed, an
     '```',
   ].join('\n')
   strictAssert.deepEqual(markdocTableShapes(markdown), [
-    'agent | release date | shutdown date | recommended replacement',
-    'model | release date | shutdown date | recommended replacement',
+    'agent | release date | shutdown date | recommended replacement [4 cols]',
+    'model | release date | shutdown date | recommended replacement [4 cols]',
   ])
   strictAssert.throws(() => markdocTableShapes('## A\n{% table %}\n  * Model\n'), /not closed/)
   strictAssert.throws(() => markdocTableShapes('## A\n{% table id="x" %}\n'), /malformed table tag/)
@@ -139,7 +168,7 @@ test('a snapshot written from the sources makes --check exit 0', () => {
   strictAssert.equal(run(['--write', '--fixtures', fixtureDir, '--snapshot', snapshotFile]).code, 0)
   const written = readSnapshot(snapshotFile)
   strictAssert.deepEqual(Object.keys(written.sources), shapeSources().map(source => source.name).sort())
-  strictAssert.deepEqual(written.sources.cohere.tables, ['shutdown date | deprecated model | recommended replacement'])
+  strictAssert.deepEqual(written.sources.cohere.tables, ['shutdown date | deprecated model | recommended replacement [3 cols]'])
   const result = run(['--check', '--fixtures', fixtureDir, '--snapshot', snapshotFile])
   strictAssert.equal(result.code, 0, result.err)
   strictAssert.match(result.out, /All 8 source pages match/)
@@ -151,13 +180,13 @@ test('a new column makes --check exit 3 with a diff naming the source and both s
   strictAssert.equal(result.code, 3, result.err)
   strictAssert.ok(result.out.startsWith('# Source page structure diff\n'))
   strictAssert.ok(result.out.includes('## cohere\n\nSource: https://docs.cohere.com/docs/deprecations'))
-  strictAssert.ok(result.out.includes('Header shapes added:\n\n- `shutdown date | deprecated model | recommended replacement | notice date`'))
+  strictAssert.ok(result.out.includes('Header shapes added:\n\n- `shutdown date | deprecated model | recommended replacement | notice date [4 cols]`'))
   strictAssert.ok(!result.out.includes('Header shapes removed'))
   strictAssert.ok(!/## (?!cohere)/.test(result.out))
   writeFixtures({ 'cohere-deprecations.html': htmlTable([...cohereHeaders, 'Notice Date']) })
   const replaced = run(['--check', '--fixtures', fixtureDir, '--snapshot', snapshotFile])
   strictAssert.equal(replaced.code, 3)
-  strictAssert.ok(replaced.out.includes('Header shapes removed:\n\n- `shutdown date | deprecated model | recommended replacement`'))
+  strictAssert.ok(replaced.out.includes('Header shapes removed:\n\n- `shutdown date | deprecated model | recommended replacement [3 cols]`'))
 })
 
 test('failing sources make --check exit 1 and every failing source is named', () => {
@@ -193,7 +222,11 @@ test('the daily source-check workflow runs both refresh checks and the structure
   strictAssert.ok(/^name: source-check$/m.test(workflow) && !/^name: feed-refresh$/m.test(workflow) && workflow.includes('group: source-check'), 'own name and concurrency group')
   strictAssert.ok(workflow.includes('contents: read') && workflow.includes('issues: write') && !/contents: write|pull-requests: write/.test(workflow), 'read-only contents')
   strictAssert.ok(!/git (push|commit)|gh pr /.test(workflow) && workflow.includes('persist-credentials: false'), 'writes nothing to the repository')
-  strictAssert.ok(workflow.includes('node refresh/refresh.mjs --check >') && workflow.includes('node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check >'), 'both refresh checks')
+  strictAssert.ok(workflow.includes('check_once_more provider node refresh/refresh.mjs --check\n') && workflow.includes('check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check\n'), 'both refresh checks')
+  strictAssert.ok(workflow.match(/sleep 60/g)?.length === 2 && workflow.match(/node refresh\/shapes\.mjs --check > shapes-diff\.md 2> shapes-err\.txt/g)?.length === 2, 'an unhealthy check is retried once')
+  strictAssert.ok(/^    timeout-minutes: 30$/m.test(workflow) && !workflow.includes('always()') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 2, 'a cancelled run reports nothing')
+  strictAssert.ok(workflow.includes("case \"$1\" in 0|3) echo ok ;;") && workflow.includes("s/(HTTP [0-9]{3}).*/\\1/"), 'failure state ignores healthy exit-code flips and HTTP response bodies')
+  strictAssert.ok(workflow.includes('if [ "${REFRESH_HEALTHY:-}" != true ]; then') && workflow.includes('the weekly feed refresh is not affected'), 'a structure-check-only failure does not claim the weekly refresh will fail')
   strictAssert.ok(workflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && workflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]'), 'refresh exit 0 and 3 are healthy')
   strictAssert.ok(workflow.includes('node refresh/shapes.mjs --check >') && workflow.includes('case "$SHAPES" in 0|3)'), 'structure check, exit 3 is not a failure')
   for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'MISTRAL_API_KEY', 'COHERE_API_KEY']) strictAssert.ok(workflow.includes(`${key}: \${{ secrets.${key} }}`), key)

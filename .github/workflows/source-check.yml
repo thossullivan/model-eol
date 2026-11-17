@@ -20,7 +20,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -39,10 +39,25 @@ jobs:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
         run: |
+          # Runs one check, retrying once after a pause when it exits other than 0 or 3; the files keep the last attempt.
+          check_once_more() {
+            local name=$1 code
+            shift
+            "$@" > "$name-diff.md" 2> "$name-err.txt"
+            code=$?
+            if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then
+              echo "$name check exited $code; retrying once in 60 seconds. First attempt stderr:" >&2
+              cat "$name-err.txt" >&2 || true
+              sleep 60
+              "$@" > "$name-diff.md" 2> "$name-err.txt"
+              code=$?
+            fi
+            return "$code"
+          }
           set +e
-          node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
+          check_once_more provider node refresh/refresh.mjs --check
           providers=$?
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
+          check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check
           distributors=$?
           set -e
           echo "provider check exited $providers" >&2
@@ -60,11 +75,18 @@ jobs:
 
       - name: Check source page structure
         id: shapes
-        if: always()
+        if: success() || failure()
         run: |
           set +e
           node refresh/shapes.mjs --check > shapes-diff.md 2> shapes-err.txt
           shapes=$?
+          if [ "$shapes" -ne 0 ] && [ "$shapes" -ne 3 ]; then
+            echo "structure check exited $shapes; retrying once in 60 seconds. First attempt stderr:" >&2
+            cat shapes-err.txt >&2
+            sleep 60
+            node refresh/shapes.mjs --check > shapes-diff.md 2> shapes-err.txt
+            shapes=$?
+          fi
           set -e
           echo "structure check exited $shapes" >&2
           cat shapes-diff.md
@@ -72,7 +94,7 @@ jobs:
           echo "shapes=$shapes" >> "$GITHUB_OUTPUT"
 
       - name: Report results
-        if: always()
+        if: success() || failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -129,6 +151,15 @@ jobs:
             if [ -s "$1" ]; then printf '\n~~~~text\n'; tail -n 40 "$1"; printf '~~~~\n'; else printf '\n(no output)\n'; fi
           }
 
+          # Healthy exits collapse to ok so a 0/3 flip is not a new state.
+          outcome() {
+            case "$1" in 0|3) echo ok ;; '') echo 'not run' ;; *) echo fail ;; esac
+          }
+          # Drops the response body after an HTTP status and masks run-specific hex and date runs.
+          stable_errors() {
+            sed -E -e 's/(HTTP [0-9]{3}).*/\1/' -e 's/[0-9a-fA-F-]{8,}/#/g'
+          }
+
           SHAPES=${SHAPES:-}
           failed=false
           if [ "${REFRESH_HEALTHY:-}" != true ]; then failed=true; fi
@@ -136,12 +167,16 @@ jobs:
 
           if [ "$failed" = true ]; then
             {
-              printf 'refresh providers=%s distributors=%s shapes=%s\n' "${PROVIDERS:-not run}" "${DISTRIBUTORS:-not run}" "${SHAPES:-not run}"
+              printf 'refresh providers=%s distributors=%s shapes=%s\n' "$(outcome "${PROVIDERS:-}")" "$(outcome "${DISTRIBUTORS:-}")" "$(outcome "$SHAPES")"
               cat provider-err.txt distributor-err.txt shapes-err.txt 2>/dev/null |
-                grep -E '^(refresh failed|source shape check failed|- [a-z0-9-]+: )' | sed -E 's/[0-9a-fA-F-]{8,}/#/g' || true
+                grep -E '^(refresh failed|source shape check failed|- [a-z0-9-]+: )' | stable_errors || true
             } > failed-state.txt
             {
-              echo "The daily source check could not read every live source. The next weekly feed refresh will fail the same way unless the parser or workflow is repaired."
+              if [ "${REFRESH_HEALTHY:-}" != true ]; then
+                echo "The daily source check could not read every live source. The next weekly feed refresh will fail the same way unless the parser or workflow is repaired."
+              else
+                echo "The structure check could not read every source page. Both refresh checks read every source, so the weekly feed refresh is not affected. The structure check stderr below names each page it could not read."
+              fi
               echo
               echo "Run: $RUN_URL"
               echo "Commit: $RUN_SHA"

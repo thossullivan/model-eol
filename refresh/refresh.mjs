@@ -174,7 +174,8 @@ export function sourceFailureError(failures) {
   const lines = failures.map(({ source, error }) => `- ${source}: ${error?.message ?? error}`)
   const error = new Error(`refresh failed for ${failures.length} source${failures.length === 1 ? '' : 's'}:\n${lines.join('\n')}`)
   const codes = new Set(failures.map(failure => failure.error?.exitCode ?? 1))
-  error.exitCode = codes.size === 1 ? [...codes][0] : 1
+  const shared = codes.size === 1 ? [...codes][0] : 1
+  error.exitCode = shared === 0 || shared === 3 ? 1 : shared
   error.failures = failures
   return error
 }

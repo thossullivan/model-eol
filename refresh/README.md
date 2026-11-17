@@ -62,14 +62,18 @@ produced a misaligned row and assert that it is refused.
 A parser that finds columns by label can keep working while it ignores a new
 column or a new kind of table. `shapes.mjs` catches that. It reads each
 provider deprecations page and each distributor lifecycle page, and records
-every distinct table header in `source-shapes.json`. The Anthropic model pages,
-the Bedrock model cards, and the models endpoints aren't checked.
+every distinct table header in `source-shapes.json`. Anthropic's `llms.txt`
+and model pages, the Bedrock model-card index and cards, and the models
+endpoints aren't checked.
 
 - A header shape is the header cells of one table in column order, lowercased,
-  with whitespace collapsed and invisible characters removed. HTML tables use
-  their `thead` rows, or else their leading rows of `th` cells. A table with
-  neither is recorded as its column count only. Google's Markdoc tables use
-  their first row.
+  with whitespace collapsed, invisible characters removed, and `<sup>`
+  footnote markers dropped. HTML tables use their `thead` rows, or else their
+  leading rows of `th` cells. A table with neither is recorded as having no
+  header row. Google's Markdoc tables use their first row.
+- Each shape ends with the table's width, such as `[5 cols]`: the widest row,
+  header or body, with `colspan` counted. A wider body or a changed `colspan`
+  under an unchanged header changes the shape.
 - Each source keeps only distinct shapes, so a new dated section with a
   familiar table doesn't change the snapshot. Headings and dates aren't
   recorded.

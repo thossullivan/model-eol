@@ -21,7 +21,7 @@ const ROOT = path.join(path.dirname(THIS_FILE), '..')
 export const SNAPSHOT_FILE = path.join(ROOT, 'refresh', 'source-shapes.json')
 export const SNAPSHOT_VERSION = 1
 
-/** Every page the refresh parsers read tables from, except the per-model Bedrock cards and the models APIs. */
+/** Provider deprecations and distributor lifecycle pages; not Anthropic llms.txt or model pages, the Bedrock card index or cards, or models APIs. */
 export function shapeSources() {
   const providers = Object.entries(PROVIDERS).map(([name, config]) => {
     const url = config.deprecationsFetchUrl ?? config.deprecationsUrl
@@ -44,41 +44,42 @@ export function normalizeHeaderText(text) {
     .toLowerCase()
 }
 
-const signature = rows => rows.map(row => row.join(' | ')).join(' || ')
-const headerless = columns => `(no header row, ${columns} columns)`
+const signature = (rows, columns) => `${rows.map(row => row.join(' | ')).join(' || ')} [${columns} cols]`
+const stripSup = html => html.replace(/<sup(?=[\s>/])[^>]*>[\s\S]*?<\/sup\s*>/gi, ' ')
+const rowWidth = row => row.reduce((sum, cell) => sum + cell.columns, 0)
 
 function htmlCells(rowHtml) {
-  return [...rowHtml.matchAll(/<(th|td)\b([^>]*)>([\s\S]*?)<\/\1\s*>/gi)].map(cell => ({
+  return [...rowHtml.matchAll(/<(th|td)(?=[\s>/])([^>]*)>([\s\S]*?)<\/\1\s*>/gi)].map(cell => ({
     kind: cell[1].toLowerCase(),
     columns: Math.max(1, Number(cell[2].match(/\bcolspan\s*=\s*["']?(\d+)/i)?.[1] ?? 1)),
-    text: normalizeHeaderText(plainText(cell[3])),
+    text: normalizeHeaderText(plainText(stripSup(cell[3]))),
   }))
 }
 
 function htmlRows(fragment) {
-  const rows = [...fragment.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi)].map(row => htmlCells(row[1]))
-  if (!rows.length && /<t[hd]\b/i.test(fragment)) rows.push(htmlCells(fragment))
+  const rows = [...fragment.matchAll(/<tr(?=[\s>/])[^>]*>([\s\S]*?)<\/tr\s*>/gi)].map(row => htmlCells(row[1]))
+  if (!rows.length && /<t[hd](?=[\s>/])/i.test(fragment)) rows.push(htmlCells(fragment))
   return rows.filter(row => row.length)
 }
 
 function htmlTableShape(body) {
-  const thead = body.match(/<thead\b[^>]*>([\s\S]*?)<\/thead\s*>/i)
+  const thead = body.match(/<thead(?=[\s>/])[^>]*>([\s\S]*?)<\/thead\s*>/i)
   let header = thead ? htmlRows(thead[1]) : []
   const rows = htmlRows(thead ? body.replace(thead[0], '') : body)
   if (!header.length) {
     const count = rows.findIndex(row => row.some(cell => cell.kind !== 'th'))
     header = rows.slice(0, count < 0 ? 1 : count)
   }
-  if (header.length) return signature(header.map(row => row.map(cell => cell.text)))
-  const first = rows[0]
-  return first ? headerless(first.reduce((sum, cell) => sum + cell.columns, 0)) : '(empty table)'
+  const columns = Math.max(0, ...[...header, ...rows].map(rowWidth))
+  if (header.length) return signature(header.map(row => row.map(cell => cell.text)), columns)
+  return rows.length ? `(no header row) [${columns} cols]` : '(empty table)'
 }
 
 /** Distinct header signatures of every HTML table, innermost tables first so a nested table never hides its parent. */
 export function htmlTableShapes(html) {
-  let text = stripComments(String(html)).replace(/<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+  let text = stripComments(String(html)).replace(/<(script|style|template)(?=[\s>/])[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
   const shapes = new Set()
-  const innermost = /<table\b[^>]*>((?:(?!<table\b)[\s\S])*?)<\/table\s*>/gi
+  const innermost = /<table(?=[\s>/])[^>]*>((?:(?!<table(?=[\s>/]))[\s\S])*?)<\/table\s*>/gi
   for (let found = true; found;) {
     found = false
     text = text.replace(innermost, (_, body) => {
@@ -87,11 +88,11 @@ export function htmlTableShapes(html) {
       return ' '
     })
   }
-  if (/<\/?table\b/i.test(text)) throw new Error('page has an unbalanced <table> tag')
+  if (/<\/?table(?=[\s>/])/i.test(text)) throw new Error('page has an unbalanced <table> tag')
   return [...shapes].sort()
 }
 
-const markdocHeaderText = cell => normalizeHeaderText(googleInlineText(cell.replace(/\[([^\]]*)\]\([^()\s]*\)/g, '$1')))
+const markdocHeaderText = cell => normalizeHeaderText(googleInlineText(stripSup(cell).replace(/\[([^\]]*)\]\([^()\s]*\)/g, '$1')))
 
 /** Distinct header-row signatures of every Markdoc {% table %} block. */
 export function markdocTableShapes(markdown) {
@@ -103,8 +104,8 @@ export function markdocTableShapes(markdown) {
     const tag = /\{%\s*\/?\s*table\b/.test(trimmed)
     if (table) {
       if (trimmed === '{% /table %}') {
-        const [header = []] = googleMarkdocRows(table, where)
-        shapes.add(signature([header.map(markdocHeaderText)]))
+        const rows = googleMarkdocRows(table, where)
+        shapes.add(signature([rows[0].map(markdocHeaderText)], Math.max(...rows.map(row => row.length))))
         table = undefined
       } else if (tag) {
         throw new Error(`table ${where} has a nested or malformed table tag: ${trimmed}`)

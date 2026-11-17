@@ -3553,6 +3553,9 @@ const exitCoded = (message, exitCode) => Object.assign(new Error(message), { exi
 const sameCodeError = sourceFailureError([{ source: 'openai', error: exitCoded('first', 2) }, { source: 'google', error: exitCoded('second', 2) }])
 assert(sameCodeError.message === 'refresh failed for 2 sources:\n- openai: first\n- google: second' && sameCodeError.exitCode === 2, 'source failures that share an exit code keep it')
 assert(sourceFailureError([{ source: 'openai', error: exitCoded('first', 2) }, { source: 'google', error: new Error('second') }]).exitCode === 1, 'source failures with mixed exit codes exit 1')
+for (const code of [0, 3]) {
+  assert(sourceFailureError([{ source: 'openai', error: exitCoded('first', code) }, { source: 'google', error: exitCoded('second', code) }]).exitCode === 1, `source failures that share exit code ${code} exit 1, never a healthy --check code`)
+}
 
 const corruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-corrupt-'))
 for (const file of ['openai-models.json', 'anthropic-models.json', 'openai-deprecations.html']) {

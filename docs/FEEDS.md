@@ -58,8 +58,9 @@ with the committed ones.
 [`source-check.yml`](../.github/workflows/source-check.yml) runs every day at
 04:47 UTC, so a broken parser shows up within a day instead of at the next
 Monday refresh. It runs the same two `--check` commands as the weekly refresh
-and then `node refresh/shapes.mjs --check`. It writes nothing to the
-repository.
+and then `node refresh/shapes.mjs --check`. A check that fails is retried
+once after a minute, and the second result counts. It writes nothing to the
+repository, and a cancelled run reports nothing.
 
 - **A check can't read a source:** the run fails and opens or updates the
   "Source check failed" issue. The next run in which every check reads every
