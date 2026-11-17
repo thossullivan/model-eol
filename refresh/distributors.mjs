@@ -272,7 +272,7 @@ const BEDROCK_REQUIRED_ROW_FIELDS = [['legacy', 'Legacy date'], ['eol', 'EOL dat
 const BEDROCK_STATUS_LABEL = /^(?:(?:model|lifecycle)\s+)*status$/i
 const BEDROCK_LABEL_TEXT = new RegExp(`(?:^|[^a-z])(${[...BEDROCK_LIFECYCLE_FIELDS.keys()].map(label => label.replace(/ /g, '\\s+')).join('|')})\\s*:`, 'i')
 // Bold, underscore, and HTML emphasis all read as the same label, so emphasis markers and tags are dropped.
-const bedrockLooseText = text => markdownText(text.replace(MARKDOWN_INLINE_TAG, ' ')).replace(/[*_`~\\]/g, '')
+const bedrockLooseText = text => markdownText(text.split(MARKDOWN_INLINE_TAG).join(' ')).replace(/[*_`~\\]/g, '')
 
 // A regional line holds several "**Label:** value" segments separated by " / ".
 function bedrockLabelledSegments(content, line) {
@@ -500,7 +500,7 @@ const BEDROCK_CARD_NO_EOL = /^(?:N\/A|Not announced\.?)$/
 const BEDROCK_CARD_ORDINAL_DAY = new RegExp(`^(\\d{1,2})(?:st|nd|rd|th)? (${BEDROCK_CARD_MONTH}) ((?:19|20)\\d{2})$`, 'i')
 
 // Inline HTML tags are transparent to field text, as they are on the HTML page.
-const bedrockCardText = text => markdownText(text.replace(MARKDOWN_INLINE_TAG, ' '))
+const bedrockCardText = text => markdownText(text.split(MARKDOWN_INLINE_TAG).join(' '))
 
 function bedrockCardFields(lines, pageText) {
   const fields = new Map()
@@ -535,7 +535,7 @@ const MARKDOWN_IMAGE = /!\[[^\]]*\]\([^()\s]*(?:\s+"[^"]*")?\)/g
 function bedrockLifecycleCell(cell) {
   const words = text => text.split(/\s+/).filter(token => token && !(isBedrockModelId(token) && /^[a-z0-9_-]{2,}\./i.test(token)) && !/^https?:\/\//i.test(token)).join(' ')
   const visible = bedrockCardText(cell.replace(MARKDOWN_IMAGE, ' '))
-  const texts = [visible, markdownText(cell), markdownText(cell.replace(/<br\s*\/?>/gi, ' ').replace(MARKDOWN_INLINE_TAG, ''))]
+  const texts = [visible, markdownText(cell), markdownText(cell.replace(/<br\s*\/?>/gi, ' ').split(MARKDOWN_INLINE_TAG).join(''))]
   return { visible, lifecycle: texts.some(text => BEDROCK_LIFECYCLE_WORD.test(words(text))) }
 }
 
