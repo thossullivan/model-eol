@@ -167,9 +167,12 @@ current IDs and a lifecycle cross-check.
 - With `ANTHROPIC_API_KEY`, the refresh lists
   `https://api.anthropic.com/v1/models` with `lifecycle[]=active`,
   `lifecycle[]=deprecated`, `lifecycle[]=retired` (the array encoding the
-  official SDKs send) and `limit=1000`, following `after_id` for up to 20
+  official SDKs send; the API rejects a plain `lifecycle=` with "the parameter
+  name is `lifecycle[]`") and `limit=1000`, following `after_id` for up to 20
   pages. Active and deprecated IDs are the current IDs, the same set the list
-  returns without a `lifecycle` filter; retired IDs are only compared.
+  returns without a `lifecycle` filter; retired IDs are only compared. On
+  2026-11-17 the API listed no retired models for the project's key, so in
+  practice the cross-check covers active and deprecated models only.
 - Every listed model must carry `lifecycle` (`active`, `deprecated`, or
   `retired`), `deprecated_at`, and `retires_at`, each date an RFC 3339
   date-time with a `Z` or numeric offset, or null. An active model must have
