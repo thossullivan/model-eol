@@ -8,7 +8,9 @@
 # populate. AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID sign in to
 # Azure through OIDC on main for the Azure models API cross-check; a failed
 # login or a failed cross-check is a warning, because the cross-check never
-# changes feed data, and other refs skip the cross-check with a notice.
+# changes feed data, and other refs skip the cross-check with a notice. A failed
+# models endpoint listing, Anthropic's included, fails the run; only a bad
+# Anthropic lifecycle field is a warning.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
 # fine-grained PAT as MODEL_EOL_BOT_TOKEN if feed PRs should run checks.
 # Failures open or update one durable issue; the next successful check closes it.

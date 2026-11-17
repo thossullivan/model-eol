@@ -67,7 +67,7 @@ import {
   stripComments,
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
-import { SOURCE_FETCH_DEADLINE_MS, credentialHeaderNames, fetchBoundedBody } from '../fetch.mjs'
+import { MAX_REDIRECTS, SOURCE_FETCH_DEADLINE_MS, credentialHeaderNames, fetchBoundedBody } from '../fetch.mjs'
 import { parseRefreshArgs, sourceFailureError, usage, validateGeneratedFeeds } from '../refresh.mjs'
 import { validateFeed } from '../../lib/validate-feed.mjs'
 import { lifecycleFor } from '../../lib/feeds.mjs'
@@ -1133,14 +1133,6 @@ const anthropicApiPaged = await anthropicApiLoad({
 }, { requests: anthropicApiPagedRequests })
 const pagedModelsUrls = anthropicApiPagedRequests.filter(request => request.url.hostname === 'api.anthropic.com').map(request => request.url)
 assert(pagedModelsUrls.length === 2 && pagedModelsUrls[1].searchParams.get('after_id') === 'claude-fable-5-1' && pagedModelsUrls.every(url => url.searchParams.getAll('lifecycle[]').join() === 'active,deprecated,retired') && anthropicApiPaged.currentIds.join() === 'claude-fable-5-1' && JSON.stringify(anthropicApiPaged.sourceConflicts.map(providerSourceConflictSummary)) === JSON.stringify(['anthropic models API claude-opus-4-6: active on the deprecations page but not returned by the API; page kept']), 'Anthropic models API pages through every lifecycle stage and compares the retired model on page two')
-let anthropicApiDuplicateReason = ''
-try {
-  await anthropicApiLoad({
-    '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
-    'claude-fable-5-1': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
-  }, { env: { MODEL_EOL_CROSS_CHECKS: 'strict' } })
-} catch (error) { anthropicApiDuplicateReason = error.message }
-assert(anthropicApiDuplicateReason.includes('duplicate model id across pages: claude-fable-5-1'), 'Anthropic models API pagination stops on a model repeated across pages')
 assert(anthropicModelsListUrl(`${PROVIDERS.anthropic.modelsUrl}?lifecycle=active&limit=5&after_id=x`) === 'https://api.anthropic.com/v1/models?lifecycle%5B%5D=active&lifecycle%5B%5D=deprecated&lifecycle%5B%5D=retired&limit=1000', 'Anthropic models list URL replaces any lifecycle, limit, or cursor with all three stages and the maximum page size')
 
 reviewTest('Anthropic models API: a page model in Active or Deprecated state that the API omits is reported, and a retired one is not', () => {
@@ -1166,42 +1158,74 @@ reviewTest('Anthropic models API: an active model with a tentative retires_at is
   strictAssert.deepEqual(compareAnthropicLifecycle(status('November 30, 2027'), lateOffset).conflicts, [])
   strictAssert.deepEqual(compareAnthropicLifecycle(status('November 29, 2027'), lateOffset).conflicts.map(providerSourceConflictSummary), ['anthropic models API claude-x: retires_at 2027-11-29T20:00:00-08:00 on the API, retirement 2027-11-29 (tentative) on the deprecations page; page kept'])
 })
-for (const [label, pages] of [
-  ['an unknown lifecycle value', { '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) }],
-  ['a malformed response', { '': '{"data": "nope"}' }],
-  ['an HTTP error', () => new Response('upstream rejected key fixture-key', { status: 503 })],
+const anthropicApiBare = id => ({ type: 'model', id, display_name: id, created_at: '2025-01-01T00:00:00Z' })
+for (const [label, pages, ids, message] of [
+  ['an unknown lifecycle value', { '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) }, ['claude-x'], 'anthropic models response entry claude-x has an unrecognised lifecycle: "sunset"'],
+  ['lifecycle fields missing from every entry', { '': anthropicApiPage([anthropicApiBare('claude-fable-5-1'), anthropicApiBare('claude-brand-new')]) }, ['claude-fable-5-1', 'claude-brand-new'], 'anthropic models response entry claude-fable-5-1 has no lifecycle field (and 1 more entry)'],
+  ['an unparseable date beside a valid retired row', { '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active'), anthropicApiRow('claude-x', 'deprecated', 'June 5, 2026'), anthropicApiRow('claude-3-haiku-20240307', 'retired', '2026-02-19T00:00:00Z', '2026-04-20T00:00:00Z')]) }, ['claude-fable-5-1', 'claude-x'], 'anthropic models response entry claude-x has an unparseable deprecated_at: "June 5, 2026"'],
 ]) {
   const notices = []
   const sources = await anthropicApiLoad(pages, { notices })
-  reviewTest(`Anthropic models API: ${label} is a reported cross-check failure that keeps the page and treats the endpoint as unavailable`, () => {
+  reviewTest(`Anthropic models API: ${label} is a reported cross-check failure that keeps the listed ids and skips only the lifecycle comparison`, () => {
     const [conflict] = sources.sourceConflicts
     strictAssert.equal(sources.sourceConflicts.length, 1)
     strictAssert.deepEqual(Object.keys(conflict).sort(), ['message', 'publisher', 'reason', 'via'])
-    strictAssert.deepEqual([conflict.via, conflict.publisher, conflict.reason], ['models-api', 'anthropic', 'cross-check-failed'])
-    strictAssert.ok(!conflict.message.includes('fixture-key'), conflict.message)
-    strictAssert.ok(notices.includes(`warning: anthropic models API cross-check failed: ${conflict.message}`), notices.join('\n'))
+    strictAssert.deepEqual([conflict.via, conflict.publisher, conflict.reason, conflict.message], ['models-api', 'anthropic', 'cross-check-failed', message])
+    strictAssert.ok(notices.includes(`warning: anthropic models API cross-check failed: ${message}`), notices.join('\n'))
+    strictAssert.ok(!notices.some(line => line.startsWith('notice: anthropic models API lifecycle:')), notices.join('\n'))
     strictAssert.deepEqual(sources.deprecations, anthropicEntries)
-    strictAssert.equal(sources.currentIds, null)
-    strictAssert.equal(sources.endpointAvailable, false)
+    strictAssert.deepEqual(sources.currentIds, ids)
+    strictAssert.equal(sources.endpointAvailable, true)
     const line = `- ${providerSourceConflictSummary(conflict)}`
     strictAssert.ok(line.startsWith('- anthropic models API cross-check failed: ') && line.endsWith('; the deprecations page was used without it'), line)
     const committed = { ...anthropicFeed, models: [{ id: 'claude-opus-4-6' }] }
     strictAssert.ok(renderSemanticDiff(committed, committed, { sourceConflicts: sources.sourceConflicts }).includes(`## Source conflicts\n\n${line}\n`))
     strictAssert.ok(!compareFeeds(committed, committed, { sourceConflicts: sources.sourceConflicts }).changed)
+    const merged = mergeFeed({ ...anthropicFeed, models: [] }, { ...sources, provider: PROVIDERS.anthropic, notice: () => {} }).feed
+    for (const id of ids) strictAssert.ok(merged.models.some(model => model.id === id || model.aliases?.includes(id)), `${id} reaches the merged feed`)
   })
 }
-let strictMalformedReason = ''
-try { await anthropicApiLoad({ '': '{"data": "nope"}' }, { env: { MODEL_EOL_CROSS_CHECKS: 'strict' } }) } catch (error) { strictMalformedReason = error.message }
+const anthropicListingFailures = [
+  ['an HTTP error', () => new Response('upstream rejected key fixture-key', { status: 503 }), /anthropic fetch failed for .*: HTTP 503/],
+  ['a network error', () => { throw new TypeError('fetch failed', { cause: new Error('getaddrinfo ENOTFOUND api.anthropic.com') }) }, /anthropic fetch failed for .*ENOTFOUND/],
+  ['a non-JSON body', { '': '<html>maintenance</html>' }, /anthropic models response is not valid JSON/],
+  ['a missing data array', { '': JSON.stringify({ has_more: false, last_id: null }) }, /anthropic models response has no data array/],
+  ['a data value that is not an array', { '': '{"data": "nope"}' }, /anthropic models response has no data array/],
+  ['a missing has_more', { '': anthropicApiPage(anthropicApiAgreeing, { has_more: undefined }) }, /boolean has_more/],
+  ['has_more without a last_id', { '': anthropicApiPage([], { has_more: true, last_id: null }) }, /has_more is true without a last_id/],
+  ['an id that fails the id check', { '': anthropicApiPage([anthropicApiRow('claude x fixture-key', 'active')]) }, /invalid model id: claude x \[redacted\]$/],
+  ['an id repeated within a page', { '': anthropicApiPage([anthropicApiRow('claude-x', 'active'), anthropicApiRow('claude-x', 'active')]) }, /duplicate model id claude-x/],
+  ['an id repeated across pages', { '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }), 'claude-fable-5-1': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')]) }, /duplicate model id across pages: claude-fable-5-1/],
+]
+for (const [label, pages, pattern] of anthropicListingFailures) {
+  const reasons = []
+  for (const policy of [undefined, '', 'warn', 'strict']) {
+    try {
+      await anthropicApiLoad(pages, { env: policy === undefined ? {} : { MODEL_EOL_CROSS_CHECKS: policy } })
+      reasons.push(`no error under ${policy}`)
+    } catch (error) { reasons.push(error.message) }
+  }
+  reviewTest(`Anthropic models API: ${label} in the models listing stops the run under every MODEL_EOL_CROSS_CHECKS policy`, () => {
+    for (const reason of reasons) {
+      strictAssert.match(reason, pattern)
+      strictAssert.ok(!reason.includes('fixture-key'), reason)
+    }
+  })
+}
+let strictLifecycleReason = ''
+try { await anthropicApiLoad({ '': anthropicApiPage([anthropicApiRow('claude-x', 'deprecated', 'June 5, 2026')]) }, { env: { MODEL_EOL_CROSS_CHECKS: 'strict' } }) } catch (error) { strictLifecycleReason = error.message }
 const unknownPolicyReasons = []
 for (const value of ['Strict', 'stirct']) {
   try { await anthropicApiLoad({ '': anthropicApiPage(anthropicApiAgreeing) }, { env: { MODEL_EOL_CROSS_CHECKS: value } }) } catch (error) { unknownPolicyReasons.push(error.message) }
 }
-const warnPolicySources = await anthropicApiLoad({ '': '{"data": "nope"}' }, { env: { MODEL_EOL_CROSS_CHECKS: 'warn' } })
-const emptyPolicySources = await anthropicApiLoad({ '': '{"data": "nope"}' }, { env: { MODEL_EOL_CROSS_CHECKS: '' } })
-reviewTest('Anthropic models API: MODEL_EOL_CROSS_CHECKS=strict turns a cross-check failure back into a failed run, warn or empty keeps it a warning, and any other value is refused', () => {
-  strictAssert.match(strictMalformedReason, /anthropic models response/)
+const sunsetPage = { '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) }
+const warnPolicySources = await anthropicApiLoad(sunsetPage, { env: { MODEL_EOL_CROSS_CHECKS: 'warn' } })
+const emptyPolicySources = await anthropicApiLoad(sunsetPage, { env: { MODEL_EOL_CROSS_CHECKS: '' } })
+reviewTest('Anthropic models API: MODEL_EOL_CROSS_CHECKS=strict turns a lifecycle cross-check failure back into a failed run, warn or empty keeps it a warning, and any other value is refused', () => {
+  strictAssert.equal(strictLifecycleReason, 'anthropic models response entry claude-x has an unparseable deprecated_at: "June 5, 2026"')
   strictAssert.deepEqual(unknownPolicyReasons, ['MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not "Strict"', 'MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not "stirct"'])
   strictAssert.deepEqual([warnPolicySources, emptyPolicySources].map(sources => sources.sourceConflicts.map(conflict => conflict.reason)), [['cross-check-failed'], ['cross-check-failed']])
+  strictAssert.deepEqual([warnPolicySources, emptyPolicySources].map(sources => sources.currentIds), [['claude-x'], ['claude-x']])
 })
 const anthropicBadModelsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-anthropic-bad-models-'))
 try {
@@ -1212,12 +1236,16 @@ try {
   const lenient = await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicBadModelsDir, env: {}, notice: message => notices.push(message) })
   let strictReason = ''
   try { await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicBadModelsDir, env: { MODEL_EOL_CROSS_CHECKS: 'strict' }, notice: () => {} }) } catch (error) { strictReason = error.message }
-  reviewTest('Anthropic models API: a bad fixture models response follows the same cross-check policy as a live one', () => {
+  fs.writeFileSync(path.join(anthropicBadModelsDir, 'anthropic-models.json'), '{"data": "nope"}')
+  let listingReason = ''
+  try { await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicBadModelsDir, env: {}, notice: () => {} }) } catch (error) { listingReason = error.message }
+  reviewTest('Anthropic models API: a bad fixture models response follows the same listing and cross-check policy as a live one', () => {
     strictAssert.deepEqual(lenient.sourceConflicts.map(conflict => [conflict.reason, conflict.message]), [['cross-check-failed', 'anthropic models response entry claude-x has an unrecognised lifecycle: "sunset"']])
     strictAssert.ok(notices.includes('warning: anthropic models API cross-check failed: anthropic models response entry claude-x has an unrecognised lifecycle: "sunset"'))
-    strictAssert.equal(lenient.endpointAvailable, false)
-    strictAssert.equal(lenient.currentIds, null)
+    strictAssert.equal(lenient.endpointAvailable, true)
+    strictAssert.deepEqual(lenient.currentIds, ['claude-x'])
     strictAssert.match(strictReason, /unrecognised lifecycle: "sunset"/)
+    strictAssert.match(listingReason, /anthropic models response has no data array/)
   })
 } finally {
   fs.rmSync(anthropicBadModelsDir, { recursive: true, force: true })
@@ -3221,7 +3249,7 @@ for (const publisher of Object.keys(boundedPublishers)) {
   assert(requests.every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en'), `${publisher} models and deprecations requests carry an abort deadline and request English`)
   assert(models.every(({ options }) => options.headers[credential]?.includes('fixture-key')) && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => !Object.hasOwn(options.headers, credential)), `${publisher} bounded fetch sends ${credential} only to the models endpoint`)
 
-  assert(models.every(({ options }) => options.redirect === 'error') && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => options.redirect === 'follow'), `${publisher} credentialed models requests refuse redirects while uncredentialed pages follow them`)
+  assert(models.every(({ options }) => options.redirect === 'error') && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => options.redirect === 'manual'), `${publisher} credentialed models requests refuse redirects while uncredentialed pages follow them hop by hop`)
 }
 const oversizedBody = () => new Response(Buffer.alloc(MAX_DISTRIBUTOR_BODY_BYTES + 1, 0x20))
 const oversizedHeader = () => new Response('{}', { headers: { 'content-length': String(MAX_DISTRIBUTOR_BODY_BYTES + 1) } })
@@ -3268,7 +3296,7 @@ for (const page of ['deprecations', 'models']) {
 }
 const vertexRequests = []
 await loadDistributorSource('vertex-ai', { fetchImpl: async (url, options) => { vertexRequests.push(options); return new Response(fs.readFileSync(path.join(fixtures, 'vertex-model-versions.md'), 'utf8')) }, notice: () => {} })
-assert(vertexRequests.length === 1 && vertexRequests[0].redirect === 'follow', 'uncredentialed distributor pages still follow redirects')
+assert(vertexRequests.length === 1 && vertexRequests[0].redirect === 'manual', 'uncredentialed distributor pages still follow redirects, hop by hop')
 let redirectReason = ''
 try {
   await loadBounded('google', async url => {
@@ -3289,7 +3317,7 @@ for (const headers of [{}, { Accept: 'text/markdown' }, { 'anthropic-version': '
   await fetchBoundedBody('https://docs.example.test/page.md', 'example', async (url, options) => { redirectModes.push(options.redirect); return new Response('body') }, { headers })
 }
 await fetchBoundedBody('https://docs.example.test/page.md', 'example', async (url, options) => { redirectModes.push(options.redirect); return new Response('body') }, { headers: { 'X-Tenant': 'acme' }, secretHeaders: ['x-tenant'] })
-assert(JSON.stringify(redirectModes) === JSON.stringify(['follow', 'follow', 'follow', 'error', 'error', 'error', 'error', 'error', 'error']), 'only credential headers, including ones the caller marks secret, make a fetch refuse redirects')
+assert(JSON.stringify(redirectModes) === JSON.stringify(['manual', 'manual', 'manual', 'error', 'error', 'error', 'error', 'error', 'error']), 'only credential headers, including ones the caller marks secret, make a fetch refuse redirects')
 assert(JSON.stringify(credentialHeaderNames({ Accept: 'text/markdown', 'anthropic-version': '2023-06-01', 'x-api-key': 'k', Authorization: 'a', 'X-Tenant': 't' }, ['X-TENANT'])) === JSON.stringify(['x-api-key', 'Authorization', 'X-Tenant']), 'credentialHeaderNames separates credential headers from ordinary ones')
 let ordinaryHeaderReason = ''
 try {
@@ -3306,6 +3334,70 @@ assert(downgradeReason === 'example fetch failed for https://docs.example.test/p
 const httpsLanding = await fetchBoundedBody('https://docs.example.test/page.md', 'example', async () => Object.defineProperty(new Response('moved body'), 'url', { value: 'https://docs.example.test/moved.md' }), { headers: { Accept: 'text/markdown' } })
 const plainHttp = await fetchBoundedBody('http://127.0.0.1:1/feed.json', '--feeds-url', async () => Object.defineProperty(new Response('local body'), 'url', { value: 'http://127.0.0.1:1/feed.json' }))
 assert(httpsLanding === 'moved body' && plainHttp === 'local body', 'an https redirect target and a caller-chosen http URL still load')
+const redirectChain = (hops, final = () => new Response('final body')) => {
+  const requests = []
+  const fetchImpl = async (url, options) => {
+    requests.push({ url, options })
+    const location = hops[requests.length - 1]
+    return location === undefined ? final() : new Response('redirect body', { status: 302, headers: location === null ? {} : { location } })
+  }
+  return { requests, fetchImpl }
+}
+const redirectOutcome = async (start, chain, options) => fetchBoundedBody(start, 'example', chain.fetchImpl, options).then(body => ({ body }), error => ({ error: error.message }))
+const httpHop = redirectChain(['http://docs.example.test/insecure', 'https://docs.example.test/final.md'])
+const httpHopOutcome = await redirectOutcome('https://docs.example.test/page.md', httpHop)
+const relativeHops = redirectChain(['/moved/', 'next.md', '../final.md'])
+const relativeOutcome = await redirectOutcome('https://docs.example.test/a/page.md', relativeHops)
+const fiveHops = redirectChain(Array.from({ length: 5 }, (_, index) => `https://docs.example.test/hop-${index + 1}`))
+const fiveHopsOutcome = await redirectOutcome('https://docs.example.test/page.md', fiveHops)
+const sixHops = redirectChain(Array.from({ length: 6 }, (_, index) => `https://docs.example.test/hop-${index + 1}`))
+const sixHopsOutcome = await redirectOutcome('https://docs.example.test/page.md', sixHops)
+const noLocation = redirectChain([null])
+const noLocationOutcome = await redirectOutcome('https://docs.example.test/page.md', noLocation)
+const upgradeHops = redirectChain(['https://127.0.0.1:1/feed.json'])
+const upgradeOutcome = await redirectOutcome('http://127.0.0.1:1/feed.json', upgradeHops)
+const oversizedFinal = redirectChain(['https://docs.example.test/big.md'], () => new Response(Buffer.alloc(MAX_DISTRIBUTOR_BODY_BYTES + 1, 0x20)))
+const oversizedFinalOutcome = await redirectOutcome('https://docs.example.test/page.md', oversizedFinal)
+const credentialRedirect = redirectChain(['https://docs.example.test/final.md'])
+const credentialOutcome = await redirectOutcome('https://docs.example.test/page.md', credentialRedirect, { headers: { Authorization: 'Bearer secret-token-value' } })
+reviewTest('fetchBoundedBody follows redirects hop by hop: an http hop anywhere in the chain is refused before it is requested', () => {
+  strictAssert.deepEqual(httpHopOutcome, { error: 'example fetch failed for https://docs.example.test/page.md: redirected to a http: URL' })
+  strictAssert.deepEqual(httpHop.requests.map(request => request.url), ['https://docs.example.test/page.md'])
+  strictAssert.deepEqual(upgradeOutcome, { body: 'final body' })
+  strictAssert.deepEqual(upgradeHops.requests.map(request => request.url), ['http://127.0.0.1:1/feed.json', 'https://127.0.0.1:1/feed.json'])
+})
+reviewTest('fetchBoundedBody resolves a relative Location against the hop that sent it, and keeps the headers, deadline signal, and manual mode on every hop', () => {
+  strictAssert.deepEqual(relativeOutcome, { body: 'final body' })
+  strictAssert.deepEqual(relativeHops.requests.map(request => request.url), ['https://docs.example.test/a/page.md', 'https://docs.example.test/moved/', 'https://docs.example.test/moved/next.md', 'https://docs.example.test/final.md'])
+  const [first, ...rest] = relativeHops.requests.map(request => request.options)
+  strictAssert.ok(first.signal instanceof AbortSignal)
+  for (const options of rest) strictAssert.ok(options.signal === first.signal && options.redirect === 'manual' && options.headers['accept-language'] === 'en')
+})
+reviewTest(`fetchBoundedBody follows at most ${MAX_REDIRECTS} redirects, refuses a redirect without a Location, and bounds the final body`, () => {
+  strictAssert.equal(MAX_REDIRECTS, 5)
+  strictAssert.deepEqual([fiveHopsOutcome, fiveHops.requests.length], [{ body: 'final body' }, 6])
+  strictAssert.deepEqual([sixHopsOutcome, sixHops.requests.length], [{ error: 'example fetch failed for https://docs.example.test/page.md: more than 5 redirects' }, 6])
+  strictAssert.deepEqual(noLocationOutcome, { error: 'example fetch failed for https://docs.example.test/page.md: HTTP 302 redirect without a Location header' })
+  strictAssert.match(oversizedFinalOutcome.error, /response exceeds \d+ bytes$/)
+})
+reviewTest('fetchBoundedBody never follows a redirect for a request with a credential header', () => {
+  strictAssert.deepEqual(credentialRedirect.requests.map(request => [request.url, request.options.redirect]), [['https://docs.example.test/page.md', 'error']])
+  strictAssert.match(credentialOutcome.error, /: HTTP 302 - redirect body$/)
+})
+{
+  const deadlines = []
+  let reason = ''
+  const signals = []
+  globalThis.setTimeout = (callback, ms, ...args) => { deadlines.push(ms); return realSetTimeout(callback, ms === SOURCE_FETCH_DEADLINE_MS ? 0 : ms, ...args) }
+  try {
+    await fetchBoundedBody('https://docs.example.test/page.md', 'example', async (url, options) => {
+      signals.push(options.signal)
+      if (signals.length === 1) return new Response('', { status: 301, headers: { location: '/stalled.md' } })
+      return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+    })
+  } catch (error) { reason = error.message } finally { globalThis.setTimeout = realSetTimeout }
+  assert(deadlines.filter(ms => ms === SOURCE_FETCH_DEADLINE_MS).length === 1 && signals.length === 2 && signals[0] === signals[1] && reason.endsWith(`exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline`), 'one fetch deadline covers every redirect hop')
+}
 let bomModels = null
 try {
   bomModels = await loadBounded('openai', async url => isModelsUrl('openai', url)
@@ -3698,6 +3790,21 @@ assert(vertexCheck.out.includes('no publisher feed'), 'Vertex --check reports un
 const azureCheck = spawnSync(process.execPath, [refresh, '--distributor', 'azure-ai-foundry', '--check', '--fixtures', fixtures], { encoding: 'utf8' })
 assert([0, 3].includes(azureCheck.status) && azureCheck.stdout.includes('## Source conflicts'), 'Azure CLI check renders source conflicts through distributor wiring')
 assert(azureCheck.stderr.split('\n').filter(line => line.startsWith('notice:') && line.includes('earliest retirement wins')).length === 2, 'Azure CLI prints both source conflicts on stderr')
+const crossCheckPolicyRuns = [
+  [['--distributor', 'aws-bedrock,vertex-ai'], 'Strict'],
+  [['--distributor', 'vertex-ai'], 'stirct'],
+  [['--provider', 'openai'], 'STRICT'],
+  [['--distributor', 'aws-bedrock,vertex-ai'], 'strict'],
+].map(([args, policy]) => [policy, spawnSync(process.execPath, [refresh, ...args, '--check', '--fixtures', fixtures], { encoding: 'utf8', env: { ...process.env, MODEL_EOL_CROSS_CHECKS: policy } })])
+reviewTest('refresh refuses an unknown MODEL_EOL_CROSS_CHECKS value before any source is read, whichever sources the run selects', () => {
+  for (const [policy, result] of crossCheckPolicyRuns.slice(0, 3)) {
+    strictAssert.equal(result.status, 1, `${policy}: ${result.stderr}`)
+    strictAssert.equal(result.stdout, '')
+    strictAssert.equal(result.stderr, `refresh failed: MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not ${JSON.stringify(policy)}\n`)
+  }
+  const [, accepted] = crossCheckPolicyRuns[3]
+  strictAssert.ok([0, 3].includes(accepted.status), accepted.stderr)
+})
 const allDistributorsCheck = run(['--distributor', 'aws-bedrock,vertex-ai,azure-ai-foundry', '--check', '--fixtures', fixtures])
 assert([0, 3].includes(allDistributorsCheck.code) && allDistributorsCheck.out.includes('## Source conflicts'), 'refresh composes Azure with Bedrock and Vertex offline')
 

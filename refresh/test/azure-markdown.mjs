@@ -180,7 +180,7 @@ await test('the refresh asks for Markdown, follows redirects only to https, and 
   strictAssert.equal(requests.length, 1)
   strictAssert.equal(requests[0].url, AZURE_MODEL_RETIREMENT_SCHEDULE_URL)
   strictAssert.equal(requests[0].init.headers.Accept, 'text/markdown')
-  strictAssert.equal(requests[0].init.redirect, 'follow')
+  strictAssert.equal(requests[0].init.redirect, 'manual')
   const downgraded = async () => Object.defineProperty(new Response(markdownFixture), 'url', { value: 'http://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule' })
   const refused = await loadDistributorSource('azure-ai-foundry', { fetchImpl: downgraded, now, env: {}, notice: () => {} }).then(() => '', error => error.message)
   strictAssert.match(refused, /azure-ai-foundry fetch failed for .*: redirected to a http: URL/)

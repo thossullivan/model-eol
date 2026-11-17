@@ -10,6 +10,7 @@ import {
   reconcileAzureModelsApi,
   redactAzureModelsApiMessage,
 } from './azure-models-api.mjs'
+import { strictCrossChecks } from './cross-checks.mjs'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
 import {
   headingHtml,
@@ -1548,14 +1549,6 @@ async function loadBedrockCards(config, options) {
   return { records, skipped }
 }
 
-/** MODEL_EOL_CROSS_CHECKS=strict makes a failed cross-check fail the run; unset, empty, or warn reports it and goes on. */
-export function crossChecksStrict(env = process.env) {
-  const value = env.MODEL_EOL_CROSS_CHECKS ?? ''
-  if (value === 'strict') return true
-  if (value === '' || value === 'warn') return false
-  throw new Error(`MODEL_EOL_CROSS_CHECKS must be strict, warn, or unset, not ${JSON.stringify(value)}`)
-}
-
 export async function loadDistributorSource(distributor = 'aws-bedrock', options = {}) {
   const config = DISTRIBUTORS[distributor]
   if (!config) throw new Error(`unknown distributor ${distributor}`)
@@ -1579,7 +1572,7 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
   let apiSummary
   if (distributor === 'azure-ai-foundry') {
     const env = options.env ?? process.env
-    const strict = crossChecksStrict(env)
+    const strict = strictCrossChecks(env)
     let credentials
     try {
       credentials = options.fixtures ? undefined : azureModelsApiCredentials(env)

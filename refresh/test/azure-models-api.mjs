@@ -13,7 +13,8 @@ import {
   reconcileAzureModelsApi,
   redactAzureModelsApiMessage,
 } from '../azure-models-api.mjs'
-import { AZURE_MODEL_RETIREMENT_SCHEDULE_URL, crossChecksStrict, loadDistributorSource, parseAzureModelRetirementScheduleMarkdown, sourceConflictSummary } from '../distributors.mjs'
+import { AZURE_MODEL_RETIREMENT_SCHEDULE_URL, loadDistributorSource, parseAzureModelRetirementScheduleMarkdown, sourceConflictSummary } from '../distributors.mjs'
+import { strictCrossChecks } from '../cross-checks.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
 import { providerSourceConflictSummary } from '../providers.mjs'
 
@@ -376,11 +377,11 @@ await test('a broken cross-check warns and keeps the page by default, fails unde
     const broken = await load({ fetchImpl: fakeFetch({ markdown: '<!doctype html><html></html>', api: { eastus: apiPages } }).fetchImpl, env: { ...env, ...cross } })
     strictAssert.match(broken.error.message, /azure-ai-foundry lifecycle source is HTML, not Markdown/)
   }
-  strictAssert.equal(crossChecksStrict({}), false)
-  strictAssert.equal(crossChecksStrict({ MODEL_EOL_CROSS_CHECKS: '' }), false)
-  strictAssert.equal(crossChecksStrict({ MODEL_EOL_CROSS_CHECKS: 'warn' }), false)
-  strictAssert.equal(crossChecksStrict(strict), true)
-  for (const typo of ['Strict', 'stirct', '1']) strictAssert.throws(() => crossChecksStrict({ MODEL_EOL_CROSS_CHECKS: typo }), /MODEL_EOL_CROSS_CHECKS must be strict, warn, or unset/)
+  strictAssert.equal(strictCrossChecks({}), false)
+  strictAssert.equal(strictCrossChecks({ MODEL_EOL_CROSS_CHECKS: '' }), false)
+  strictAssert.equal(strictCrossChecks({ MODEL_EOL_CROSS_CHECKS: 'warn' }), false)
+  strictAssert.equal(strictCrossChecks(strict), true)
+  for (const typo of ['Strict', 'stirct', '1']) strictAssert.throws(() => strictCrossChecks({ MODEL_EOL_CROSS_CHECKS: typo }), /MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not /)
   const typo = await load({ fetchImpl: fakeFetch({ markdown }).fetchImpl, env: { ...env, MODEL_EOL_CROSS_CHECKS: 'stirct' } })
   strictAssert.match(typo.error.message, /MODEL_EOL_CROSS_CHECKS must be/)
 })

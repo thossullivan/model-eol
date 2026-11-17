@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { strictCrossChecks } from './cross-checks.mjs'
 import { fetchBoundedBody } from './fetch.mjs'
 import {
   MARKDOWN_ATX_HEADING,
@@ -2157,34 +2158,61 @@ function anthropicApiDate(value, id, field) {
   return { date: new Date(time).toISOString().slice(0, 10), raw: value }
 }
 
-/** Parse one page of the models API with lifecycle fields; any undocumented lifecycle shape stops the run. */
-export function parseAnthropicModelsLifecyclePage(body) {
+function anthropicModelLifecycle(row, id) {
+  for (const field of ['lifecycle', 'deprecated_at', 'retires_at']) {
+    if (!Object.hasOwn(row, field)) throw new Error(`anthropic models response entry ${id} has no ${field} field`)
+  }
+  if (!ANTHROPIC_LIFECYCLES.includes(row.lifecycle)) {
+    throw new Error(`anthropic models response entry ${id} has an unrecognised lifecycle: ${JSON.stringify(row.lifecycle)}`)
+  }
+  const deprecated = anthropicApiDate(row.deprecated_at, id, 'deprecated_at')
+  const retires = anthropicApiDate(row.retires_at, id, 'retires_at')
+  if (row.lifecycle === 'active' && deprecated) {
+    throw new Error(`anthropic models response entry ${id} is active but has deprecated_at ${row.deprecated_at}`)
+  }
+  if (row.lifecycle !== 'active' && !deprecated) throw new Error(`anthropic models response entry ${id} is ${row.lifecycle} without deprecated_at`)
+  if (deprecated && retires && retires.date < deprecated.date) {
+    throw new Error(`anthropic models response entry ${id} retires before it was deprecated: ${row.retires_at} < ${row.deprecated_at}`)
+  }
+  return { id, lifecycle: row.lifecycle, deprecated, retires }
+}
+
+/** Parse one page of the models API. A listing fault throws; a row whose lifecycle fields fail keeps its id and carries the error. */
+export function parseAnthropicModelsPage(body) {
   const page = parseModelsPage(body, 'anthropic')
   const parsed = typeof body === 'string' ? JSON.parse(body) : body
   if (Array.isArray(parsed) || typeof parsed.has_more !== 'boolean') {
     throw new Error('anthropic models response must be an object with a data array and a boolean has_more')
   }
-  const models = parsed.data.map((row, index) => {
+  const rows = parsed.data.map((row, index) => {
     const id = page.ids[index]
     if (!MODEL_ID_PATTERN.test(id)) throw new Error(`anthropic models response contains an invalid model id: ${id}`)
-    for (const field of ['lifecycle', 'deprecated_at', 'retires_at']) {
-      if (!Object.hasOwn(row, field)) throw new Error(`anthropic models response entry ${id} has no ${field} field`)
+    try {
+      return anthropicModelLifecycle(row, id)
+    } catch (error) {
+      return { id, lifecycle: row.lifecycle, error: error.message }
     }
-    if (!ANTHROPIC_LIFECYCLES.includes(row.lifecycle)) {
-      throw new Error(`anthropic models response entry ${id} has an unrecognised lifecycle: ${JSON.stringify(row.lifecycle)}`)
-    }
-    const deprecated = anthropicApiDate(row.deprecated_at, id, 'deprecated_at')
-    const retires = anthropicApiDate(row.retires_at, id, 'retires_at')
-    if (row.lifecycle === 'active' && deprecated) {
-      throw new Error(`anthropic models response entry ${id} is active but has deprecated_at ${row.deprecated_at}`)
-    }
-    if (row.lifecycle !== 'active' && !deprecated) throw new Error(`anthropic models response entry ${id} is ${row.lifecycle} without deprecated_at`)
-    if (deprecated && retires && retires.date < deprecated.date) {
-      throw new Error(`anthropic models response entry ${id} retires before it was deprecated: ${row.retires_at} < ${row.deprecated_at}`)
-    }
-    return { id, lifecycle: row.lifecycle, deprecated, retires }
   })
-  return { ...page, models }
+  return { ...page, rows }
+}
+
+/** Parse one page of the models API with lifecycle fields; any undocumented lifecycle shape throws. */
+export function parseAnthropicModelsLifecyclePage(body) {
+  const { rows, ...page } = parseAnthropicModelsPage(body)
+  const failed = rows.find(row => row.error)
+  if (failed) throw new Error(failed.error)
+  return { ...page, models: rows }
+}
+
+/** Every listed id except an explicitly retired one feeds the merge; the lifecycle rows feed only the cross-check and drop out when any row fails. */
+export function anthropicModelsResult(rows) {
+  const failed = rows.filter(row => row.error)
+  const more = failed.length > 1 ? ` (and ${failed.length - 1} more ${failed.length === 2 ? 'entry' : 'entries'})` : ''
+  return {
+    currentIds: rows.filter(row => row.lifecycle !== 'retired').map(row => row.id),
+    models: failed.length ? undefined : rows,
+    lifecycleFailure: failed.length ? `${failed[0].error}${more}` : undefined,
+  }
 }
 
 /** The models API list URL that asks for every lifecycle stage, as the official SDKs encode the array. */
@@ -2203,8 +2231,8 @@ async function fetchAnthropicModels(config, headers, fetchImpl) {
   let url = firstPage
   let cursor
   for (let page = 1; page <= MAX_MODEL_PAGES; page++) {
-    const parsed = parseAnthropicModelsLifecyclePage(await fetchBody(url, headers, config.publisher, fetchImpl))
-    for (const model of parsed.models) {
+    const parsed = parseAnthropicModelsPage(await fetchBody(url, headers, config.publisher, fetchImpl))
+    for (const model of parsed.rows) {
       if (seen.has(model.id)) throw new Error(`anthropic models response contains duplicate model id across pages: ${model.id}`)
       seen.add(model.id)
       models.push(model)
@@ -2599,13 +2627,6 @@ function fetchBody(url, headers, provider, fetchImpl = globalThis.fetch) {
   return fetchBoundedBody(url, provider, fetchImpl, { headers })
 }
 
-/** True when MODEL_EOL_CROSS_CHECKS asks a failed cross-check source to fail the run. */
-export function strictCrossChecks(env = process.env) {
-  const value = env.MODEL_EOL_CROSS_CHECKS ?? ''
-  if (!['', 'warn', 'strict'].includes(value)) throw new Error(`MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not ${JSON.stringify(value)}`)
-  return value === 'strict'
-}
-
 /** Load and parse both source classes for one provider. */
 export async function loadProviderSources(config, options = {}) {
   const { fixtures, env = process.env, fetchImpl = globalThis.fetch, notice = console.error } = options
@@ -2616,18 +2637,20 @@ export async function loadProviderSources(config, options = {}) {
   let currentModels = []
   let deprecatedIds = []
   let anthropicLifecycle
+  const useAnthropicModels = (rows, redact = message => message) => {
+    const result = anthropicModelsResult(rows)
+    currentIds = result.currentIds
+    anthropicLifecycle = result.models
+    if (result.lifecycleFailure === undefined) return
+    if (strict) throw new Error(redact(result.lifecycleFailure))
+    crossCheckFailure = redact(result.lifecycleFailure)
+  }
 
   if (fixtures) {
     const modelFixture = findFixture(fixtures, config.publisher, 'models')
     const modelBody = fs.readFileSync(modelFixture, 'utf8')
     if (config.publisher === 'anthropic') {
-      try {
-        anthropicLifecycle = parseAnthropicModelsLifecyclePage(modelBody).models
-        currentIds = anthropicLifecycle.filter(model => model.lifecycle !== 'retired').map(model => model.id)
-      } catch (error) {
-        if (strict) throw error
-        crossCheckFailure = error.message
-      }
+      useAnthropicModels(parseAnthropicModelsPage(modelBody).rows)
     } else if (config.publisher === 'mistral') {
       const parsed = parseMistralModelsResponse(modelBody)
       currentIds = parsed.ids
@@ -2641,7 +2664,7 @@ export async function loadProviderSources(config, options = {}) {
         ? parseGoogleModelsResponse(modelBody)
         : parseModelsResponse(modelBody, config.publisher)
     }
-    endpointAvailable = !crossCheckFailure
+    endpointAvailable = true
     notice(`notice: ${config.publisher} models endpoint fixture: ${path.relative(process.cwd(), modelFixture)}`)
   } else {
     const keyEnvs = config.keyEnvs ?? [config.keyEnv]
@@ -2666,17 +2689,18 @@ export async function loadProviderSources(config, options = {}) {
         currentIds = parsed.ids
         deprecatedIds = parsed.deprecatedIds
       } else if (config.publisher === 'anthropic') {
+        const redact = message => message.split(key).join('[redacted]')
+        let rows
         try {
-          anthropicLifecycle = await fetchAnthropicModels(config, headers, fetchImpl)
-          currentIds = anthropicLifecycle.filter(model => model.lifecycle !== 'retired').map(model => model.id)
+          rows = await fetchAnthropicModels(config, headers, fetchImpl)
         } catch (error) {
-          if (strict) throw error
-          crossCheckFailure = error.message.split(key).join('[redacted]')
+          throw new Error(redact(error.message))
         }
+        useAnthropicModels(rows, redact)
       } else {
         currentIds = await fetchPaginatedModels(config, headers, fetchImpl)
       }
-      endpointAvailable = !crossCheckFailure
+      endpointAvailable = true
     }
   }
 

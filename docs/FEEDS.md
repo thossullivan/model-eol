@@ -74,21 +74,28 @@ the federated credential trusts only that environment, so no other workflow on
 the environment, skips the login and the models API with a notice, and still
 checks the pages.
 
-The models APIs (Azure's and Anthropic's) only cross-check the pages and never
-change feed data, so the two workflows treat a broken cross-check differently:
+Two checks only compare the pages with an API and never change feed data: the
+Azure models API cross-check and the lifecycle fields (`lifecycle`,
+`deprecated_at`, `retires_at`) of the Anthropic models API. The two workflows
+treat a broken cross-check differently:
 
 - The weekly refresh leaves `MODEL_EOL_CROSS_CHECKS` unset. A failed Azure
   login on `main` prints a warning and the refresh runs without the Azure
-  cross-check. A cross-check that fails (an HTTP error, a response it can't
-  read, or half-configured credentials) prints
-  `warning: ... cross-check failed: ...`, adds a line under "Source conflicts"
-  in the refresh PR, and the feeds are still regenerated from the pages.
+  cross-check. A cross-check that fails (for Azure an HTTP error, a response it
+  can't read, or half-configured credentials; for Anthropic a missing or
+  unrecognised lifecycle field) prints `warning: ... cross-check failed: ...`,
+  adds a line under "Source conflicts" in the refresh PR, and the feeds are
+  still regenerated from the pages.
 - The daily source check sets `MODEL_EOL_CROSS_CHECKS=strict` for both refresh
   checks. A failed login on `main` or a failed cross-check fails the check, and
   it is reported through the "Source check failed" issue like any unreadable
   source.
 
-A page that can't be read fails both workflows, whatever the setting.
+The Anthropic models API also supplies the current model IDs, which add new
+models to the feed and clear stale dates, like the OpenAI, Google, Mistral, and
+Cohere models endpoints. A failure to list those IDs (an HTTP or network
+error, a body that isn't the documented list, an invalid or repeated ID) fails
+both workflows, whatever the setting, and so does a page that can't be read.
 
 ## The daily source check
 
@@ -159,7 +166,8 @@ health. Each feed is at
 The CLI uses the feeds bundled in its npm package, or a local directory passed
 with `--feeds DIR`. The bot can download hosted feeds instead, with
 `model-eol-bot --feeds-url URL[,URL...]`. Each download has a 30-second
-deadline over the request and body and an 8 MiB body limit. A download that
+deadline over the request and body and an 8 MiB body limit, and follows at
+most 5 redirects, each to an `https` URL. A download that
 exceeds either, or returns a feed that fails validation, has failed. A failed
 download stops the bot unless `feeds.allow_vendored_fallback` is set (see
 [CONFIGURATION.md](CONFIGURATION.md#keys)).

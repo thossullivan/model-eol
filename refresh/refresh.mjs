@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseCliArgs } from '../lib/cli.mjs'
+import { strictCrossChecks } from './cross-checks.mjs'
 import { compareFeeds, renderSemanticDiff } from './diff.mjs'
 import {
   DISTRIBUTORS,
@@ -182,6 +183,7 @@ export function sourceFailureError(failures) {
 }
 
 export async function run(options) {
+  strictCrossChecks(process.env)
   const generated = []
   const generatedTimestamp = process.env.MODEL_EOL_GENERATED
   const refreshClock = generatedTimestamp ? new Date(generatedTimestamp) : new Date()

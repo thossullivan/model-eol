@@ -10,6 +10,7 @@ the weekly workflow uses this code, see [docs/FEEDS.md](../docs/FEEDS.md).
 | `providers.mjs` | Publisher parsers: OpenAI, Anthropic, Google, Mistral, Cohere. |
 | `distributors.mjs` | Distributor parsers: Bedrock, Vertex AI, Azure AI Foundry. |
 | `azure-models-api.mjs` | The Azure models API reader and its comparison with the Azure retirement page. |
+| `cross-checks.mjs` | Reads `MODEL_EOL_CROSS_CHECKS`, the policy for a failed cross-check, for the Anthropic and Azure models API readers and for `refresh.mjs`, which refuses an unknown value before reading any source. |
 | `markdown.mjs` | Strict reader for GitHub-flavored Markdown pipe tables, with an HTML rendering for the HTML row readers, and the line preparation and block checks the Markdown converters share. |
 | `fetch.mjs` | Bounded HTTP fetches (30-second deadline, 8 MiB limit) for Anthropic model pages and distributor pages. It re-exports `lib/fetch-bounded.mjs`, which the bot's `--feeds-url` download also uses. |
 | `diff.mjs` | The semantic diff used for `--check` and for refresh PR bodies. |
@@ -56,8 +57,11 @@ headers are `Authorization`, `Proxy-Authorization`, `Cookie`, `x-api-key`,
 session, cookie, password, signature, or credential, and any name the caller
 lists in `secretHeaders`. Other headers, such as the Azure page's `Accept:
 text/markdown` or `anthropic-version`, don't stop a fetch from following
-redirects, but a followed redirect from `https` to another scheme stops the
-run. Error messages include at most 300 characters of the error body on one
+redirects. Such a fetch follows them one hop at a time, at most 5, resolving a
+relative `Location` against the hop that sent it, and stops the run on any hop
+to a URL that isn't `https`, so an `https` to `http` to `https` chain is
+refused before the `http` request. The deadline covers every hop, and only the
+final body is read. Error messages include at most 300 characters of the error body on one
 line, with credential header values (and each word of them, such as a bearer
 token without its scheme) redacted. Paged models
 endpoints stop the run if they still have more pages after 20; Mistral's is
@@ -228,7 +232,7 @@ current IDs and a lifecycle cross-check.
   date-time with a `Z` or numeric offset, or null. An active model must have a
   null `deprecated_at` and may have a tentative `retires_at`, a deprecated or
   retired model must have `deprecated_at`, and `retires_at` can't precede it.
-  Anything else is a cross-check failure.
+  Anything else is a lifecycle cross-check failure (see below).
 - The page stays authoritative. The API's lifecycle is compared with the
   page's stated state, `deprecated_at` (as a UTC calendar date) with the
   page's deprecated date, and `retires_at` (as a UTC calendar date) with the
@@ -245,15 +249,22 @@ current IDs and a lifecycle cross-check.
   run then prints `notice: anthropic models API lifecycle: N active, N
   deprecated, N retired; N conflicts with the deprecations page`. Without the
   key, none of this runs.
-- The models API can't change feed data, so its failure (an HTTP error, a
-  response shape or value the rules above refuse) doesn't fail the run. The
-  run prints `warning: anthropic models API cross-check failed: <message>`,
-  adds a `cross-check-failed` line to `Source conflicts`, and continues as if
-  the key were unset: the page is used and the committed entries are kept.
-  `MODEL_EOL_CROSS_CHECKS=strict` makes such a failure stop the run instead;
-  `warn` or an empty value keeps the default, and any other value stops the
-  run as a configuration error. A failure of the deprecations page itself
-  always stops the run.
+- The listed IDs change feed data, so a failure to list them always stops
+  the run: an HTTP or network error, a body that isn't JSON, a missing `data`
+  array or boolean `has_more`, `has_more` without a `last_id`, an ID that
+  fails the ID check, or an ID repeated within a page or across pages. The key
+  is redacted from the message.
+- The lifecycle fields only feed the comparison, so a lifecycle rule above
+  that fails on any entry doesn't fail the run by default. Every listed ID
+  except an entry whose `lifecycle` is `retired` stays a current ID, the
+  comparison is skipped, and the run prints
+  `warning: anthropic models API cross-check failed: <message>` (the first
+  failing entry, and how many more failed) and adds a `cross-check-failed`
+  line to `Source conflicts`. `MODEL_EOL_CROSS_CHECKS=strict` makes such a
+  failure stop the run instead; `warn` or an empty value keeps the default,
+  and any other value stops every refresh run as a configuration error before
+  any source is read. A failure of the deprecations page itself always stops
+  the run.
 - Offline runs read `test/fixture/anthropic-deprecations.md`,
   `test/fixture/anthropic-models.json` (with the lifecycle fields),
   `test/fixture/anthropic-llms.txt`, and
