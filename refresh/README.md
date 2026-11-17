@@ -351,6 +351,20 @@ only with `--distributor vertex-ai`.
   OpenAI and Anthropic rows with two different retirement dates, the earlier
   date is kept and listed under "Source conflicts". Conflicting Mistral or
   Cohere rows stop the run.
+- A retirement date may carry one `<sup>N</sup>` footnote marker. The footnote
+  must be a `<p><sup>N</sup>` paragraph after the same table and before the
+  next heading or table. Commented-out footnotes don't count. A footnote may
+  say which offers the date covers, and its own paragraph must state the cell's
+  date. Any other date in the footnote, or in notes before the first footnote
+  or after the last one, must be earlier than the cell's date and already past on the refresh day
+  (offers that have already retired). The run stops on a later date, an earlier
+  date that isn't past yet, a year outside a recognised date ("Q3 2027",
+  "05/01/2027"), a missing or repeated footnote, any other text after the
+  cell's date, and wording anywhere in the notes after the table that makes a
+  date approximate ("no earlier than", "or later", "planned", "TBD", "until
+  further notice").
+- Footnote markers in the version and lifecycle columns stop the run, and so do
+  model-column markers in publisher sections.
 - Fine-tuning tables and other unrelated tables are skipped. Header drift in a
   lifecycle table stops the run.
 - Azure's status labels are mapped to `distributions[].status` as described in

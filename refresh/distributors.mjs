@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
 
-import { assertIsoDate, dateFromText, MODEL_ID_PATTERN, rowLifecycleLabel, sectionProse, stripComments } from './providers.mjs'
+import { assertIsoDate, dateCandidates, dateFromText, MODEL_ID_PATTERN, rowLifecycleLabel, sectionProse, stripComments } from './providers.mjs'
 
 export { MAX_SOURCE_BODY_BYTES as MAX_DISTRIBUTOR_BODY_BYTES } from './fetch.mjs'
 
@@ -659,7 +659,138 @@ function azureIsoDate(value, label) {
   }
 }
 
-export function parseAzureModelRetirementScheduleHtml(html) {
+const AZURE_MONTH = String.raw`(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?`
+const AZURE_FOOTNOTE_PRECISION_PATTERN = new RegExp([
+  String.raw`\b(?:no|not)\s+(?:earlier|sooner|later)\s+than\b`,
+  String.raw`\bearliest\b`,
+  String.raw`\b(?:or|and)\s+(?:later|after|earlier|sooner|before|thereafter)\b`,
+  String.raw`\bnot\s+before\b`,
+  String.raw`\bafter\s+(?:(?:19|20)\d{2}\b|${AZURE_MONTH}\s+\d{1,2}\b)`,
+  String.raw`\bat\s+least\b`,
+  String.raw`\bat\s+a\s+later\s+date\b`,
+  String.raw`\buntil\s+further\s+notice\b`,
+  String.raw`\bsubject\s+to\s+change\b`,
+  String.raw`\b(?:may|might|could|can|will)\s+(?:be\s+)?(?:shift(?:ed)?|slip|change[ds]?|extended|updated|revised|postponed|delayed|moved)\b`,
+  String.raw`\bbegin(?:s|ning)?\b`,
+  String.raw`\bstarting\b`,
+  String.raw`\broll(?:s|ing)?\s+out\b`,
+  String.raw`\bphased\b`,
+  String.raw`\btentative`,
+  String.raw`\bapproximate`,
+  String.raw`\bestimate[ds]?\b`,
+  String.raw`\bexpected\s+to\b`,
+  String.raw`\b(?:will|to)\s+be\s+(?:announced|determined|confirmed|communicated|decided)\b`,
+  String.raw`\btb[acd]\b`,
+  String.raw`\bplanned\b`,
+  String.raw`\btarget(?:s|ed|ing)?\b`,
+  String.raw`\bretires?\s+(?:earlier|sooner|later)\b`,
+].join('|'), 'i')
+const AZURE_FORMAT_CHARACTERS = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+const AZURE_BLOCK_TAG = /<\/?(?:p|div|br|li|ul|ol|tr|td|th|h[1-6]|table|blockquote|section)\b[^>]*>/gi
+const AZURE_YEAR = /\b(?:19|20)\d{2}\b/
+
+function azureProseText(fragment, inlineTag) {
+  let text = fragment.replace(AZURE_BLOCK_TAG, ' ').replace(/<[^>]*>/g, inlineTag)
+  for (let previous; previous !== text;) {
+    previous = text
+    text = plainText(decodeEntities(text).replace(/[<>]/g, ' ').replace(/&[a-z][a-z0-9]*;/gi, inlineTag).replace(AZURE_FORMAT_CHARACTERS, ''))
+  }
+  return text
+}
+
+function azureProseVariants(fragment) {
+  return [...new Set([azureProseText(fragment, ' '), azureProseText(fragment, '')])]
+}
+
+function azurePrecisionPhrase(variants) {
+  for (const text of variants) {
+    const match = text.match(AZURE_FOOTNOTE_PRECISION_PATTERN)
+    if (match) return match[0]
+  }
+  return undefined
+}
+
+function azureFootnoteRegion(html, tableEnd) {
+  const rest = html.slice(tableEnd)
+  const boundary = rest.search(/<(?:h[1-6]|table)\b/i)
+  const region = stripComments(boundary === -1 ? rest : rest.slice(0, boundary))
+  const starts = [...region.matchAll(/<p\b[^>]*>\s*<sup>(\d+)<\/sup>/gi)]
+  const footnotes = new Map()
+  let ownEnd = region.length
+  for (const [index, start] of starts.entries()) {
+    const body = start.index + start[0].length
+    const end = starts[index + 1]?.index ?? region.length
+    const close = region.slice(body, end).match(/<\/p\s*>/i)
+    ownEnd = close ? body + close.index + close[0].length : end
+    const footnote = {
+      own: azureProseVariants(region.slice(body, close ? body + close.index : end)),
+      span: azureProseVariants(region.slice(body, end)),
+    }
+    footnotes.set(start[1], footnotes.has(start[1]) ? null : footnote)
+  }
+  const notes = azureProseVariants(region.slice(0, starts[0]?.index ?? region.length))
+  return { footnotes, notes, tail: azureProseVariants(region.slice(ownEnd)), variants: azureProseVariants(region) }
+}
+
+function azureDateScan(variants, where) {
+  const dates = new Set()
+  for (const text of variants) {
+    let candidates
+    try {
+      candidates = dateCandidates(text)
+    } catch (error) {
+      throw new Error(`${where} has an ${error.message}`)
+    }
+    let rest = ''
+    let cursor = 0
+    for (const candidate of candidates) {
+      dates.add(candidate.date)
+      if (candidate.index < cursor) continue
+      rest += `${text.slice(cursor, candidate.index)} `
+      cursor = candidate.index + text.slice(candidate.index).match(/^[\s\S]*?\b(?:19|20)\d{2}\b/)[0].length
+    }
+    rest += text.slice(cursor)
+    const year = rest.match(AZURE_YEAR)
+    if (year) throw new Error(`${where} has a date in an unrecognised format: "${rest.slice(Math.max(0, year.index - 30), year.index + 10).trim()}"`)
+  }
+  return dates
+}
+
+function azureCheckOtherDates(dates, date, where, now) {
+  for (const other of [...dates].sort()) {
+    if (other === date) continue
+    if (other > date) throw new Error(`${where} states a later date ${other}`)
+    const day = now === undefined ? undefined : new Date(now)
+    if (!day || Number.isNaN(day.getTime())) throw new Error(`${where} states an earlier date, but the parser has no valid refresh day`)
+    const today = day.toISOString().slice(0, 10)
+    if (other >= today) throw new Error(`${where} states an earlier date ${other} that is not past on ${today}`)
+  }
+}
+
+function azureRetirementDate(cell, label, region, now) {
+  const marked = cell.html.match(/^\s*(\d{4}-\d{2}-\d{2})\s*<sup>(\d+)<\/sup>\s*$/i)
+  if (!marked) return cell.text === '-' ? undefined : azureIsoDate(cell.text, `${label} retirement`)
+  const date = azureIsoDate(marked[1], `${label} retirement`)
+  const number = marked[2]
+  const prefix = `azure-ai-foundry lifecycle entry ${label} retirement`
+  const where = `${prefix} footnote ${number}`
+  const footnote = region().footnotes.get(number)
+  if (footnote === undefined) throw new Error(`${prefix} cites footnote ${number}, which the table does not define`)
+  if (footnote === null) throw new Error(`${prefix} cites footnote ${number}, which the table defines more than once`)
+  const phrase = azurePrecisionPhrase(footnote.span)
+  if (phrase) throw new Error(`${where} makes the date approximate ("${phrase}"): ${footnote.span[0]}`)
+  const notePhrase = azurePrecisionPhrase(region().variants)
+  if (notePhrase) throw new Error(`${prefix} cites footnote ${number}, and the notes after the table make dates approximate ("${notePhrase}")`)
+  if (!azureDateScan(footnote.own, where).has(date)) throw new Error(`${where} does not state the retirement date ${date}`)
+  azureCheckOtherDates(azureDateScan(footnote.span, where), date, where, now)
+  const notes = `${prefix} cites footnote ${number}, and the notes before the first footnote`
+  azureCheckOtherDates(azureDateScan(region().notes, notes), date, notes, now)
+  const tail = `${prefix} cites footnote ${number}, and the notes after the last footnote`
+  azureCheckOtherDates(azureDateScan(region().tail, tail), date, tail, now)
+  return date
+}
+
+export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('azure-ai-foundry lifecycle page is empty')
   let group = ''
   let section = ''
@@ -683,6 +814,8 @@ export function parseAzureModelRetirementScheduleHtml(html) {
     if (!headers) continue
     recognisedTables++
     let tableRecords = 0
+    let tableRegion
+    const region = () => (tableRegion ??= azureFootnoteRegion(html, block.index + block[0].length))
     for (const row of rows.slice(headers.row + 1)) {
       if (!row.cells.some(cell => cell.text)) continue
       const [modelCell, versionCell, lifecycleCell, retirementCell] = headers.indexes.map(index => row.cells[index])
@@ -706,8 +839,7 @@ export function parseAzureModelRetirementScheduleHtml(html) {
       const lifecycle = lifecycleCell.text
       const status = AZURE_LIFECYCLE_STATUSES.get(lifecycle)
       if (!status) throw new Error(`azure-ai-foundry lifecycle entry ${label} has an unsupported lifecycle status: ${lifecycle || '(empty)'}`)
-      const retirement = retirementCell.text
-      const shutdown = retirement === '-' ? undefined : azureIsoDate(retirement, `${label} retirement`)
+      const shutdown = azureRetirementDate(retirementCell, label, region, now)
       const snapshotVersion = publisher === 'openai' && (datedVersion || /^\d{4}$/.test(version))
       const azureId = snapshotVersion ? `${modelId}-${version}` : modelId
       const record = { azureId, modelId, version, group, section, lifecycle, status }
@@ -1117,7 +1249,7 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
     html = await fetchBody(config.sourceUrl, distributor, options.fetchImpl)
   }
   let parsed = distributor === 'azure-ai-foundry'
-    ? parseAzureModelRetirementScheduleHtml(html)
+    ? parseAzureModelRetirementScheduleHtml(html, { now: options.now ?? new Date() })
     : { records: distributor === 'aws-bedrock' ? parseBedrockLifecycleHtml(html) : parseVertexModelVersionsHtml(html) }
   if (distributor === 'aws-bedrock') {
     const cards = await loadBedrockCards(config, options)

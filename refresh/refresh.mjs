@@ -173,6 +173,7 @@ function writeGenerated(items, out) {
 export async function run(options) {
   const generated = []
   const generatedTimestamp = process.env.MODEL_EOL_GENERATED
+  const refreshClock = generatedTimestamp ? new Date(generatedTimestamp) : new Date()
   const distributorNames = options.distributors ?? (options.distributor ? String(options.distributor).split(',') : [])
   const shouldRefreshProviders = !distributorNames.length || options.providerSpecified
   for (const name of options.providers) {
@@ -180,7 +181,7 @@ export async function run(options) {
       ? await generateProviderFeed(name, {
         fixtures: options.fixtures,
         generated: generatedTimestamp,
-        now: generatedTimestamp === undefined ? new Date() : new Date(generatedTimestamp),
+        now: refreshClock,
       })
       : generateCommittedFeed(name, { generated: generatedTimestamp }))
   }
@@ -195,7 +196,7 @@ export async function run(options) {
     }
     distributorState = { unconfirmedDistributions: [], noPublisherFeed: [], sourceConflicts: [], skippedModelCards: [] }
     for (const distributor of distributorNames) {
-      const source = await loadDistributorSource(distributor, { fixtures: options.fixtures })
+      const source = await loadDistributorSource(distributor, { fixtures: options.fixtures, now: refreshClock })
       const state = mergeDistributions(generated, {
         records: source.records,
         sourceUrl: source.sourceUrl,

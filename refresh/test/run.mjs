@@ -2197,6 +2197,120 @@ for (const [label, html, diagnostic] of [
   ['missing date conflict', azureTable('Anthropic', [azureRow('missing-date'), azureRow('missing-date', '2', 'GA', '—')]), 'missing-date'],
 ]) assert(azureError(html).includes(diagnostic), `Azure rejects ${label}`)
 
+const footnoteNow = '2026-11-16T00:00:00Z'
+const footnotedRow = (marker = '<sup>3</sup>') => azureRow('footnoted', '2025-04-14', 'Deprecated', `2027-04-14${marker}`)
+const offerFootnote = (number, text = 'April 14, 2027 applies to all active offers for footnoted version 2025-04-14. Regional Standard deployments retired on March 31, 2026; that date is unchanged.') => `<p><sup>${number}</sup> ${text}</p>`
+const footnotedTable = (rows = [footnotedRow()]) => azureTable('Azure OpenAI', rows)
+const parseFootnoted = (html, now = footnoteNow) => parseAzureModelRetirementScheduleHtml(html, { now })
+const footnotedError = (html, now = footnoteNow) => {
+  try { parseFootnoted(html, now) } catch (error) { return error.message }
+  return ''
+}
+const footnotedRecord = parseFootnoted(footnotedTable([footnotedRow(), azureRow('plain-row')]) + offerFootnote(3) + '<p>Provisioned deployments are not upgraded automatically; move your traffic before retirement.</p>').records[0]
+assert(footnotedRecord.azureId === 'footnoted-2025-04-14' && footnotedRecord.shutdown === '2027-04-14' && !Object.hasOwn(footnotedRecord, 'date_precision'), 'Azure parses a retirement date carrying an offer-scoping footnote marker')
+assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Cohere', [azureRow('other-section')]) + offerFootnote(3, 'No earlier than 2027-04-14.')).records[0].shutdown === '2027-04-14', 'Azure reads a retirement footnote only from its own table')
+assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Azure OpenAI', [azureRow('second-table')]) + '<p>Dates are subject to change.</p>').records[0].shutdown === '2027-04-14', 'Azure ends a footnote region at the next table in the same section')
+assert(footnotedError(footnotedTable() + azureTable('Azure OpenAI', [azureRow('second-table')]) + offerFootnote(3)).includes('footnote 3, which the table does not define'), 'Azure does not read a footnote placed after a second table in the same section')
+for (const phrase of [
+  'No earlier than April 14, 2027', 'Retires at the earliest on April 14, 2027', 'April 14, 2027 or later', 'Not before April 14, 2027',
+  'Earliest retirement is April 14, 2027', 'April 14, 2027 is not later than expected', 'Retirement may be extended past April 14, 2027',
+  'Offers retire after April 14, 2027', 'Retirement begins on April 14, 2027', 'Retirement beginning April 14, 2027', 'Starting April 14, 2027 offers retire',
+  'Retirement rolls out on April 14, 2027', 'Retirement rolling out April 14, 2027', 'A phased retirement ends April 14, 2027', 'Estimates put retirement at April 14, 2027',
+  'The estimated date is April 14, 2027', 'April 14, 2027, other offers to be announced', 'April 14, 2027, other offers to be determined', 'April 14, 2027, Global Batch TBD',
+  'April 14, 2027 may shift', 'April 14, 2027 might slip', 'April 14, 2027 could change', 'April 14, 2027 can be updated', 'April 14, 2027 will be revised',
+  'Planned retirement is April 14, 2027', 'The target is April 14, 2027', 'Some offers retire earlier than April 14, 2027', 'Some offers retires later than April 14, 2027',
+]) {
+  const error = footnotedError(footnotedTable() + offerFootnote(3, `${phrase} for some offers.`))
+  assert(error.includes('footnoted') && error.includes('footnote 3') && error.includes('approximate'), `Azure rejects a retirement footnote that loosens the date: ${phrase}`)
+}
+for (const [label, html] of [
+  ['a continuation paragraph', footnotedTable() + offerFootnote(3) + '<p>Dates are subject to change.</p>'],
+  ['a note before the first footnote', footnotedTable() + '<p>Dates are subject to change.</p>' + offerFootnote(3)],
+  ['a footnote the row does not cite', footnotedTable() + offerFootnote(3) + offerFootnote(4, 'Dates are subject to change.')],
+]) {
+  const error = footnotedError(html)
+  assert(error.includes('footnoted') && error.includes('footnote 3') && error.includes('subject to change'), `Azure applies the precision check to ${label} after a footnoted table`)
+}
+for (const hidden of ['ear\u{AD}liest', 'ear&shy;liest', 'ear&#173;liest', 'ear&#xAD;liest', 'ear\u{200B}liest', 'ear\u{200D}liest', 'ear\u{FEFF}liest', 'ear&#65279;liest', 'ear\u{2060}liest', 'ear&#8288;liest', 'ear\u{200E}liest', 'ear&#x200E;liest', 'ear\u{34F}liest', 'ear<span>liest</span>', 'ear<a href="#x">li</a>est']) {
+  const error = footnotedError(footnotedTable() + offerFootnote(3, `April 14, 2027 at the ${hidden} for some offers.`))
+  assert(error.includes('footnote 3') && error.includes('approximate'), `Azure sees precision wording through invisible characters and inline tags: ${JSON.stringify(hidden)}`)
+}
+assert(footnotedError(footnotedTable() + offerFootnote(3, 'April 1<span>4</span>, 2027 applies to Global Standard.')).includes('footnote 3 has a date in an unrecognised format'), 'Azure rejects a footnote date that inline tags split into an ambiguous reading')
+for (const [label, text, diagnostic, now] of [
+  ['footnote without a date', 'Applies to all active customer-facing offers.', 'footnote 3 does not state the retirement date 2027-04-14'],
+  ['footnote stating another date only', 'January 14, 2027 applies to all active offers.', 'footnote 3 does not state the retirement date 2027-04-14'],
+  ['footnote with a later date', 'April 14, 2027 applies to Global Standard; provisioned offers retire on May 1, 2027.', 'footnote 3 states a later date 2027-05-01'],
+  ['footnote with an earlier future date', 'April 14, 2027 applies to Global Standard; Regional Standard retires on December 1, 2026.', 'footnote 3 states an earlier date 2026-12-01 that is not past on 2026-11-16'],
+  ['footnote date falling on the refresh day', 'April 14, 2027 applies to Global Standard; Regional Standard retired on March 31, 2026.', 'footnote 3 states an earlier date 2026-03-31 that is not past on 2026-03-31', '2026-03-31T12:00:00Z'],
+  ['footnote with an invalid date', 'April 14, 2027 applies to Global Standard; Batch retired on February 30, 2026.', 'footnote 3 has an invalid date'],
+  ['earlier date without a refresh day', 'April 14, 2027 applies to Global Standard; Regional Standard retired on March 31, 2026.', 'footnote 3 states an earlier date, but the parser has no valid refresh day', null],
+  ['earlier date with an invalid refresh day', 'April 14, 2027 applies to Global Standard; Regional Standard retired on March 31, 2026.', 'footnote 3 states an earlier date, but the parser has no valid refresh day', 'not a date'],
+]) {
+  const html = footnotedTable() + offerFootnote(3, text)
+  const error = now === null ? azureError(html) : footnotedError(html, now ?? footnoteNow)
+  assert(error.includes('footnoted') && error.includes(diagnostic), `Azure rejects a retirement ${label}`)
+}
+assert(parseFootnoted(footnotedTable() + offerFootnote(3, 'April 14, 2027 applies to Global Standard; Regional Standard retired on March 31, 2026.'), '2026-04-01T00:00:00Z').records[0].shutdown === '2027-04-14', 'Azure accepts an earlier footnote date already past on the refresh day')
+assert(parseFootnoted(footnotedTable() + offerFootnote(3, 'Applies on April 14, 2027 to all offers.')).records[0].shutdown === '2027-04-14' && parseAzureModelRetirementScheduleHtml(footnotedTable() + offerFootnote(3, 'Applies on April 14, 2027 to all offers.')).records[0].shutdown === '2027-04-14', 'Azure needs no refresh day when a footnote states only the cell date')
+for (const hiddenDate of ['April 1\u{2060}4, 2027', 'April 1&#8288;4, 2027', 'April\u{200E} 14, 2027', 'April&#x200E; 14, 2027']) {
+  assert(parseFootnoted(footnotedTable() + offerFootnote(3, `${hiddenDate} applies to Global Standard.`)).records[0].shutdown === '2027-04-14', `Azure reads a footnote date through format characters: ${JSON.stringify(hiddenDate)}`)
+}
+for (const hiddenDate of ['May 1\u{2060}5, 2027', 'May&#x200E; 15, 2027']) {
+  assert(footnotedError(footnotedTable() + offerFootnote(3, `April 14, 2027 applies; Batch retires on ${hiddenDate}.`)).includes('footnote 3 states a later date 2027-05-15'), `Azure sees a later footnote date through format characters: ${JSON.stringify(hiddenDate)}`)
+}
+for (const phrase of ['Batch is TBA', 'Batch is TBC', 'Batch retires at a later date', 'Batch dates will be communicated', 'Batch dates to be decided', 'Batch stays available until further notice']) {
+  const error = footnotedError(footnotedTable() + offerFootnote(3, `April 14, 2027 applies to Global Standard. ${phrase}.`))
+  assert(error.includes('footnote 3') && error.includes('approximate'), `Azure rejects a retirement footnote that leaves a date open: ${phrase}`)
+}
+for (const unrecognised of ['in May 2027', 'on 1 May 2027', 'on Sept. 1, 2027', 'on 05/01/2027', 'on 2027/05/01', 'in Q3 2027', 'in mid-2027']) {
+  const error = footnotedError(footnotedTable() + offerFootnote(3, `April 14, 2027 applies to Global Standard; Batch retires ${unrecognised}.`))
+  assert(error.includes('footnoted') && error.includes('footnote 3 has a date in an unrecognised format') && error.includes('2027'), `Azure rejects a footnote year outside a recognised date: ${unrecognised}`)
+}
+assert(footnotedError(footnotedTable() + '<p>Batch offers retire in Q3 2027.</p>' + offerFootnote(3)).includes('notes before the first footnote has a date in an unrecognised format'), 'Azure rejects an unrecognised year in the notes before the first footnote')
+for (const [label, notes, diagnostic] of [
+  ['a later date', 'Batch retires on May 1, 2027.', 'notes before the first footnote states a later date 2027-05-01'],
+  ['an earlier future date', 'Regional Standard retires on December 1, 2026.', 'notes before the first footnote states an earlier date 2026-12-01 that is not past on 2026-11-16'],
+]) {
+  const error = footnotedError(footnotedTable() + `<p>${notes}</p>` + offerFootnote(3))
+  assert(error.includes('footnoted') && error.includes('footnote 3') && error.includes(diagnostic), `Azure applies the footnote date rules to notes before the first footnote: ${label}`)
+}
+assert(parseFootnoted(footnotedTable() + '<p>Regional Standard retired on March 31, 2026.</p>' + offerFootnote(3)).records[0].shutdown === '2027-04-14', 'Azure accepts an already-past earlier date in the notes before the first footnote')
+const twoFootnoteRows = [azureRow('first-cited', '2024-05-13', 'Deprecated', '2027-01-14<sup>2</sup>'), azureRow('second-cited', '2024-08-06', 'Deprecated', '2027-04-14<sup>3</sup>')]
+const twoFootnotes = parseFootnoted(footnotedTable(twoFootnoteRows) + offerFootnote(2, 'Offers retire on January 14, 2027. Regional Standard retired on March 31, 2026.') + offerFootnote(3, 'April 14, 2027 applies to all active offers.'))
+assert(twoFootnotes.records.map(record => record.shutdown).join() === '2027-01-14,2027-04-14', 'Azure applies footnote date rules per footnote, not across every footnote after the table')
+assert(footnotedError(footnotedTable() + offerFootnote(3, 'Applies to Global Standard.') + '<p>April 14, 2027 is the date.</p>').includes('footnote 3 does not state the retirement date 2027-04-14'), 'Azure requires the cell date in the footnote paragraph itself')
+assert(footnotedError(footnotedTable() + '<!-- <p><sup>3</sup> April 14, 2027 applies to all offers.</p> -->').includes('footnote 3, which the table does not define'), 'Azure ignores a commented-out footnote')
+assert(parseFootnoted(footnotedTable() + offerFootnote(3) + '<!-- <p><sup>3</sup> No earlier than April 14, 2027.</p> -->').records[0].shutdown === '2027-04-14', 'Azure ignores a commented-out duplicate footnote')
+for (const [lt, gt] of [['&lt;', '&gt;'], ['&#60;', '&#62;'], ['&#x3C;', '&#x3E;'], ['&amp;lt;', '&amp;gt;']]) {
+  const later = footnotedError(footnotedTable() + offerFootnote(3, `April 14, 2027 applies to Global Standard. Offers with ${lt}1,000 TPM retire on May 1, 2027. Use Portal -${gt} Deployments.`))
+  assert(later.includes('footnote 3 states a later date 2027-05-01'), `Azure sees a later footnote date between encoded angle brackets: ${lt}`)
+  const comment = footnotedError(footnotedTable() + offerFootnote(3, `April 14, 2027 applies to Global Standard. ${lt}!-- No earlier than April 14, 2027 --${gt}`))
+  assert(comment.includes('footnote 3') && comment.includes('approximate'), `Azure treats an encoded comment as text: ${lt}`)
+}
+for (const later of ['May 1, 20\u{FE0F}27', 'May 1, 20&#xFE0F;27', 'May 1\u{180B}, 2027', 'May\u{17B4} 1, 2027']) {
+  assert(footnotedError(footnotedTable() + offerFootnote(3, `April 14, 2027 applies; Batch retires on ${later}.`)).includes('footnote 3 states a later date 2027-05-01'), `Azure sees a later footnote date through default-ignorable characters: ${JSON.stringify(later)}`)
+}
+assert(footnotedError(footnotedTable() + offerFootnote(3, 'No ear\u{FE0F}lier than April 14, 2027.')).includes('approximate'), 'Azure sees precision wording through a variation selector')
+const tailRows = [azureRow('first-cited', '2024-05-13', 'Deprecated', '2027-01-14<sup>2</sup>'), azureRow('second-cited', '2024-08-06', 'Deprecated', '2027-04-14<sup>3</sup>')]
+const tailFootnotes = offerFootnote(2, 'Offers retire on January 14, 2027.') + offerFootnote(3, 'April 14, 2027 applies to all active offers.')
+assert(footnotedError(footnotedTable(tailRows) + tailFootnotes + '<p>Global Batch for every version above retires on May 1, 2027.</p>').includes('first-cited version 2024-05-13 retirement cites footnote 2, and the notes after the last footnote states a later date 2027-05-01'), 'Azure applies the footnote date rules to notes after the last footnote')
+assert(parseFootnoted(footnotedTable(tailRows) + tailFootnotes + '<p>Regional Standard retired on March 31, 2026.</p>').records.length === 2, 'Azure accepts an already-past date after the last footnote and does not read later footnotes as trailing notes')
+const azureClockPage = footnotedTable() + offerFootnote(3)
+const azureClockLoad = now => loadDistributorSource('azure-ai-foundry', { fetchImpl: async () => new Response(azureClockPage), now, notice: () => {} }).then(() => '', error => error.message)
+assert(await azureClockLoad('2026-11-16T00:00:00Z') === '' && (await azureClockLoad('2026-03-31T00:00:00Z')).includes('not past on 2026-03-31'), 'Azure source loading passes the injected refresh clock to the parser')
+for (const [label, html] of [
+  ['missing footnote', footnotedTable([footnotedRow('<sup>4</sup>')]) + offerFootnote(3)],
+  ['footnote after the next heading', footnotedTable() + '<h3>Cohere</h3>' + offerFootnote(3)],
+]) assert(footnotedError(html).includes('footnoted') && footnotedError(html).includes('which the table does not define'), `Azure rejects a retirement ${label}`)
+assert(footnotedError(footnotedTable() + offerFootnote(3) + offerFootnote(3)).includes('footnote 3, which the table defines more than once'), 'Azure rejects a retirement duplicate footnote')
+for (const marker of [' 3', '<sup>3</sup> or later', ' or later<sup>3</sup>', '<sup>3a</sup>', '<sup>3</sup><sup>4</sup>', '<b>3</b>', '<sup>approx</sup>']) {
+  const error = footnotedError(footnotedTable([footnotedRow(marker)]) + offerFootnote(3) + offerFootnote(4))
+  assert(error.includes('footnoted') && error.includes('invalid date'), `Azure still rejects trailing retirement junk: ${marker}`)
+}
+assert(footnotedError(footnotedTable([azureRow('marked-version', '2025-04-14<sup>3</sup>')]) + offerFootnote(3)).includes('unsupported version'), 'Azure still rejects a footnote marker in the version column')
+assert(footnotedError(footnotedTable([azureRow('marked-lifecycle', '1', 'GA<sup>3</sup>')]) + offerFootnote(3)).includes('unsupported lifecycle status'), 'Azure still rejects a footnote marker in the lifecycle column')
+assert(footnotedError(footnotedTable([azureRow('marked-model<sup>3</sup>')]) + offerFootnote(3)).includes('invalid model id'), 'Azure still rejects a footnote marker in a publisher-section model cell')
+
 const azureSnapshotSource = parseAzureModelRetirementScheduleHtml(azureTable('Azure OpenAI', [['gpt-4', '0314', 'Retired', '2026-01-01', '-']]))
 const azureSnapshotFeeds = [{ publisher: 'openai', models: [{ id: 'gpt-4-0613', aliases: ['gpt-4'] }, { id: 'gpt-4-0314' }] }]
 const azureSnapshotMerge = mergeDistributions(azureSnapshotFeeds, { via: 'azure-ai-foundry', records: azureSnapshotSource.records })

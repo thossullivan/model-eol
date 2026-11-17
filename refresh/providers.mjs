@@ -184,7 +184,7 @@ export function sectionProse(html, qualifier) {
   }
 }
 
-function dateCandidates(text) {
+export function dateCandidates(text) {
   const normalised = plainText(text)
   const candidates = []
   for (const match of normalised.matchAll(new RegExp(DATE_PATTERN.source, 'g'))) {
