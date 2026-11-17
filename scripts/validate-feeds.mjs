@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
 import path from 'node:path'
-import { assertValidFeedDocument } from '../lib/validate-document.mjs'
+import { assertValidFeedSource } from '../lib/validate-document.mjs'
 
 const FEEDS = path.join(import.meta.dirname, '..', 'feeds')
 let errors = 0
@@ -12,14 +12,16 @@ const err = (file, msg) => {
 
 for (const fileName of fs.readdirSync(FEEDS).filter(file => file.endsWith('.json'))) {
   let feed
+  let source
   try {
-    feed = JSON.parse(fs.readFileSync(path.join(FEEDS, fileName), 'utf8'))
+    source = fs.readFileSync(path.join(FEEDS, fileName), 'utf8')
+    feed = JSON.parse(source)
   } catch (error) {
     err(fileName, `invalid JSON: ${error.message}`)
     continue
   }
   try {
-    assertValidFeedDocument(feed, fileName)
+    assertValidFeedSource(feed, source, fileName)
   } catch (error) {
     for (const line of error.message.split('\n')) {
       console.error(`✗ ${line}`)

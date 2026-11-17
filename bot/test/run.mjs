@@ -1522,6 +1522,32 @@ try {
   controlFeedDownloadError = error
 }
 assert(controlFeedDownloadError?.message.includes('replacement') && controlFeedDownloadError.message.includes('control characters'), 'downloadFeeds rejects control characters and names the feed field')
+let duplicateFeedDownloadError = null
+try {
+  await downloadFeeds({
+    urls: ['https://feeds.invalid/duplicate.json'],
+    vendoredDir: path.join(root, 'feeds'),
+    fetchImpl: async url => ({
+      status: 200,
+      ok: true,
+      text: async () => `{"spec":"model-eol/0.1","publisher":"remote","generated":"2026-08-01T00:00:00Z","source":"${url}","models":[{"id":"dup","shutdown":"2027-01-01","shutdown":"2030-01-01"}]}`,
+    }),
+  })
+} catch (error) {
+  duplicateFeedDownloadError = error
+}
+assert(duplicateFeedDownloadError?.message.includes('models[0].shutdown: is a duplicate key'), 'downloadFeeds rejects a repeated key before re-serializing the feed')
+let futureFeedDownloadError = null
+try {
+  await downloadFeeds({
+    urls: ['https://feeds.invalid/future.json'],
+    vendoredDir: path.join(root, 'feeds'),
+    fetchImpl: async url => ({ status: 200, ok: true, text: async () => JSON.stringify({ spec: 'model-eol/0.1', publisher: 'remote', generated: '2999-01-01T00:00:00Z', source: url, models: [{ id: 'future' }] }) }),
+  })
+} catch (error) {
+  futureFeedDownloadError = error
+}
+assert(futureFeedDownloadError?.message.includes('generated: must not be more than one day after the current time'), 'downloadFeeds rejects a future generated')
 const boundedFeed = url => ({ spec: 'model-eol/0.1', publisher: 'remote', generated: '2026-08-01T00:00:00Z', source: url, models: [{ id: 'remote-bounded' }] })
 const boundedFeedJson = url => JSON.stringify(boundedFeed(url))
 const feedDownloadError = async (fetchImpl, options = {}) => {

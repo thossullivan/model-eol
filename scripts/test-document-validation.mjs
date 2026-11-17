@@ -17,7 +17,8 @@ import { normalizeConfig } from '../lib/config.mjs'
 import { loadFeeds } from '../lib/feeds.mjs'
 import { JsonSchemaRegistry, validateJsonSchema } from '../lib/json-schema.mjs'
 import { formatInventoryCycloneDX } from '../lib/reports.mjs'
-import { validateFeed } from '../lib/validate-feed.mjs'
+import { findDuplicateJsonKey } from '../lib/strict-json.mjs'
+import { MAX_GENERATED_LEAD_MS, futureGeneratedProblem, validateFeed } from '../lib/validate-feed.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const cli = path.join(root, 'check.mjs')
@@ -782,6 +783,130 @@ try {
   const schemaOnlyScript = spawnSync(process.execPath, [path.join(validatorTree, 'scripts/validate-feeds.mjs')], { encoding: 'utf8' })
   assert.equal(schemaOnlyScript.status, 1, 'validate-feeds fails on a feed only the schema rejects')
   assert.match(schemaOnlyScript.stderr, /schema-only\.json model schema-only-script-model: source: must match format uri/, 'validate-feeds names the schema failure')
+
+  const strictDir = name => {
+    const dir = path.join(tempRoot, `strict-${name}`)
+    fs.mkdirSync(dir)
+    return dir
+  }
+  const loadMessage = (dir, options) => {
+    try {
+      loadFeeds(dir, options)
+      return ''
+    } catch (error) {
+      return error.message
+    }
+  }
+
+  const duplicateCases = [
+    ['{"a":1,"a":2}', 'a'],
+    ['{"models":[{"id":"x","shutdown":"2027-01-01","shutdown":"2030-01-01"}]}', 'models[0].shutdown'],
+    ['{"models":[{"id":"x"},{"id":"y","distributions":[{"via":"v"},{"via":"w","via":"z"}]}]}', 'models[1].distributions[1].via'],
+    ['{"ab":1,"a\\u0062":2}', 'ab'],
+    ['{"a b":{"c":1,"c":2}}', '["a b"].c'],
+    ['[{"k":1},{"k":2,"k":3}]', '[1].k'],
+    ['{"notes":"x\\",{\\"notes\\":1,","notes":2}', 'notes'],
+  ]
+  for (const [source, expected] of duplicateCases) {
+    JSON.parse(source)
+    assert.equal(findDuplicateJsonKey(source), expected, `finds the duplicate key in ${source}`)
+  }
+  for (const source of [
+    '{"models":[{"id":"a"},{"id":"b"}]}',
+    '{"a":{"b":1},"b":{"a":1}}',
+    '{"notes":"\\"a\\":1,\\"a\\":2"}',
+    '{"a":"\\\\","b":"\\\\\\""}',
+    '[]', '"a"', 'null', '{}', ' { "a" : [ 1 , { } , "}" ] , "b" : 2 } ',
+  ]) {
+    JSON.parse(source)
+    assert.equal(findDuplicateJsonKey(source), null, `finds no duplicate key in ${source}`)
+  }
+
+  const duplicateFeedDir = strictDir('duplicate')
+  const duplicateFeedFile = path.join(duplicateFeedDir, 'duplicate.json')
+  fs.writeFileSync(duplicateFeedFile, '{"spec":"model-eol/0.1","publisher":"test","generated":"2026-08-18T00:00:00Z","source":"https://example.test/d","models":[{"id":"dup-model","shutdown":"2027-01-01","shutdown":"2030-01-01"}]}\n')
+  assert.match(loadMessage(duplicateFeedDir), /duplicate\.json model dup-model: models\[0\]\.shutdown: is a duplicate key/, 'feed loading rejects a repeated key and names its path')
+  const duplicateValidate = run(['validate', duplicateFeedFile])
+  assert.equal(duplicateValidate.code, 2, 'validate rejects a feed with a repeated key')
+  assert.match(duplicateValidate.err, /\$\.models\[0\]\.shutdown: is a duplicate key/, 'validate names the repeated key path')
+  const duplicateConfigFile = path.join(strictDir('duplicate-config'), 'config.json')
+  fs.writeFileSync(duplicateConfigFile, '{"days":30,"days":60}\n')
+  const duplicateConfig = run(['validate', '--type', 'config', duplicateConfigFile])
+  assert.equal(duplicateConfig.code, 2, 'validate rejects a repeated key in a non-feed document')
+  assert.match(duplicateConfig.err, /\$\.days: is a duplicate key/, 'validate names the repeated key in a config')
+  const duplicateCheck = run([fixture, '--feeds', duplicateFeedDir])
+  assert.equal(duplicateCheck.code, 2, 'check exits 2 on a feed with a repeated key')
+
+  const surrogateCases = [
+    [{ ...validFeed(), models: [{ id: 'test-model', notes: 'bad \ud800 text' }] }, 'models[0].notes'],
+    [{ ...validFeed(), note: '\udc00' }, 'note'],
+    [{ ...validFeed(), models: [{ id: 'test-model', '\ud800': 1 }] }, 'models[0]["\\ud800"]'],
+  ]
+  for (const [feed, at] of surrogateCases) {
+    assert(validateFeed(feed).some(error => error.path === at && error.message === 'must not contain a lone surrogate'), `validateFeed rejects a lone surrogate at ${at}`)
+  }
+  assert.deepEqual(validateFeed({ ...validFeed(), models: [{ id: 'test-model', notes: 'paired 😀 emoji' }] }), [], 'a surrogate pair is valid')
+  const manySurrogates = validateFeed({ ...validFeed(), models: [{ id: 'test-model', notes: Array(5000).fill('\ud800') }] })
+  assert.deepEqual(manySurrogates.filter(error => error.message === 'must not contain a lone surrogate').map(error => error.path), ['models[0].notes[0]'], 'validateFeed reports only the first lone surrogate')
+  let deepSurrogate = '\ud800'
+  for (let depth = 0; depth < 20000; depth++) deepSurrogate = [deepSurrogate]
+  const deepSurrogateErrors = validateFeed({ ...validFeed(), models: [{ id: 'test-model', notes: deepSurrogate }] })
+  assert(deepSurrogateErrors.some(error => error.message === 'must not contain a lone surrogate' && error.path === `models[0].notes${'[0]'.repeat(20000)}`), 'validateFeed finds a deeply nested lone surrogate without recursion')
+  const wideFeed = { ...validFeed(), models: Array.from({ length: 250000 }, (_, index) => ({ id: `wide-${index}` })) }
+  assert.deepEqual(validateFeed(wideFeed), [], 'validateFeed accepts a feed with 250000 models')
+  const orderFeed = { ...validFeed(), models: [{ id: 'test-model', notes: { a: { x: '\ud800' }, '\ud801': 1 } }] }
+  assert(validateFeed(orderFeed).some(error => error.path === 'models[0].notes.a.x' && error.message === 'must not contain a lone surrogate'), 'validateFeed reports the first lone surrogate in document order')
+  const cyclicFeed = validFeed()
+  cyclicFeed.models[0].self = cyclicFeed.models
+  assert.deepEqual(validateFeed(cyclicFeed).map(error => error.message), ['unknown field'], 'validateFeed terminates on an in-memory cycle')
+  const surrogateDir = strictDir('surrogate')
+  const surrogateFile = path.join(surrogateDir, 'surrogate.json')
+  fs.writeFileSync(surrogateFile, JSON.stringify(surrogateCases[0][0]))
+  assert(fs.readFileSync(surrogateFile, 'utf8').includes('\\ud800'), 'the surrogate fixture keeps the JSON escape')
+  assert.match(loadMessage(surrogateDir), /models\[0\]\.notes: must not contain a lone surrogate/, 'feed loading rejects a lone surrogate escape')
+  const surrogateValidate = run(['validate', surrogateFile])
+  assert.equal(surrogateValidate.code, 2, 'validate rejects a lone surrogate escape')
+  assert.match(surrogateValidate.err, /\$\.models\[0\]\.notes: must not contain a lone surrogate/, 'validate names the lone surrogate path')
+
+  const now = Date.parse('2026-08-18T00:00:00Z')
+  assert.equal(MAX_GENERATED_LEAD_MS, 86400000, 'generated may lead the clock by one day')
+  for (const generated of ['2026-08-19T00:00:00Z', '2026-08-19T05:00:00+05:00', '2026-08-18T00:00:00Z', '2020-01-01T00:00:00Z']) {
+    assert.equal(futureGeneratedProblem({ ...validFeed(), generated }, now), null, `generated ${generated} is within one day of the clock`)
+  }
+  for (const generated of ['2026-08-19T00:00:00.001Z', '2026-08-18T20:00:01-04:00', '2999-01-01T00:00:00Z']) {
+    assert.match(futureGeneratedProblem({ ...validFeed(), generated }, now) ?? '', /more than one day after the current time/, `generated ${generated} is rejected as future`)
+  }
+  const futureDir = strictDir('future')
+  const futureFile = path.join(futureDir, 'future.json')
+  writeJson(futureFile, { ...validFeed(), generated: '2999-01-01T00:00:00Z', policy: { min_notice_days: 60, source: 'https://example.test/policy' } })
+  assert.match(loadMessage(futureDir), /future\.json model test-model: generated: must not be more than one day after the current time/, 'feed loading rejects a future generated')
+  assert.equal(loadMessage(futureDir, { now: Date.parse('2998-12-31T12:00:00Z') }), '', 'feed loading uses the injected clock')
+  const futureValidate = run(['validate', futureFile])
+  assert.equal(futureValidate.code, 2, 'validate rejects a future generated')
+  assert.match(futureValidate.err, /\$\.generated: must not be more than one day after the current time/, 'validate names generated')
+  const futureCheck = run([fixture, '--feeds', futureDir])
+  assert.equal(futureCheck.code, 2, 'check exits 2 on a future generated')
+  assert.match(futureCheck.err, /failed to load feeds.*generated: must not be more than one day/s, 'check names the future generated')
+
+  for (const [label, text] of [['null', 'null\n'], ['array', '[]\n'], ['string', '"feed"\n'], ['number', '1\n']]) {
+    const dir = strictDir(`non-object-${label}`)
+    fs.writeFileSync(path.join(dir, 'feed.json'), text)
+    assert.match(loadMessage(dir), /feed\.json: feed must be a JSON object$/, `feed loading names a ${label} feed as not a JSON object`)
+    const check = run([fixture, '--feeds', dir])
+    assert.equal(check.code, 2, `check exits 2 on a ${label} feed`)
+    assert.match(check.err, /feed must be a JSON object/, `check explains a ${label} feed`)
+    assert.doesNotMatch(check.err, /Cannot read properties/, `check does not leak a TypeError for a ${label} feed`)
+  }
+
+  const strictTree = path.join(tempRoot, 'validate-feeds-strict-tree')
+  for (const directory of ['lib', 'schema']) fs.cpSync(path.join(root, directory), path.join(strictTree, directory), { recursive: true })
+  fs.mkdirSync(path.join(strictTree, 'scripts'))
+  fs.copyFileSync(path.join(root, 'scripts/validate-feeds.mjs'), path.join(strictTree, 'scripts/validate-feeds.mjs'))
+  fs.mkdirSync(path.join(strictTree, 'feeds'))
+  fs.copyFileSync(duplicateFeedFile, path.join(strictTree, 'feeds/duplicate.json'))
+  const duplicateScript = spawnSync(process.execPath, [path.join(strictTree, 'scripts/validate-feeds.mjs')], { encoding: 'utf8' })
+  assert.equal(duplicateScript.status, 1, 'validate-feeds fails on a repeated key')
+  assert.match(duplicateScript.stderr, /duplicate\.json model dup-model: models\[0\]\.shutdown: is a duplicate key/, 'validate-feeds names the repeated key')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }
