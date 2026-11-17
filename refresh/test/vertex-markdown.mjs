@@ -150,7 +150,7 @@ await test('fixture lookup finds the Markdown fixture and its .md fallbacks, nev
     strictAssert.throws(() => findDistributorFixture(dir, 'vertex-ai'), /missing vertex-ai fixture/)
     fs.writeFileSync(path.join(dir, 'vertex-ai.md'), markdownFixture)
     strictAssert.equal(path.basename(findDistributorFixture(dir, 'vertex-ai')), 'vertex-ai.md')
-    strictAssert.equal(path.basename(findDistributorFixture(path.join(fixtures), 'aws-bedrock')), 'bedrock-lifecycle.html')
+    strictAssert.equal(path.basename(findDistributorFixture(path.join(fixtures), 'aws-bedrock')), 'bedrock-lifecycle.md')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

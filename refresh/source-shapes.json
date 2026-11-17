@@ -10,9 +10,10 @@
       ]
     },
     "aws-bedrock": {
-      "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+      "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.md",
       "tables": [
-        "model provider | model name | model id | regions | legacy date | eol date | public extended access start date [7 cols]"
+        "labelled list: model name | model id | regions / legacy date / eol date / public extended access start date",
+        "labelled list: model name | model id | regions | legacy date | eol date | public extended access start date"
       ]
     },
     "azure-ai-foundry": {

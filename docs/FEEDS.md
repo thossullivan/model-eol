@@ -21,8 +21,9 @@ Distributor dates are added to the publisher feeds as `distributions` entries:
 - **Amazon Bedrock**: the [legacy lifecycle table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html)
   for models launched before AWS changed its policy on 2026-09-07, and the
   individual [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
-  for newer ones. A card's "EOL no sooner than" date becomes a tentative date,
-  and an exact Model EOL date stays exact.
+  for newer ones, both read from their Markdown copies (the same pages ending
+  in `.md`). The feed cites the pages themselves. A card's "EOL no sooner than"
+  date becomes a tentative date, and an exact Model EOL date stays exact.
 - **Vertex AI**: the [model versions page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions),
   read from its Markdown copy (`model-versions.md.txt`). The feed cites the page
   itself.

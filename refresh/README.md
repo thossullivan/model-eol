@@ -43,9 +43,10 @@ without stopping.
 
 How strictly tables are identified also differs. Mistral, Cohere, the Bedrock
 model cards, and Azure check lifecycle headers exactly and stop on drift.
-OpenAI, the Gemini API, the Bedrock legacy table, and Vertex AI find columns by
-label patterns: tables without a matching header are skipped, and extra columns
-are accepted.
+OpenAI, the Gemini API, and Vertex AI find columns by label patterns: tables
+without a matching header are skipped, and extra columns are accepted. The
+Bedrock legacy page has no tables in its Markdown copy; each model is a labelled
+list, and an unknown label stops the run.
 
 Every fetch has a 30-second deadline over the request and body, and an 8 MiB
 body limit (`fetch.mjs`). Requests that carry an API key (the models endpoints)
@@ -99,7 +100,16 @@ endpoints aren't checked.
   `^N^` and `[^N]` footnote markers removed.
 - A page whose first markup, after any leading comments, is a tag is HTML;
   anything else is Markdown. A Markdown page contributes its Markdoc, pipe,
-  and raw HTML tables outside fenced code.
+  and raw HTML tables outside fenced code, and its labelled lists.
+- A labelled list is a run of indented list items that each start with a bold
+  label and colon (`  - **EOL date:** ...`), such as one model on the Bedrock
+  legacy page. Its shape is `labelled list: ` and the run's distinct item
+  labels in first-seen order, normalized like header cells and joined with
+  ` | `. An item with several `**Label:**` segments separated by ` / ` (a
+  Bedrock regional line) is one item, its labels joined with ` / `. Values,
+  the parent item, and how often an item repeats aren't recorded, so a new
+  model or another regional line with familiar labels doesn't change the
+  snapshot; a new, renamed, or reordered label does.
 - Each shape ends with the table's width, such as `[5 cols]`: the widest row,
   header or body, with `colspan` counted. A wider body or a changed `colspan`
   under an unchanged header changes the shape.
@@ -108,8 +118,8 @@ endpoints aren't checked.
   recorded.
 - `node refresh/shapes.mjs --check` exits 0 when every page matches the
   snapshot, 3 when any differs (it prints the shapes added and removed per
-  source), and 1 when a page can't be fetched, has no tables, or has a
-  malformed table. It names every failing page, not only the first.
+  source), and 1 when a page can't be fetched, has neither tables nor labelled
+  lists, or has a malformed table. It names every failing page, not only the first.
 - `node refresh/shapes.mjs --write` regenerates the snapshot from the live
   pages. With `--fixtures DIR` it reads the recorded pages instead, and then
   needs `--snapshot FILE` so it never overwrites the committed snapshot.
@@ -404,7 +414,11 @@ stay in the
 [legacy table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html).
 Newer models publish dates on individual
 [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html).
-The refresh reads both.
+The refresh reads both from the Markdown copies the user guide serves next to
+each page (the same path ending in `.md`, as its `llms.txt` lists them): the
+legacy page from `sourceFetchUrl`, the card index from `indexFetchUrl`, and
+each card from its own `.md` URL. Records, notices, and the feed cite the human
+`.html` pages. A body that is HTML rather than Markdown stops the run.
 
 Precedence:
 
@@ -419,30 +433,77 @@ Precedence:
   applies. Two cards that disagree about the same model stop the run, including
   after alias resolution.
 
+Legacy page parsing:
+
+- Each model is a top-level list item that is only a bold provider name
+  (`- **Anthropic**`), followed directly by indented items that each start with
+  a bold label and colon (`  - **Model ID:** ...`). A blank line ends the
+  entry. Other lists and prose are ignored.
+- The labels are `Model name`, `Model ID`, `Regions`, `Legacy date`,
+  `EOL date`, `Public extended access start date`, and an optional status
+  (`Status`, `Model status`, or `Lifecycle status`). Any other label, a label
+  given twice, an entry without a Model ID, Legacy date, EOL date, or Public
+  extended access start date, an unlabelled line inside an entry, a labelled
+  item outside an entry, or one of these labels anywhere else on the page stops
+  the run. So does a pipe table whose header mentions a model ID, legacy, or
+  EOL, a raw HTML table, or a page with no entries.
+- A model whose dates differ by Region has one regional line per Region group:
+  `**Regions:** ... / **Legacy date:** ... / **EOL date:** ... / **Public
+  extended access start date:** ...`. Each line is one row; the entry's own
+  labels apply to every line, and may not repeat on one. Model ID and Model
+  name may not appear on a regional line.
+- A Model ID is one Bedrock ID, or a list of IDs each qualified by its endpoint
+  (`deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)`), which
+  gives one record per ID. Anything else stops the run.
+- Empty, dash, and `N/A` dates give no date; "To be announced" is accepted only
+  for the extended access start. EOL before Legacy, or an extended access start
+  outside the Legacy period, stops the run.
+- Status is `extended-access` when an extended access start date is given and
+  `legacy` otherwise, unless a status label says otherwise. An extended access
+  status without a start date stops the run.
+- Rows for one Model ID, from regional lines or repeated entries, merge when
+  their dates agree. Rows with different dates merge only when each lists only
+  Region codes and the Region groups are disjoint: each date takes its earliest
+  value and the status the furthest phase, so no Region is warned late. Any
+  other disagreement stops the run.
+
 Card parsing:
 
-- Each card must contain exactly one Model ID table. A table is that table when
-  any cell in its first row, `th` or `td`, is exactly `Model ID`.
-- HTML comments are removed before extraction.
-- A lifecycle field is read only from a paragraph that starts with the
-  exact-case label and a colon. A label found anywhere else on the card, matched
-  as a whole label ignoring case and colon, stops the run.
+- Each card must contain exactly one Model ID table: a pipe table with a header
+  cell that is exactly `Model ID` once emphasis is removed. Every pipe table on
+  the card is read with [`markdown.mjs`](#markdown-pipe-tables), so a
+  misaligned table stops the run, and so does a raw HTML table.
+- HTML comments are removed before extraction, and an unbalanced comment
+  marker stops the run.
+- A lifecycle field is read only from a line, with any list marker, emphasis,
+  and inline tags removed, that starts with the exact-case label and a colon
+  (`+ **Model EOL date:** ...`). Fenced code is not read for fields. A label
+  found anywhere else on the card, fenced code included, matched as a whole
+  label ignoring case and colon, stops the run.
 - A standalone Model EOL date counts as lifecycle data. `N/A` and
   `Not announced` count as no date.
+- Any table cell that mentions Legacy, EOL, retirement, or end of life must read
+  exactly `Legacy (EOL: <date>)` or `EOL: <date>` and match the Model EOL date.
+  Image alt text, link titles, and raw tags and their attributes count as cell
+  text; Bedrock IDs and URLs don't.
 - The feed has no Region dimension, so a card whose lifecycle reads `Legacy in
   <regions>; Active in other Regions` is legacy, with the EOL date given as
   `<date> (<regions> only)`. The two Region lists must match. Every other
   region-qualified form stops the run.
 - Cards with no lifecycle fields or no day-precision date are listed under
   "Model cards without lifecycle fields" and emit notices.
-- Links from the card index resolve inside the index's directory after the
-  query and fragment are removed. An invalid link stops the run.
+- Links from the card index, as Markdown links, reference definitions, or
+  `href` attributes outside fenced code and comments, resolve inside the
+  index's directory after the query and fragment are removed. A card link may
+  end in `.md` or `.html`; both name the same card. An invalid link stops the
+  run.
 
 Limits: at most 400 unique cards, fetched one at a time, each with a 30-second
 deadline and an 8 MiB limit.
 
-Offline runs read `bedrock-lifecycle.html`, `bedrock-model-cards.html`, and
-`bedrock-model-cards/<basename>`. A missing card fixture stops the run.
+Offline runs read `bedrock-lifecycle.md` (or `aws-bedrock.md` or
+`aws-bedrock-lifecycle.md`), `bedrock-model-cards.md`, and
+`bedrock-model-cards/<card>.md`. A missing card fixture stops the run.
 
 ## Vertex AI
 

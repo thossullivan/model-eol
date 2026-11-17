@@ -129,6 +129,26 @@ export function pipeTableShapes(markdown) {
   return [...new Set(tables.map(table => signature([table.header.map(pipeHeaderText)], table.header.length)))].sort()
 }
 
+/** Distinct shapes of nested labelled lists: each run of indented `**Label:** value` items, as its distinct item labels in order. */
+export function labelledListShapes(markdown) {
+  const shapes = new Set()
+  let items = []
+  const flush = () => {
+    if (items.length) shapes.add(`labelled list: ${[...new Set(items)].join(' | ')}`)
+    items = []
+  }
+  for (const line of stripFencedCodeBlocks(stripComments(String(markdown))).split('\n')) {
+    const item = line.match(/^[ \t]+[-*+][ \t]+(\*\*[^*]+?:\*\*.*)$/)
+    if (!item) {
+      flush()
+      continue
+    }
+    items.push([...item[1].matchAll(/(?:^|\s\/\s)\*\*([^*]+?):\*\*/g)].map(match => normalizeHeaderText(match[1])).join(' / '))
+  }
+  flush()
+  return [...shapes].sort()
+}
+
 /** A body is HTML when its first markup, after any leading comments, is a tag; anything else is Markdown. */
 export function sourceFormat(body) {
   return /^\s*(?:<!--[\s\S]*?--!?>\s*)*</.test(String(body).replace(/^\uFEFF/, '')) ? 'html' : 'markdown'
@@ -141,7 +161,7 @@ export function extractShapes(body) {
     shapes = htmlTableShapes(body)
   } else {
     const unfenced = stripFencedCodeBlocks(String(body))
-    shapes = [...new Set([...markdocTableShapes(body), ...pipeTableShapes(body), ...htmlTableShapes(unfenced)])].sort()
+    shapes = [...new Set([...markdocTableShapes(body), ...pipeTableShapes(body), ...htmlTableShapes(unfenced), ...labelledListShapes(body)])].sort()
   }
   if (!shapes.length) throw new Error('no tables found')
   return shapes

@@ -11,6 +11,7 @@ import {
   compareShapes,
   extractShapes,
   htmlTableShapes,
+  labelledListShapes,
   markdocTableShapes,
   normalizeHeaderText,
   pipeTableShapes,
@@ -157,6 +158,34 @@ test('a source body is classified from its content, and a Markdown body pools Ma
   strictAssert.throws(() => extractShapes('<p>no tables</p>'), /no tables found/)
 })
 
+test('labelled lists record the distinct labels of each nested run, with regional lines as one item', () => {
+  const entry = (provider, lines) => `- **${provider}**\n${lines.map(line => `  - ${line}`).join('\n')}\n`
+  const markdown = [
+    '# Model lifecycle',
+    entry('AI21 Labs', ['**Model name:** Jamba', '**Model ID:** ai21.jamba-v1:0', '**Regions:** us-east-1', '**Legacy date:** May 26, 2026']),
+    entry('Anthropic', ['**Model name:** Claude', '**Model ID:** anthropic.claude-v1:0', '**Regions:** us-east-1 / **Legacy date:** October 10, 2026', '**Regions:** ca-central-1 / **Legacy date:** October 15, 2026']),
+    entry('Meta', ['**Model Name:**\u00a0Llama', '**Model ID:** `meta.llama-v1:0`', '**Regions:** us-east-1', '**Legacy date:** May 1, 2026']),
+    '+ **Model launch date:** top-level labels are not a nested list',
+    '- **Note**\n  - plain nested items are not labelled',
+    '```\n- **Fenced**\n  - **Fenced label:** x\n```',
+    '<!--\n- **Hidden**\n  - **Hidden label:** x\n-->',
+  ].join('\n\n')
+  strictAssert.deepEqual(labelledListShapes(markdown), [
+    'labelled list: model name | model id | regions / legacy date',
+    'labelled list: model name | model id | regions | legacy date',
+  ])
+  strictAssert.deepEqual(labelledListShapes(entry('X', ['**Model ID:** x.y-v1:0', '**EOL date:** a', '**Legacy date:** b'])), ['labelled list: model id | eol date | legacy date'])
+  strictAssert.deepEqual(labelledListShapes('# None\n\n- plain\n  - nested\n'), [])
+})
+
+test('a Markdown body with only labelled lists has a shape, and one with neither tables nor labelled lists still fails', () => {
+  const markdown = '# Model lifecycle\n\n- **Example**\n  - **Model ID:** example.model-v1:0\n  - **EOL date:** September 1, 2026\n'
+  strictAssert.deepEqual(extractShapes(markdown), ['labelled list: model id | eol date'])
+  strictAssert.deepEqual(extractShapes(`${markdown}\n| Region | Note |\n| --- | --- |\n| a | b |\n`), ['labelled list: model id | eol date', 'region | note [2 cols]'])
+  strictAssert.throws(() => extractShapes('# Model lifecycle\n\n- **Example**\n- Model ID: example.model-v1:0\n'), /no tables found/)
+  strictAssert.deepEqual(extractShapes(`<html><body>${htmlTable(['Model'])}<ul><li><b>Model ID:</b> x</li></ul></body></html>`), ['model [2 cols]'])
+})
+
 test('a source can set request headers for its page fetch', async () => {
   const seen = []
   const fetchImpl = async (url, init) => {
@@ -206,7 +235,7 @@ const fixtureFiles = {
   'google-deprecations.md': `## Models\n${markdocTable(['Model', 'Release date', 'Shutdown date', 'Recommended replacement'], [['`gemini-a`', 'a', 'b', '']])}\n`,
   'mistral-deprecations.html': htmlTable(['Model', 'Version', 'API', 'Deprecation', 'Alternative']),
   'cohere-deprecations.html': `<h3>2026-09-01</h3>${htmlTable(cohereHeaders)}<h3>2026-10-01</h3>${htmlTable(cohereHeaders)}`,
-  'bedrock-lifecycle.html': htmlTable(['Model ID', 'Legacy date', 'EOL date']),
+  'bedrock-lifecycle.md': '# Model lifecycle\n\n- **Example**\n  - **Model ID:** example.model-v1:0\n  - **Legacy date:** March 1, 2026\n  - **EOL date:** September 1, 2026\n',
   'vertex-model-versions.md': '## Models\n\n| Model ID | Release date | Retirement date |\n|---|---|---|\n| `gemini-a` | a | b |\n',
   'azure-model-retirement-schedule.md': '### Azure OpenAI\n\n| Model | Version | Retirement date |\n| --- | --- | --- |\n| gpt-a | 1 | 2027-01-01^1^ |\n',
 }
