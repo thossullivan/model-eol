@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "openai",
-  "generated": "2026-11-17T05:01:30.709Z",
+  "generated": "2026-11-17T21:02:20.239Z",
   "source": "https://developers.openai.com/api/docs/deprecations",
   "note": "Community-maintained seed dataset, compiled 2026-07-25 from the provider's deprecations page. Verify against the source before acting; this file demonstrates the format.",
   "models": [
@@ -808,7 +808,7 @@
         "gpt-5",
         "gpt-4.1"
       ],
-      "replacement_note": "for latency-sensitive tasks that don’t require reasoning"
+      "replacement_note": "for latency-sensitive tasks that don't require reasoning"
     },
     {
       "id": "gpt-4-0125-preview",
@@ -823,7 +823,7 @@
         "gpt-5",
         "gpt-4.1"
       ],
-      "replacement_note": "for latency-sensitive tasks that don’t require reasoning"
+      "replacement_note": "for latency-sensitive tasks that don't require reasoning"
     },
     {
       "id": "gpt-4o-realtime-preview",
@@ -1716,9 +1716,9 @@
     },
     {
       "id": "gpt-image-2",
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-11-10",
       "shutdown": "2027-02-10",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement_options": [
         "gpt-image-2.6-sunburst",
         "gpt-image-2.6-flare"
@@ -1734,9 +1734,9 @@
           "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
         }
       ],
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-11-10",
       "shutdown": "2027-02-10",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement_options": [
         "gpt-image-2.6-sunburst",
         "gpt-image-2.6-flare"
@@ -1898,9 +1898,9 @@
     },
     {
       "id": "gpt-5.5-cyber-preview",
+      "source": "https://developers.openai.com/api/docs/deprecations",
       "announced": "2026-11-05",
       "shutdown": "2027-02-01",
-      "source": "https://developers.openai.com/api/docs/deprecations",
       "replacement_note": "The most capable cyber model available to you."
     },
     {
@@ -1920,6 +1920,12 @@
     },
     {
       "id": "gpt-image-2.6-sunburst"
+    },
+    {
+      "id": "gpt-6.2-astra"
+    },
+    {
+      "id": "gpt-6.2-sol"
     }
   ]
 }

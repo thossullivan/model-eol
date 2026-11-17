@@ -74,7 +74,7 @@ git clone https://github.com/thossullivan/model-eol && cd model-eol
 node check.mjs path/to/your/repo --days 90
 ```
 
-Feed coverage: <!-- feeds-status -->Amazon (4 entries), Anthropic (38 entries), Cohere (12 entries), Google (106 entries), Mistral (48 entries) and OpenAI (209 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-11-17<!-- /feeds-status -->.
+Feed coverage: <!-- feeds-status -->Amazon (4 entries), Anthropic (38 entries), Cohere (49 entries), Google (106 entries), Mistral (48 entries) and OpenAI (211 entries), generated from the providers' live deprecation pages plus the AWS Bedrock, Google Vertex AI, and Azure Foundry lifecycle pages, feed data generated 2026-11-17<!-- /feeds-status -->.
 
 ## Commands
 

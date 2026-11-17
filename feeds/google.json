@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "google",
-  "generated": "2026-11-17T05:01:30.710Z",
+  "generated": "2026-11-17T21:02:23.225Z",
   "source": "https://aistudio.google.com/docs/deprecations",
   "models": [
     {
@@ -11,7 +11,6 @@
         {
           "via": "vertex-ai",
           "shutdown": "2026-11-19",
-          "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
       ]
@@ -598,7 +597,6 @@
         {
           "via": "vertex-ai",
           "shutdown": "2027-01-28",
-          "date_precision": "earliest",
           "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions"
         }
       ],

@@ -576,8 +576,6 @@
     },
     {
       "id": "claude-fable-5-2",
-      "shutdown": "2027-11-09",
-      "date_precision": "tentative",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "distributions": [
         {
@@ -587,12 +585,12 @@
           "status": "active",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-fable-5-2.html"
         }
-      ]
+      ],
+      "shutdown": "2027-11-09",
+      "date_precision": "tentative"
     },
     {
       "id": "claude-mythos-5-2",
-      "shutdown": "2027-11-09",
-      "date_precision": "tentative",
       "source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
       "distributions": [
         {
@@ -602,7 +600,9 @@
           "status": "active",
           "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-mythos-5-2.html"
         }
-      ]
+      ],
+      "shutdown": "2027-11-09",
+      "date_precision": "tentative"
     }
   ]
 }
