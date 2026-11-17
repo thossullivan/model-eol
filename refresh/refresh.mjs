@@ -110,9 +110,8 @@ export async function generateProviderFeed(providerName, options = {}) {
   const committed = readCommitted(provider)
   const sourceProvider = {
     ...provider,
-    // The committed feed is the source of truth for the docs URL. The
-    // constant is only a fallback for a feed that predates this tool.
-    deprecationsUrl: committed.source ?? provider.deprecationsUrl,
+    // The constant wins so a moved docs page reaches the feed at the next regeneration.
+    deprecationsUrl: provider.deprecationsUrl ?? committed.source,
   }
   const sources = await loadProviderSources(sourceProvider, options)
   const merged = mergeFeed(committed, {
@@ -174,6 +173,7 @@ function writeGenerated(items, out) {
 export async function run(options) {
   const generated = []
   const generatedTimestamp = process.env.MODEL_EOL_GENERATED
+  const refreshClock = generatedTimestamp ? new Date(generatedTimestamp) : new Date()
   const distributorNames = options.distributors ?? (options.distributor ? String(options.distributor).split(',') : [])
   const shouldRefreshProviders = !distributorNames.length || options.providerSpecified
   for (const name of options.providers) {
@@ -181,6 +181,7 @@ export async function run(options) {
       ? await generateProviderFeed(name, {
         fixtures: options.fixtures,
         generated: generatedTimestamp,
+        now: refreshClock,
       })
       : generateCommittedFeed(name, { generated: generatedTimestamp }))
   }
@@ -195,7 +196,7 @@ export async function run(options) {
     }
     distributorState = { unconfirmedDistributions: [], noPublisherFeed: [], sourceConflicts: [], skippedModelCards: [] }
     for (const distributor of distributorNames) {
-      const source = await loadDistributorSource(distributor, { fixtures: options.fixtures })
+      const source = await loadDistributorSource(distributor, { fixtures: options.fixtures, now: refreshClock })
       const state = mergeDistributions(generated, {
         records: source.records,
         sourceUrl: source.sourceUrl,

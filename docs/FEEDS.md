@@ -11,7 +11,7 @@ have no source to point to.
 |---|---|---|
 | `openai.json` | [OpenAI deprecations](https://developers.openai.com/api/docs/deprecations) | the models endpoint (needs `OPENAI_API_KEY`) |
 | `anthropic.json` | [Anthropic model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations), including "not sooner than" dates for active models | the model overview pages listed in `llms.txt` (no key needed), and the models endpoint when `ANTHROPIC_API_KEY` is set |
-| `google.json` | [Gemini API deprecations](https://ai.google.dev/gemini-api/docs/deprecations) | the models endpoint (`GEMINI_API_KEY`; locally `GOOGLE_API_KEY` also works) |
+| `google.json` | [Gemini API deprecations](https://aistudio.google.com/docs/deprecations) | the models endpoint (`GEMINI_API_KEY`; locally `GOOGLE_API_KEY` also works) |
 | `mistral.json` | [Mistral models](https://docs.mistral.ai/models) | the models endpoint (`MISTRAL_API_KEY`) |
 | `cohere.json` | [Cohere deprecations](https://docs.cohere.com/docs/deprecations) | the models endpoint (`COHERE_API_KEY`) |
 | `amazon.json` | Amazon's own models. The entries are carried forward from the committed file; only their `aws-bedrock` dates are refreshed from the [Bedrock lifecycle pages](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html). | |

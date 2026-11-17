@@ -26,7 +26,8 @@ export const PROVIDERS = {
     publisher: 'google',
     feedFile: 'google.json',
     modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
-    deprecationsUrl: 'https://ai.google.dev/gemini-api/docs/deprecations',
+    deprecationsUrl: 'https://aistudio.google.com/docs/deprecations',
+    deprecationsFetchUrl: 'https://aistudio.google.com/docs/deprecations.md',
     keyEnv: 'GEMINI_API_KEY',
     keyEnvs: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
     keyHeader: 'x-goog-api-key',
@@ -183,7 +184,7 @@ export function sectionProse(html, qualifier) {
   }
 }
 
-function dateCandidates(text) {
+export function dateCandidates(text) {
   const normalised = plainText(text)
   const candidates = []
   for (const match of normalised.matchAll(new RegExp(DATE_PATTERN.source, 'g'))) {
@@ -523,6 +524,8 @@ export function parseDeprecationsHtml(html, sourceUrl, provider = 'provider') {
   return [...unique.values()]
 }
 
+const OPENAI_NOTICE_HEADER = /^(?:notice|announcement) date$/
+
 function openAIHeaderIndexes(rows) {
   for (const [index, row] of rows.entries()) {
     const labels = row.cells.map(cell => cell.text.toLowerCase())
@@ -530,7 +533,16 @@ function openAIHeaderIndexes(rows) {
     const model = labels.findIndex(label => /\b(model|system)\b/i.test(label) && !/replacement|substitute/i.test(label))
     const replacement = labels.findIndex(label => /recommended\s+replacement|replacement|substitute\s+model|successor/i.test(label))
     if (date >= 0 && endpointLikeLabels(labels)) return { rejectedReason: 'endpoint-or-product-deprecation-table' }
-    if (date >= 0 && model >= 0 && replacement >= 0) return { row: index, date, model, replacement }
+    if (date >= 0 && model >= 0 && replacement >= 0) {
+      const notice = labels.findIndex(label => OPENAI_NOTICE_HEADER.test(label.trim()))
+      const unrecognised = labels.find((label, column) => column !== notice && /notice|announc/i.test(label))
+      if (unrecognised !== undefined) throw new Error(`openai deprecations table has an unrecognised notice header: ${unrecognised.trim()}`)
+      const statuses = labels.flatMap((label, column) => /\bstatus\b/i.test(label) ? [column] : [])
+      if (statuses.length > 1) throw new Error('openai deprecations table has more than one status column')
+      const status = statuses[0] ?? -1
+      if (status >= 0 && notice < 0) throw new Error('openai deprecations table has a status column but no notice date column')
+      return { row: index, date, model, replacement, notice, status }
+    }
   }
   return undefined
 }
@@ -557,6 +569,30 @@ function openAIAnnouncementDate(headings, tableStart) {
   return heading?.date
 }
 
+function openAINoticeDate(cell, id) {
+  let dates
+  try {
+    dates = cell ? dateCandidates(cell.text) : []
+  } catch (error) {
+    throw new Error(`openai deprecations entry ${id} has no valid notice date: ${error.message}`)
+  }
+  if (dates.length !== 1) throw new Error(`openai deprecations entry ${id} has no valid notice date`)
+  return dates[0].date
+}
+
+function openAIAssertRowShape(row, header) {
+  const span = /<t[hd]\b[^>]*\b(?:col|row)span\b/i.test(row.html)
+  if (span || row.cells.length !== header.cells.length) {
+    const text = plainText(row.html).replace(/\s+/g, ' ').trim().slice(0, 200)
+    throw new Error(`openai deprecations table row "${text}" has ${span ? 'a spanning cell' : `${row.cells.length} cells`}, but its header has ${header.cells.length} columns`)
+  }
+}
+
+function openAIStatusAccepted(status, shutdown, today) {
+  if (/^deprecated$/i.test(status)) return true
+  return /^shut ?down$/i.test(status) && shutdown <= today
+}
+
 const OPENAI_MONTH_DAYS = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 function openAIMonthDaySnapshot(token) {
@@ -574,6 +610,8 @@ function openAIModelIds(fragment) {
   const snapshots = candidates.filter(token => !candidates.some(snapshot => token === `${snapshot}-completions`))
   if (snapshots.length > 1) {
     const undated = tokens.filter(token => !snapshots.includes(token))
+    const family = undated.length === 1 && snapshots.every(snapshot => /-(?:19|20)\d{2}-\d{2}-\d{2}$/.test(snapshot) && snapshot.slice(0, -11) === undated[0])
+    if (family) return snapshots.map(id => ({ id, aliases: [undated[0]] }))
     const completionsOf = token => snapshots.find(snapshot => token === `${snapshot}-completions`)
     const ambiguous = undated.find(token => MODEL_ID_PATTERN.test(token) && !completionsOf(token))
     if (ambiguous) throw new Error(`openai deprecations row lists snapshots ${snapshots.join(', ')} with ambiguous alias ${ambiguous}`)
@@ -587,18 +625,31 @@ function openAIModelIds(fragment) {
   }]
 }
 
-const openAIReplacement = extractReplacementFields
+// Without code elements, IDs come only from a cell that is a plain list of IDs, never from prose.
+function openAIReplacement(fragment) {
+  const text = plainText(fragment).trim()
+  if (codeText(fragment).length) return extractReplacementFields(fragment)
+  if (!Object.keys(extractReplacementFields(fragment)).length) return {}
+  const parts = [...new Set(text.split(/\s*(?:[,/]|\bor\b|\band\b)\s*/i).filter(Boolean))]
+  if (parts.length && parts.every(part => /^[a-z0-9][a-z0-9._-]*$/.test(part) && /[\d-]/.test(part))) {
+    return parts.length === 1 ? { replacement: parts[0] } : { replacement_options: parts }
+  }
+  const note = replacementNote(text, [])
+  return note ? { replacement_note: note } : {}
+}
 
 const OPENAI_NON_MODEL_TOKEN = /^\/v\d+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*$|^[A-Z][A-Za-z-]*(?: [A-Z][A-Za-z-]*)* API$|^OpenAI-Beta: [a-z_]+=v\d+$/
 
-/** Parse the OpenAI docs page, whose announcement date is a section heading. */
-export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl) {
+/** Parse the OpenAI docs page, whose announcement date is a per-row notice date or a section heading. */
+export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl, { now = new Date() } = {}) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('openai deprecations page is empty')
   try {
     new URL(sourceUrl)
   } catch {
     throw new Error(`openai deprecations source is not a URL: ${sourceUrl}`)
   }
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new Error('openai deprecations refresh clock is not a valid date')
+  const today = now.toISOString().slice(0, 10)
 
   const content = stripOpenAIChrome(html)
   const headings = openAIHeadings(content)
@@ -617,10 +668,12 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     }
     recognisedTables++
 
-    const announced = openAIAnnouncementDate(headings, table.index)
-    if (!announced) throw new Error('openai deprecations table has no announcement date')
+    const tableAnnounced = headers.notice >= 0 ? undefined : openAIAnnouncementDate(headings, table.index)
+    if (headers.notice < 0 && !tableAnnounced) throw new Error('openai deprecations table has no announcement date')
+    if (headers.notice >= 0) openAIAssertRowShape(rows[headers.row], rows[headers.row])
 
     for (const row of rows.slice(headers.row + 1)) {
+      if (headers.notice >= 0) openAIAssertRowShape(row, rows[headers.row])
       const modelCell = row.cells[headers.model]
       if (!modelCell || !modelCell.text) continue
       const parsedModels = openAIModelIds(modelCell.html)
@@ -637,9 +690,16 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
         continue
       }
 
+      const announced = headers.notice >= 0 ? openAINoticeDate(row.cells[headers.notice], parsedModels[0].id) : tableAnnounced
       const shutdownCell = row.cells[headers.date]
       const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
       if (!shutdown) throw new Error(`openai deprecations entry ${parsedModels[0].id} has no valid shutdown date`)
+      if (headers.status >= 0) {
+        const status = row.cells[headers.status]?.text.trim() ?? ''
+        if (!openAIStatusAccepted(status, shutdown, today)) {
+          throw new Error(`openai deprecations entry ${parsedModels[0].id} has an unrecognised status for shutdown ${shutdown} on ${today}: ${status || '(empty)'}`)
+        }
+      }
       if (shutdown < announced) {
         throw new Error(`openai deprecations entry ${parsedModels[0].id} has shutdown before announcement`)
       }
@@ -979,14 +1039,183 @@ function googleShutdown(text, id) {
 
 const GOOGLE_PRECISION_PATTERN = /earliest\s+possible|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i
 
-function googleDatePrecision(sectionText, shutdownText) {
+const GOOGLE_PRECISION_HINT = /\bearliest\b|\bno\s+sooner\b|\bnot\s+earlier\b|\bno\s+earlier\b|\bnot\s+before\b|\bon\s+or\s+after\b|\bsoonest\b/i
+
+function assertGooglePrecisionWording(text, context) {
+  if (GOOGLE_PRECISION_HINT.test(text) && !GOOGLE_PRECISION_PATTERN.test(text)) {
+    throw new Error(`google deprecations ${context} qualifies dates in unrecognised words: ${text}`)
+  }
+}
+
+function googleDatePrecision(sectionText, shutdownText, id) {
+  assertGooglePrecisionWording(shutdownText, `entry ${id} shutdown cell`)
   return GOOGLE_PRECISION_PATTERN.test(`${sectionText} ${shutdownText}`) ? 'earliest' : undefined
+}
+
+// The row's own ID in its replacement cell is routing prose, not a successor.
+function googleReplacementFields(html, id) {
+  const codes = codeText(html)
+  if (codes.length && codes.every(code => code === id)) {
+    const { replacement_note: note } = extractReplacementFields(html)
+    return note ? { replacement_note: note } : {}
+  }
+  const fields = extractReplacementFields(html.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (match, inner) => plainText(inner) === id ? inner : match))
+  if (fields.replacement === id) delete fields.replacement
+  if (fields.replacement_options) {
+    fields.replacement_options = fields.replacement_options.filter(token => token !== id)
+    if (!fields.replacement_options.length) delete fields.replacement_options
+  }
+  return fields
 }
 
 export const rowLifecycleLabel = record => `${record.shutdown ?? 'no date'} (${record.date_precision ?? 'exact'})`
 
-/** Parse Google's Gemini deprecations tables. */
-export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.deprecationsUrl) {
+const GOOGLE_TABLE_HEADER = ['Model', 'Release date', 'Shutdown date', 'Recommended replacement']
+
+const escapeHtml = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+const MARKDOWN_ESCAPABLE = /[!-/:-@[-`{-~]/
+const unescapeMarkdown = text => text.replace(/\\([!-/:-@[-`{-~])/g, '$1')
+
+// Drops Markdown emphasis and backslash escapes; an underscore inside a word is kept.
+function googleInlineText(text) {
+  let output = ''
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]
+    if (char === '\\' && MARKDOWN_ESCAPABLE.test(text[index + 1] ?? '')) output += text[++index]
+    else if (char === '~' && text[index + 1] === '~') index++
+    else if (char === '_' && !(/[\p{L}\p{N}]/u.test(text[index - 1] ?? '') && /[\p{L}\p{N}]/u.test(text[index + 1] ?? ''))) continue
+    else if (char !== '*') output += char
+  }
+  return output
+}
+
+function googleCellHtml(markdown, where) {
+  if (markdown.includes('{%')) throw new Error(`google deprecations table ${where} has a Markdoc tag in a cell: ${markdown}`)
+  const unlinked = markdown.replace(/(?<!\\)\[((?:[^[\]`]|`[^`]*`)*)\]\([^()\s]*\)/g, '$1')
+  const parts = []
+  let text = ''
+  for (let index = 0; index < unlinked.length; index++) {
+    const char = unlinked[index]
+    if (char === '\\' && parts.length % 2 === 0 && MARKDOWN_ESCAPABLE.test(unlinked[index + 1] ?? '')) {
+      text += char + unlinked[++index]
+    } else if (char === '`') {
+      parts.push(text)
+      text = ''
+    } else {
+      text += char
+    }
+  }
+  parts.push(text)
+  if (parts.length % 2 === 0) throw new Error(`google deprecations table ${where} has an unbalanced code span: ${markdown}`)
+  return parts.map((part, index) => index % 2 ? `<code>${escapeHtml(part)}</code>` : escapeHtml(googleInlineText(part))).join('')
+}
+
+const GOOGLE_MODEL_CELL = /^(?:`[^`]+`|\[`[^`]+`\]\([^()\s]*\))$/
+
+function googleMarkdocTable(lines, where) {
+  const rows = [[]]
+  let indent
+  let cell
+  for (const line of lines) {
+    if (!line.trim()) continue
+    const separator = line.match(/^(\s*)---\s*$/)
+    if (separator && indent !== undefined && separator[1].length > indent) {
+      throw new Error(`google deprecations table ${where} has a row separator inside a cell`)
+    }
+    if (separator) {
+      if (!rows.at(-1).length) throw new Error(`google deprecations table ${where} has an empty row`)
+      rows.push([])
+      cell = undefined
+      continue
+    }
+    const bullet = line.match(/^(\s*)\*(?:\s(.*))?$/)
+    if (bullet) {
+      indent ??= bullet[1].length
+      if (bullet[1].length !== indent) throw new Error(`google deprecations table ${where} has a nested list: ${line.trim()}`)
+      cell = [bullet[2] ?? '']
+      rows.at(-1).push(cell)
+      continue
+    }
+    if (!cell || line.match(/^\s*/)[0].length <= indent) throw new Error(`google deprecations table ${where} has text outside a cell: ${line.trim()}`)
+    cell.push(line)
+  }
+  if (!rows.at(-1).length) throw new Error(`google deprecations table ${where} ends with an empty row`)
+  const [header, ...body] = rows.map(row => row.map(parts => parts.map(part => part.trim()).join(' ').trim()))
+  const labels = header.map(label => label.toLowerCase().replace(/\s+/g, ' '))
+  const expected = GOOGLE_TABLE_HEADER.slice(1).map(label => label.toLowerCase())
+  if (labels.length !== GOOGLE_TABLE_HEADER.length || !['model', 'agent'].includes(labels[0]) || labels.slice(1).join('|') !== expected.join('|')) {
+    throw new Error(`google deprecations table ${where} has an unrecognised header layout: ${header.join(' | ')}`)
+  }
+  if (!body.length) throw new Error(`google deprecations table ${where} has no rows`)
+  for (const [index, row] of body.entries()) {
+    if (row.length !== header.length) throw new Error(`google deprecations table ${where} row ${index + 1} has ${row.length} cells; the header has ${header.length}`)
+    if (!row[0]) throw new Error(`google deprecations table ${where} row ${index + 1} has an empty model cell`)
+    const bare = unescapeMarkdown(row[0])
+    if (!GOOGLE_MODEL_CELL.test(row[0]) && !(MODEL_ID_PATTERN.test(bare) && googleInlineText(row[0]) === bare)) {
+      throw new Error(`google deprecations table ${where} row ${index + 1} model cell is not one model ID: ${row[0]}`)
+    }
+  }
+  // Agent tables share the model layout, so both use the labels the HTML table reader expects.
+  const head = `<tr>${GOOGLE_TABLE_HEADER.map(label => `<th>${label}</th>`).join('')}</tr>`
+  return `<table>${head}${body.map(row => `<tr>${row.map(text => `<td>${googleCellHtml(text, where)}</td>`).join('')}</tr>`).join('')}</table>`
+}
+
+/** Convert the Markdoc source of Google's deprecations page to headings, prose, and tables in HTML. */
+export function googleMarkdownToHtml(markdown) {
+  const output = []
+  let where = 'before the first heading'
+  let table
+  for (const line of stripFencedCodeBlocks(stripComments(markdown)).split('\n')) {
+    const trimmed = line.trim()
+    const tableTag = /\{%\s*\/?\s*table\b/.test(trimmed)
+    if (table) {
+      if (trimmed === '{% /table %}') {
+        output.push(googleMarkdocTable(table, where))
+        table = undefined
+      } else if (tableTag) {
+        throw new Error(`google deprecations table ${where} has a nested or malformed table tag: ${trimmed}`)
+      } else {
+        table.push(line)
+      }
+      continue
+    }
+    if (trimmed === '{% table %}') {
+      table = []
+      continue
+    }
+    const unquoted = trimmed.replace(/^(?:>\s*)+/, '')
+    const pipeTable = /^\|.*\|$/.test(unquoted) || /^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?$/.test(unquoted)
+    if (tableTag || pipeTable || /<table\b/i.test(trimmed)) {
+      throw new Error(`google deprecations page has an unsupported table ${where}: ${trimmed}`)
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/)
+    if (heading) {
+      const attrs = heading[2].match(/\s*\{%([^%]*)%\}\s*$/)
+      const raw = (attrs ? heading[2].slice(0, attrs.index) : heading[2]).trim()
+      if (raw.includes('{%')) throw new Error(`google deprecations heading has an unrecognised Markdoc tag: ${heading[2]}`)
+      const text = googleInlineText(raw).trim()
+      const id = attrs?.[1].match(/\bid\s*=\s*"([^"]*)"/)?.[1]
+      const level = heading[1].length
+      output.push(`<h${level}${id === undefined ? '' : ` id="${escapeHtml(id)}"`}>${escapeHtml(text)}</h${level}>`)
+      where = `under "${text}"`
+      continue
+    }
+    const prose = googleInlineText(trimmed.replace(/\{%[^%]*%\}/g, ' ')).trim()
+    if (prose) output.push(`<p>${escapeHtml(prose)}</p>`)
+  }
+  if (table) throw new Error(`google deprecations table ${where} is not closed`)
+  return output.join('\n')
+}
+
+/** Parse the Markdoc source of Google's Gemini deprecations page. */
+export function parseGoogleDeprecations(markdown, sourceUrl = PROVIDERS.google.deprecationsUrl) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('google deprecations page is empty')
+  return parseGoogleDeprecationsHtml(googleMarkdownToHtml(markdown), sourceUrl)
+}
+
+/** Parse Google deprecations tables in HTML; the Markdown parser feeds its converted page through here. */
+export function parseGoogleDeprecationsHtml(html, sourceUrl = PROVIDERS.google.deprecationsUrl) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('google deprecations page is empty')
   try {
     new URL(sourceUrl)
@@ -1010,6 +1239,7 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
     }
     recognisedTables++
     const section = governingProse(table.index)
+    assertGooglePrecisionWording(section.text, 'section prose')
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       const shutdownCell = row.cells[headers.date]
@@ -1025,11 +1255,11 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
       const item = { id, source: sourceUrl }
       if (shutdown) {
         item.shutdown = shutdown
-        const precision = googleDatePrecision(section.text, shutdownText)
+        const precision = googleDatePrecision(section.text, shutdownText, id)
         if (precision) item.date_precision = precision
       }
       const replacementCell = row.cells[headers.recommended]
-      if (replacementCell) Object.assign(item, extractReplacementFields(replacementCell.html))
+      if (replacementCell) Object.assign(item, googleReplacementFields(replacementCell.html, id))
       if (section.archived) archived.add(item)
       records.push(item)
     }
@@ -1061,8 +1291,6 @@ export function parseGoogleDeprecations(html, sourceUrl = PROVIDERS.google.depre
   }
   return [...unique.values()]
 }
-
-export const parseGoogleGeminiDeprecations = parseGoogleDeprecations
 
 function mistralHeaderIndexes(rows, pendingHeaders) {
   const hasHeaderCells = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
@@ -2009,12 +2237,12 @@ export async function loadProviderSources(config, options = {}) {
     html = fs.readFileSync(fixturePath, 'utf8')
     notice(`notice: ${config.publisher} deprecations fixture: ${path.relative(process.cwd(), fixturePath)}`)
   } else {
-    html = await fetchBody(config.deprecationsUrl, {}, config.publisher, fetchImpl)
+    html = await fetchBody(config.deprecationsFetchUrl ?? config.deprecationsUrl, {}, config.publisher, fetchImpl)
   }
 
   const mistral = config.publisher === 'mistral' ? parseMistralDeprecations(html, config.deprecationsUrl) : undefined
   const deprecations = config.publisher === 'openai'
-    ? parseOpenAIDeprecations(html, config.deprecationsUrl)
+    ? parseOpenAIDeprecations(html, config.deprecationsUrl, { now: options.now })
     : config.publisher === 'google'
       ? parseGoogleDeprecations(html, config.deprecationsUrl)
       : config.publisher === 'anthropic'

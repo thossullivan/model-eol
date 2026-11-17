@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Deprecations | OpenAI API</title></head>
+<body>
+<nav><h2>Search the API docs</h2></nav>
+<main>
+<h1>Deprecations</h1>
+<h2 id="upcoming-deprecations" class="group flex items-center gap-2 mt-7 mb-2 scroll-mt-[110px]"><span class="min-w-0">Upcoming deprecations</span></h2>
+<div class="deprecation-schedule"><div class="table-wrapper md:max-w-5xl mx-auto overflow-x-auto"><table class="w-full">
+<thead>
+<tr>
+<th>Shutdown date</th>
+<th>Affected model</th>
+<th>Status</th>
+<th>Recommended replacement</th>
+<th>Notice date</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dec 11, 2026</strong></td>
+<td><span id="2026-06-11-gpt-5-and-o3-model-deprecations"><code>gpt-5</code>, <code>gpt-5-2025-08-07</code></span></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td><code>gpt-6.1-sol</code></td>
+<td>Jun 11, 2026</td>
+</tr>
+<tr>
+<td><strong>Dec 11, 2026</strong></td>
+<td><code>gpt-5-pro</code>, <code>gpt-5-pro-2025-10-06</code></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td><code>gpt-6.1-sol</code> (<code>reasoning.mode: pro</code>) in the Responses API</td>
+<td>Jun 11, 2026</td>
+</tr>
+<tr>
+<td><strong>Jan 6, 2027</strong></td>
+<td><code>gpt-4o-mini-tts</code>, <code>gpt-4o-mini-tts-2025-03-20</code>, <code>gpt-4o-mini-tts-2025-12-15</code></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td><code>gpt-realtime-2.1-mini</code></td>
+<td>Oct 1, 2026</td>
+</tr>
+<tr>
+<td><strong>Jan 14, 2027</strong></td>
+<td><span id="2026-10-14-gpt-4-series-model-deprecations">GPT-4o (<code>gpt-4o-2024-08-06</code>, <code>gpt-4o-2024-11-20</code>)</span></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td><code>gpt-6-luna</code></td>
+<td>Oct 14, 2026</td>
+</tr>
+<tr>
+<td><strong>Jan 20, 2027</strong></td>
+<td><code>gpt-4o-mini-transcribe-2025-03-20</code></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td><code>gpt-4o-mini-transcribe-2025-12-15</code></td>
+<td>Jul 20, 2026</td>
+</tr>
+<tr>
+<td><strong>Feb 1, 2027</strong></td>
+<td><span id="2026-11-05-gpt-55-cyber"><code>gpt-5.5-cyber-preview</code></span></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td>The most capable cyber model available to you.</td>
+<td>Nov 5, 2026</td>
+</tr>
+<tr>
+<td><strong>Feb 26, 2027</strong></td>
+<td><code>gpt-4o-mini-transcribe</code>, <code>gpt-4o-mini-transcribe-2025-12-15</code></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td><code>gpt-live-transcribe</code> or <code>gpt-transcribe</code></td>
+<td>Aug 26, 2026</td>
+</tr>
+</tbody>
+</table></div></div>
+<p>Fine-tuned versions of the models listed above follow the same shutdown schedule as their underlying base models.</p>
+<p>For speech migrations, see the <a href="/api/docs/guides/realtime">Realtime API guide</a> and the <a href="/api/docs/guides/transcription">transcription guide</a>.</p>
+<h2 id="feature-and-endpoint-deprecations" class="group flex items-center gap-2 mt-7 mb-2 scroll-mt-[110px]"><span class="min-w-0">Feature and endpoint deprecations</span></h2>
+<div class="deprecation-schedule"><div class="table-wrapper md:max-w-5xl mx-auto overflow-x-auto"><table class="w-full">
+<thead>
+<tr>
+<th>Shutdown date</th>
+<th>Affected feature or endpoint</th>
+<th>Status</th>
+<th>Recommended replacement</th>
+<th>Notice date</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Nov 30, 2026</strong></td>
+<td><span id="2026-06-03-reusable-prompts"><code>/v1/prompts</code> and reusable prompt objects</span></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td>Move prompt content into your application code. <a href="/api/docs/guides/prompting/migrate-from-prompt-object">Migration guide</a></td>
+<td>Jun 3, 2026</td>
+</tr>
+<tr>
+<td><strong>Nov 30, 2026</strong></td>
+<td><span id="2026-06-03-evals-platform">Evals dashboard, API, and graders for eval workflows</span></td>
+<td><span data-deprecation-status="read-only">Read-only</span></td>
+<td><a href="/cookbook/examples/evaluation/moving-from-openai-evals-to-promptfoo">Migrate to Promptfoo</a>. For fine-tuning graders, see the <a href="#update-to-openais-self-serve-fine-tuning">fine-tuning timeline</a>.</td>
+<td>Jun 3, 2026</td>
+</tr>
+<tr>
+<td><strong>Nov 30, 2026</strong></td>
+<td><span id="2026-06-03-agent-builder">Agent Builder</span></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td>Agents SDK or ChatGPT Workspace Agents. <a href="/api/docs/guides/agent-builder/migrate-from-agent-builder">Migration guide</a>. ChatKit remains available.</td>
+<td>Jun 3, 2026</td>
+</tr>
+<tr>
+<td><strong>Jan 6, 2027</strong></td>
+<td>Self-serve fine-tuning job creation</td>
+<td><span data-deprecation-status="restricted-access">Restricted access</span></td>
+<td>See the <a href="#update-to-openais-self-serve-fine-tuning">fine-tuning timeline</a>.</td>
+<td>May 7, 2026</td>
+</tr>
+<tr>
+<td><strong>Feb 26, 2027</strong></td>
+<td><code>/v1/audio/translations</code></td>
+<td><span data-deprecation-status="deprecated">Deprecated</span></td>
+<td><a href="/api/docs/guides/realtime-translation"><code>/v1/realtime/translations</code></a></td>
+<td>Aug 26, 2026</td>
+</tr>
+</tbody>
+</table></div></div>
+<h2 id="model-deprecation-notice-periods" class="group flex items-center gap-2 mt-7 mb-2 scroll-mt-[110px]"><span class="min-w-0">Model deprecation notice periods</span></h2>
+<p>We provide advance notice before retiring models so customers have time to plan and migrate. When we announce a model deprecation, we notify customers who are actively using the model by email and document the deprecation on this page.</p>
+<p>Unless safety or compliance concerns require a faster timeline, we provide the following minimum notice periods before model retirement:</p>
+<ul>
+<li><strong>Generally available models:</strong> At least 6 months.</li>
+<li><strong>Specialized variants of generally available models and image generation models:</strong> At least 3 months. Examples include chat variants such as <code>gpt-5.1-chat-latest</code>, Codex variants such as <code>gpt-5.3-codex</code>, and deep research variants such as <code>o3-deep-research</code>.</li>
+<li><strong>Preview models:</strong> Preview models, identified by <code>preview</code> in the model name, may be retired with much shorter notice, such as 2 weeks. Examples include <code>computer-use-preview</code> and <code>gpt-4o-audio-preview</code>. We don’t recommend using preview models for business-critical production workloads unless you can migrate on short notice.</li>
+</ul>
+<p>These notice periods give customers time to evaluate recommended replacement models, test application behavior, and complete migrations before a model is no longer available. In some cases, developers may be able to provision <strong>dedicated capacity for continued access</strong> after a model’s shutdown date. To explore this option, <a href="https://openai.com/contact-sales/">contact our sales team</a>.</p>
+<h2 id="best-practices" class="group flex items-center gap-2 mt-7 mb-2 scroll-mt-[110px]"><span class="min-w-0">Best practices</span></h2>
+<ul>
+<li>Check <strong>the documentation</strong> regularly for model deprecation updates.</li>
+<li>To monitor model shutdowns <strong>programmatically</strong>, call the <a href="/api/reference/resources/models/methods/list">List models endpoint</a> (<code>GET /v1/models</code>) and check each model’s optional <code>shutdown_date</code> field. The field is also available from the <a href="/api/reference/resources/models/methods/retrieve">Retrieve a model endpoint</a>.</li>
+</ul>
+<h2 id="migration-guidance" class="group flex items-center gap-2 mt-7 mb-2 scroll-mt-[110px]"><span class="min-w-0">Migration guidance</span></h2>
+<ul>
+<li>In Codex, invoke the <a href="https://github.com/openai/codex/tree/main/codex-rs/skills/src/assets/samples/openai-docs">OpenAI Docs skill</a> with <code>$openai-docs</code> and ask it to migrate your project to the recommended replacement.</li>
+<li>See the <a href="https://developers.openai.com/api/docs/guides/latest-model#gpt-6-astra-migration-quickstart"><strong>GPT-6 migration guide</strong></a>.</li>
+<li>Run representative requests against both models. Compare outputs, latency, and cost before switching production traffic to the replacement.</li>
+</ul>
+<h2 id="update-to-openais-self-serve-fine-tuning" class="group flex items-center gap-2 mt-7 mb-2 scroll-mt-[110px]"><span class="min-w-0">Update to OpenAI’s self-serve fine-tuning</span></h2>
+<p>On May 7th, 2026, we notified developers using OpenAI’s self-serve fine-tuning platform of updates to availability.</p>
+<p>Inference on fine-tuned models will continue to be available until the base models are deprecated.</p>
+<div class="table-wrapper md:max-w-5xl mx-auto overflow-x-auto"><table class="w-full">
+<thead>
+<tr>
+<th>Date</th>
+<th>Update</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>May 7, 2026</td>
+<td>Creating fine-tuning jobs or training is not available to organizations that have not previously run fine-tuning.</td>
+</tr>
+<tr>
+<td>July 2, 2026</td>
+<td>Creating fine-tuning jobs is no longer available to organizations that have not run inference on a fine-tuned model in the past 60 days.</td>
+</tr>
+<tr>
+<td>Jan 6, 2027</td>
+<td>Active existing customers will no longer be able to create new fine-tuning jobs on this date. Inference on fine-tuned models will be disabled only when the underlying base model is deprecated.</td>
+</tr>
+</tbody>
+</table></div>
+<astro-island uid="11haWz" prefix="r73" component-url="/_astro/Expander.react.CwEyUmJL.js?dpl=dpl_DuWgfCupyXxvHsYntTSr38NPGr7E" component-export="default" renderer-url="/_astro/client.DvWPd3sc.js?dpl=dpl_DuWgfCupyXxvHsYntTSr38NPGr7E" props="{&quot;revealOnHandledNavigation&quot;:[0,true],&quot;headingLevel&quot;:[0,2],&quot;headingId&quot;:[0,&quot;past-deprecations&quot;],&quot;label&quot;:[0,&quot;Past deprecations&quot;]}" ssr client="load" opts="{&quot;name&quot;:&quot;Expander&quot;,&quot;value&quot;:true}" await-children><div class="expn expn-linked"><h2 id="past-deprecations" class="m-0! min-w-0 flex-1" style="scroll-margin-top:var(--docs-scroll-offset, 0px)"><button class="expn-title" type="button" aria-expanded="false" aria-controls="expander-_r73R_0_"><span class="expn-icon" aria-hidden="true"></span><span class="expn-label">Past deprecations</span></button></h2><div class="expn-content hidden" id="expander-_r73R_0_"><astro-slot><div class="deprecation-schedule" data-sort-direction="descending"><div class="table-wrapper md:max-w-5xl mx-auto overflow-x-auto"><table class="w-full">
+<thead>
+<tr>
+<th>Shutdown date</th>
+<th>Affected model or feature</th>
+<th>Listed replacement</th>
+<th>Notice date</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Oct 23, 2026</strong></td>
+<td><span id="2026-04-22-legacy-gpt-model-snapshots"><code>gpt-3.5-turbo-0125</code>, <code>gpt-3.5-turbo</code>, <code>gpt-3.5-turbo-completions</code></span></td>
+<td><code>gpt-5.6-terra</code></td>
+<td>Apr 22, 2026</td>
+</tr>
+<tr>
+<td><strong>Oct 23, 2026</strong></td>
+<td><code>gpt-4-0613</code>, <code>gpt-4</code>, <code>gpt-4-0613-completions</code>, <code>gpt-4-completions</code></td>
+<td><code>gpt-5.6-sol</code></td>
+<td>Apr 22, 2026</td>
+</tr>
+<tr>
+<td><strong>Sep 28, 2026</strong></td>
+<td><code>babbage-002</code></td>
+<td><code>gpt-5.6-terra</code></td>
+<td>Sep 26, 2025</td>
+</tr>
+<tr>
+<td><strong>Sep 24, 2026</strong></td>
+<td><span id="2026-03-24-sora-2-video-generation-models-and-videos-api">Videos API</span></td>
+<td>No one-to-one replacement</td>
+<td>Mar 24, 2026</td>
+</tr>
+<tr>
+<td><strong>Sep 24, 2026</strong></td>
+<td><code>sora-2</code></td>
+<td>No one-to-one replacement</td>
+<td>Mar 24, 2026</td>
+</tr>
+<tr>
+<td><strong>Aug 26, 2026</strong></td>
+<td><span id="2025-08-20-assistants-api">Assistants API</span></td>
+<td>Responses API and Conversations API (<a href="/api/docs/assistants/migration">migration guide</a>)</td>
+<td>Aug 26, 2025</td>
+</tr>
+<tr>
+<td><strong>May 12, 2026</strong></td>
+<td><span id="2025-09-15-realtime-api-beta">OpenAI-Beta: realtime=v1</span></td>
+<td><a href="/api/docs/guides/realtime#beta-to-ga-migration">Realtime API migration guide</a></td>
+<td>Sep 15, 2025</td>
+</tr>
+<tr>
+<td><strong>Mar 26, 2026</strong></td>
+<td><span id="2025-09-26-legacy-gpt-model-snapshots-march-2026-shutdown"><code>gpt-4-0314</code></span></td>
+<td><code>gpt-5</code>, or <code>gpt-4.1</code> for latency-sensitive tasks that don’t require reasoning</td>
+<td>Sep 26, 2025</td>
+</tr>
+<tr>
+<td><strong>Mar 26, 2026</strong></td>
+<td><code>gpt-4-0125-preview</code> (including <code>gpt-4-turbo-preview</code> and <code>gpt-4-turbo-preview-completions</code>, which point to this snapshot)</td>
+<td><code>gpt-5</code>, or <code>gpt-4.1</code> for latency-sensitive tasks that don’t require reasoning</td>
+<td>Sep 26, 2025</td>
+</tr>
+<tr>
+<td><strong>Jun 6, 2025</strong></td>
+<td><code>gpt-4-32k-0314</code> <small class="deprecation-archive-price">Historical price $60.00 / 1M input tokens + $120 / 1M output tokens</small></td>
+<td><code>gpt-4o</code></td>
+<td>Jun 13, 2023</td>
+</tr>
+<tr>
+<td><strong>Oct 28, 2024</strong></td>
+<td><span id="2024-08-29-fine-tuning-training-on-babbage-002-and-davinci-002-models">New fine-tuning training on <code>babbage-002</code></span></td>
+<td><code>gpt-4o-mini</code></td>
+<td>Aug 29, 2024</td>
+</tr>
+<tr>
+<td><strong>Jun 13, 2024</strong> <small class="deprecation-date-qualification">Earliest estimate</small></td>
+<td><span id="2023-06-13-updated-chat-models"><code>gpt-4-0314</code></span> <small class="deprecation-archive-price">Historical price $30.00 / 1M input tokens + $60.00 / 1M output tokens</small></td>
+<td><code>gpt-4o</code></td>
+<td>Jun 13, 2023</td>
+</tr>
+<tr>
+<td><strong>Jan 4, 2024</strong></td>
+<td><code>davinci</code> <small class="deprecation-archive-price">Historical price $20.00 / 1M tokens</small></td>
+<td><code>davinci-002</code></td>
+<td>Jul 6, 2023</td>
+</tr>
+<tr>
+<td><strong>Jan 4, 2024</strong></td>
+<td><code>code-davinci-002</code> (base GPT models)</td>
+<td><code>gpt-3.5-turbo-instruct</code></td>
+<td>Jul 6, 2023</td>
+</tr>
+<tr>
+<td><strong>Jan 4, 2024</strong></td>
+<td><code>/v1/edits</code></td>
+<td><code>/v1/chat/completions</code></td>
+<td>Jul 6, 2023</td>
+</tr>
+<tr>
+<td><strong>Jan 4, 2024</strong></td>
+<td>Fine-tuning on <code>davinci</code> <small class="deprecation-archive-price">Training price $30.00 / 1M tokens. Usage price $120.00 / 1K tokens</small></td>
+<td><code>davinci-002</code>, <code>gpt-3.5-turbo</code>, <code>gpt-4o</code></td>
+<td>Jul 6, 2023</td>
+</tr>
+<tr>
+<td><strong>Mar 23, 2023</strong></td>
+<td><span id="2023-03-20-codex-models"><code>code-davinci-002</code> (Codex models)</span></td>
+<td><code>gpt-4o</code></td>
+<td>Mar 20, 2023</td>
+</tr>
+</tbody>
+</table></div></div>
+</main>
+</body>
+</html>
