@@ -83,8 +83,8 @@ and expects tables with a shutdown date column, a model column, and a
 replacement column. Each row's announcement date comes from the table's notice
 date column, or, in a table without one, from the heading above it.
 
-- The URL fetched is the `source` of the committed `feeds/openai.json`. The
-  constant in `providers.mjs` is used only when the feed has no `source`.
+- The URL fetched is the constant in `providers.mjs`. The committed feed's
+  `source` is used only when a provider has no constant.
 - `script`, `style`, `nav`, `header`, and `footer` elements are removed before
   headings and tables are read.
 - The header is the first row with three labels: a shutdown, retirement,
@@ -163,28 +163,48 @@ date column, or, in a table without one, from the heading above it.
 
 ## Google (Gemini API)
 
-The refresh reads the
-[Gemini API deprecations page](https://ai.google.dev/gemini-api/docs/deprecations)
-and expects tables with a model column, a shutdown date column, and a
-replacement column. The page has no announcement dates.
+The refresh reads the Markdown source of the
+[Gemini API deprecations page](https://aistudio.google.com/docs/deprecations),
+fetched from `https://aistudio.google.com/docs/deprecations.md` because the
+page itself is a JavaScript app with no tables in its HTML. Records and the
+feed cite the human page as `source`. The page has no announcement dates.
 
-- The URL fetched is the `source` of the committed `feeds/google.json`, with the
-  constant as a fallback.
-- The header is the first row of a table, in `th` or `td` cells, with a
-  shutdown date label, a "model" or "system" label, and a replacement or
-  successor label. Endpoint tables are skipped as for OpenAI.
-- The model ID is the first `code` element in the model cell, or the cell text
-  when it has no spaces. Rows without a usable ID or without a shutdown cell are
-  skipped. An ID that fails the grammar stops the run. The page supplies no
-  aliases.
+- The page is Markdoc. Each `{% table %}` block has a header row, then rows
+  separated by `---`, with one `* ` list item per cell. A cell may be empty and
+  may continue on more deeply indented lines. Headings keep their
+  `{% id="..." %}` as an anchor id. Markdoc tags elsewhere are removed and the
+  text around them is read as prose. Emphasis markers (`*`, `_` at a word edge,
+  `~~`) and backslash escapes are removed from prose and cells.
+- The header must be exactly Model (or Agent), Release date, Shutdown date,
+  Recommended replacement. Any other layout stops the run, as do a row whose
+  cell count differs from the header, a model cell that is not exactly one
+  code span (optionally inside a link) or one bare ID that passes the grammar
+  and carries no emphasis markup,
+  a nested list, text outside a cell, a `---` indented deeper than the cells,
+  an unbalanced code span, a Markdoc tag inside a cell, an unclosed table, a
+  table with no rows, and a pipe table (with or without outer pipes, also
+  inside a blockquote) or HTML table.
+- The model ID is that code span or bare ID. An ID that fails the grammar
+  stops the run. The page supplies no aliases.
 - An empty, `N/A`, dash, or "No shutdown date (announced)" cell gives no
   shutdown. Any other text must contain a date or the run stops.
 - `date_precision` is `earliest` when "earliest possible", "not moved to an
   earlier date", "or later", or "no sooner than" appears in the shutdown cell,
-  or in the prose of the table's section or any enclosing section (tables,
-  comments, and scripts excluded). The page's single note sits under the h1, so
-  today it covers every table.
-- Replacement cells follow the OpenAI rules.
+  or in the prose of the table's section or any enclosing section (tables
+  excluded). The page's single note callout sits under the h1, so today it
+  covers every table, including the Deprecated models and Deprecated agents
+  sections. Only a heading with the `retired-models` id or the text "Retired
+  models" is treated as an archive. If that prose or a shutdown cell says
+  "earliest", "no sooner", "not earlier", "no earlier", "not before", "on or
+  after", or "soonest" without one of those phrases, the run stops rather than
+  reading the dates as exact.
+- Replacement cells follow the OpenAI rules, except that the row's own model
+  ID is never a replacement. When every code span in the cell names the row's
+  own ID, only the note is kept. Otherwise those spans are read as prose and the
+  ID is removed from `replacement` and `replacement_options`. The page writes
+  "`gemini-3.8-flash` (`gemini-3.7-flash` ... routes API requests to
+  `gemini-3.8-flash`)". Only the exact ID is removed, so `gemini-a-002` stays a
+  replacement on the `gemini-a` row.
 - Duplicate rows for one ID must agree on shutdown, precision, and replacement,
   or the run stops.
 - The models endpoint
@@ -192,7 +212,7 @@ replacement column. The page has no announcement dates.
   or `GOOGLE_API_KEY` when running locally) is paged, up to 20 pages. Names
   must start with `models/`, which is stripped. A repeated page token stops the
   run.
-- Offline runs read `test/fixture/google-deprecations.html` and
+- Offline runs read `test/fixture/google-deprecations.md` and
   `test/fixture/google-models.json`.
 
 ## Mistral

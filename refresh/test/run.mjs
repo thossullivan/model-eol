@@ -42,6 +42,9 @@ import {
   parseAnthropicModels,
   dateFromText,
   parseGoogleDeprecations,
+  parseGoogleDeprecationsHtml,
+  googleMarkdownToHtml,
+  findFixture,
   parseGoogleModels,
   parseMistralDeprecations,
   parseCohereDeprecations,
@@ -198,7 +201,7 @@ assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFl
 const openaiHtml = fs.readFileSync(path.join(fixtures, 'openai-deprecations.html'), 'utf8')
 const anthropicHtml = fs.readFileSync(path.join(fixtures, 'anthropic-deprecations.html'), 'utf8')
 const bedrockHtml = fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')
-const googleHtml = fs.readFileSync(path.join(fixtures, 'google-deprecations.html'), 'utf8')
+const googleMarkdown = fs.readFileSync(path.join(fixtures, 'google-deprecations.md'), 'utf8')
 const vertexHtml = fs.readFileSync(path.join(fixtures, 'vertex-model-versions.html'), 'utf8')
 const endpointLookalikeHtml = fs.readFileSync(path.join(fixtures, 'anthropic-endpoint-lookalike.html'), 'utf8')
 const statusExtraColumnHtml = '<table><tr><th>Recommended replacement</th><th>Current state</th><th>API model name</th><th>Tentative retirement date</th><th>Deprecated</th></tr><tr><td><code>claude-next</code></td><td>Active</td><td><code>claude-extra-column</code></td><td>Not sooner than September 1, 2027</td><td>N/A</td></tr></table>'
@@ -207,7 +210,7 @@ const openaiEntries = parseOpenAIDeprecations(openaiHtml)
 const anthropicEntries = parseAnthropicDeprecations(anthropicHtml)
 const bedrockEntries = parseBedrockLifecycleHtml(bedrockHtml)
 const bedrockById = new Map(bedrockEntries.map(entry => [entry.bedrockId, entry]))
-const googleEntries = parseGoogleDeprecations(googleHtml)
+const googleEntries = parseGoogleDeprecations(googleMarkdown)
 const vertexEntries = parseVertexModelVersionsHtml(vertexHtml)
 const openaiIds = parseOpenAIModels(fs.readFileSync(path.join(fixtures, 'openai-models.json'), 'utf8'))
 const anthropicIds = parseAnthropicModels(fs.readFileSync(path.join(fixtures, 'anthropic-models.json'), 'utf8'))
@@ -711,11 +714,11 @@ assert(mixedEndpointEntries.length === 1 && mixedEndpointEntries[0].id === 'clau
 
 const googleEndpointOnlyHtml = '<table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table>'
 const mixedGoogleEndpointHtml = `${googleEndpointOnlyHtml}<table><tr><th>Shutdown date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>google-mixed</code></td><td><code>google-next</code></td></tr></table>`
-const mixedGoogleEndpointEntries = parseGoogleDeprecations(mixedGoogleEndpointHtml)
+const mixedGoogleEndpointEntries = parseGoogleDeprecationsHtml(mixedGoogleEndpointHtml)
 assert(mixedGoogleEndpointEntries.length === 1 && mixedGoogleEndpointEntries[0].id === 'google-mixed', 'Google deprecation parser skips endpoint tables while retaining model tables')
 let googleEndpointLookalikeReason = ''
 try {
-  parseGoogleDeprecations(googleEndpointOnlyHtml)
+  parseGoogleDeprecationsHtml(googleEndpointOnlyHtml)
 } catch (error) {
   googleEndpointLookalikeReason = error.message
 }
@@ -733,7 +736,7 @@ assert(openaiEndpointReason.includes('endpoint-or-product-deprecation-table') &&
 const googleCombinedEndpointHtml = '<table><tr><th>Shutdown date</th><th>Model / endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table>'
 let googleCombinedEndpointReason = ''
 try {
-  parseGoogleDeprecations(googleCombinedEndpointHtml)
+  parseGoogleDeprecationsHtml(googleCombinedEndpointHtml)
 } catch (error) {
   googleCombinedEndpointReason = error.message
 }
@@ -742,7 +745,7 @@ assert(googleCombinedEndpointReason.includes('endpoint-or-product-deprecation-ta
 const googleInvalidRowHtml = '<table><tr><th>Shutdown date</th><th>Model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table>'
 let googleInvalidRowReason = ''
 try {
-  parseGoogleDeprecations(googleInvalidRowHtml)
+  parseGoogleDeprecationsHtml(googleInvalidRowHtml)
 } catch (error) {
   googleInvalidRowReason = error.message
 }
@@ -1666,16 +1669,29 @@ const anthropicExact = anthropicEntries.find(entry => entry.id === 'claude-opus-
 assert(anthropicExact?.shutdown === '2026-08-05' && anthropicExact.announced === '2026-06-05' && anthropicExact.date_precision === undefined, 'Anthropic announcement rows take precedence over duplicate status rows')
 assert(openaiIds.length === 3 && openaiIds.includes('gpt-5.6-sol'), 'OpenAI models endpoint fixture parses')
 assert(anthropicIds.includes('claude-sonnet-4-6'), 'Anthropic models endpoint fixture parses')
-assert(googleEntries.length === 65, 'Google deprecations fixture parses all model rows')
-assert(googleEntries.find(entry => entry.id === 'gemini-2.5-pro')?.date_precision === 'earliest', 'Google marks earliest possible shutdown dates')
-assert(googleEntries.find(entry => entry.id === 'gemini-2.5-pro')?.shutdown === '2026-10-16', 'Google parses a human shutdown date')
-assert(googleEntries.find(entry => entry.id === 'gemini-3.6-flash')?.shutdown === undefined, 'Google preserves models without a shutdown date')
-assert(googleEntries.find(entry => entry.id === 'gemini-3.7-flash')?.replacement_note === autoRouteFields.replacement_note, 'Google fixture preserves auto-route replacement prose')
+const googleFixtureRows = [
+  ['gemini-4-hydrogen'],
+  ['gemini-3.8-live'],
+  ['gemini-3.7-flash', {}, { replacement: 'gemini-3.8-flash', replacement_note: 'gemini-3.7-flash is no longer available in Google AI Studio; the endpoint is not shutting down and automatically routes API requests to gemini-3.8-flash' }],
+  ['gemini-3.6-flash'],
+  ['gemini-3.5-flash', {}, { replacement: 'gemini-3.6-flash', replacement_note: 'gemini-3.5-flash is no longer available in Google AI Studio; the endpoint is not shutting down and automatically routes API requests to gemini-3.6-flash' }],
+  ['gemini-3.1-flash-lite', { shutdown: '2027-05-07' }, { replacement: 'gemini-3.5-flash-lite' }],
+  ['gemini-3.1-flash-tts-preview', { shutdown: '2026-12-18' }, { replacement_options: ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'] }],
+  ['gemini-3-pro-preview', { shutdown: '2026-03-09' }, { replacement: 'gemini-3.1-pro-preview' }],
+  ['gemini-2.5-pro', { shutdown: '2026-12-01' }, { replacement: 'gemini-3.8-flash', replacement_note: 'gemini-2.5-pro is no longer available in Google AI Studio; effective December 1, 2026, API requests to gemini-2.5-pro will automatically route to gemini-3.8-flash' }],
+  ['embedding-gecko-001', { shutdown: '2025-10-30' }, { replacement: 'gemini-embedding-2' }],
+  ['veo-3.0-generate-001', { shutdown: '2026-06-30' }, { replacement: 'gemini-omni-1.2-flash', replacement_note: 'the GA models on the Gemini Enterprise Agent Platform' }],
+  ['gemini-omni-1.1-flash', { shutdown: '2026-12-03' }, { replacement: 'gemini-omni-1.2-flash', replacement_note: 'Effective December 3, 2026, the endpoint is automatically routing API requests to gemini-omni-1.2-flash' }],
+  ['gemini-decision-1'],
+  ['deep-research-pro-preview-12-2025', { shutdown: '2026-10-23' }, { replacement: 'deep-research-preview-04-2026' }],
+].map(([id, dates = {}, replacement = {}]) => ({ id, source: PROVIDERS.google.deprecationsUrl, ...dates, ...(dates.shutdown ? { date_precision: 'earliest' } : {}), ...replacement }))
+strictAssert.deepEqual(googleEntries, googleFixtureRows, 'Google Markdown fixture: every row parses with the callout precision, deprecated sections, wrapped and linked cells, and the agent table')
+assert(PROVIDERS.google.deprecationsFetchUrl === `${PROVIDERS.google.deprecationsUrl}.md` && googleEntries.every(entry => entry.source === PROVIDERS.google.deprecationsUrl), 'Google fetches the Markdown page but cites the human page as source')
 assert(googleIds.length === 3 && googleIds.includes('gemini-2.5-pro'), 'Google models endpoint fixture strips the models/ prefix')
 const genericStructuredHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>generic-structured</code></td><td><code>first-model</code> or <code>second-model</code></td></tr></table>${anthropicStatusTable('generic-structured', 'Retired', '2026-01-01', '2027-01-01')}`
 const googleStructuredHtml = '<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>google-structured</code></td><td>2027-01-01</td><td>first-model or second-model*</td></tr></table>'
 const genericStructured = parseAnthropicDeprecations(genericStructuredHtml)[0]
-const googleStructured = parseGoogleDeprecations(googleStructuredHtml)[0]
+const googleStructured = parseGoogleDeprecationsHtml(googleStructuredHtml)[0]
 assert(JSON.stringify(genericStructured.replacement_options) === JSON.stringify(['first-model', 'second-model']), 'generic parser uses structured replacement routing')
 assert(!googleStructured.replacement && JSON.stringify(googleStructured.replacement_options) === JSON.stringify(['first-model']) && googleStructured.replacement_note === 'second-model*', 'Google parser keeps prose replacement tokens issue-only')
 assert(vertexEntries.length === 41, 'Vertex model-versions fixture parses model rows')
@@ -2608,7 +2624,7 @@ for (const failure of ['HTTP', 'empty', 'oversized-header', 'oversized-stream'])
 const boundedPublishers = {
   openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiHtml, credential: 'Authorization' },
   anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key' }, html: anthropicHtml, credential: 'x-api-key' },
-  google: { env: { GEMINI_API_KEY: 'fixture-key' }, html: googleHtml, credential: 'x-goog-api-key' },
+  google: { env: { GEMINI_API_KEY: 'fixture-key' }, html: googleMarkdown, credential: 'x-goog-api-key' },
   mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralHtml, credential: 'Authorization' },
   cohere: { env: { COHERE_API_KEY: 'fixture-key' }, html: cohereHtml, credential: 'Authorization' },
 }
@@ -2617,8 +2633,9 @@ const isModelsUrl = (publisher, url) => {
   const actual = new URL(url)
   return actual.origin === expected.origin && actual.pathname === expected.pathname
 }
+const deprecationsPageUrl = publisher => PROVIDERS[publisher].deprecationsFetchUrl ?? PROVIDERS[publisher].deprecationsUrl
 const boundedResponse = (publisher, url, override) => {
-  const page = isModelsUrl(publisher, url) ? 'models' : url === PROVIDERS[publisher].deprecationsUrl ? 'deprecations' : 'anthropic-page'
+  const page = isModelsUrl(publisher, url) ? 'models' : url === deprecationsPageUrl(publisher) ? 'deprecations' : 'anthropic-page'
   if (override?.[page]) return override[page]()
   if (page === 'models') return new Response(fs.readFileSync(path.join(fixtures, `${publisher}-models.json`), 'utf8'))
   if (page === 'deprecations') return new Response(boundedPublishers[publisher].html)
@@ -2633,7 +2650,7 @@ for (const publisher of Object.keys(boundedPublishers)) {
   })
   const { credential } = boundedPublishers[publisher]
   const models = requests.filter(request => isModelsUrl(publisher, request.url))
-  assert(result.endpointAvailable && models.length >= 1 && requests.some(request => request.url === PROVIDERS[publisher].deprecationsUrl), `${publisher} bounded refresh still reads its models endpoint and deprecations page`)
+  assert(result.endpointAvailable && models.length >= 1 && requests.some(request => request.url === deprecationsPageUrl(publisher)), `${publisher} bounded refresh still reads its models endpoint and deprecations page`)
   assert(requests.every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en'), `${publisher} models and deprecations requests carry an abort deadline and request English`)
   assert(models.every(({ options }) => options.headers[credential]?.includes('fixture-key')) && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => !Object.hasOwn(options.headers, credential)), `${publisher} bounded fetch sends ${credential} only to the models endpoint`)
 
@@ -2880,7 +2897,7 @@ const paginatedGoogle = await loadProviderSources({
           nextPageToken: googlePageToken,
         }))
   }
-  return responseFor(googleHtml)
+  return responseFor(googleMarkdown)
 }))
 assert(JSON.stringify(paginatedGoogle.currentIds) === JSON.stringify(['google-page-one', 'google-shared', 'google-page-two']), 'Google models pagination combines pages and de-duplicates ids in first-seen order')
 assert(googlePageUrls.length === 2 && !googlePageUrls[0].searchParams.has('pageToken') && googlePageUrls[1].searchParams.get('pageToken') === googlePageToken, 'Google models pagination starts at page one and forwards the opaque nextPageToken')
@@ -2900,7 +2917,7 @@ try {
       }
       return { ok: false, status: 503, text: async () => 'try later' }
     }
-    return responseFor(googleHtml)
+    return responseFor(googleMarkdown)
   }))
 } catch (error) {
   googleHttpReason = error.message
@@ -2919,7 +2936,7 @@ try {
         ? responseFor(JSON.stringify({ models: [{ name: 'models/google-malformed-one' }], nextPageToken: 'malformed-page-two' }))
         : responseFor(JSON.stringify({ models: {} }))
     }
-    return responseFor(googleHtml)
+    return responseFor(googleMarkdown)
   }))
 } catch (error) {
   googleMalformedReason = error.message
@@ -2939,7 +2956,7 @@ try {
         nextPageToken: googleCycleTokens[call],
       }))
     }
-    return responseFor(googleHtml)
+    return responseFor(googleMarkdown)
   }))
 } catch (error) {
   googleCycleReason = error.message
@@ -2958,7 +2975,7 @@ try {
         nextPageToken: `google-cap-token-${googleCapCalls}`,
       }))
     }
-    return responseFor(googleHtml)
+    return responseFor(googleMarkdown)
   }))
 } catch (error) {
   googleCapReason = error.message
@@ -4079,14 +4096,14 @@ reviewTest('Issue 135 round 3: an Anthropic status row reaching an entry through
   }
 })
 reviewTest('2026-10-18 shapes: Google reads an N/A shutdown date as no shutdown', () => {
-  const [record] = parseGoogleDeprecations('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
+  const [record] = parseGoogleDeprecationsHtml('<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>August 13, 2026</td><td>N/A</td><td><code>gemini-3.8-flash</code></td></tr></table>')
   strictAssert.equal(record.id, 'gemini-3.7-flash')
   strictAssert.equal(record.shutdown, undefined)
   strictAssert.equal(record.replacement, 'gemini-3.8-flash')
-  strictAssert.throws(() => parseGoogleDeprecations('<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>N/A soon</td><td>---</td></tr></table>'), /unrecognised shutdown date: N\/A soon/)
+  strictAssert.throws(() => parseGoogleDeprecationsHtml('<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>gemini-3.7-flash</code></td><td>N/A soon</td><td>---</td></tr></table>'), /unrecognised shutdown date: N\/A soon/)
 })
 const precisionGoogleTable = (id, date) => `<table><tr><th>Model</th><th>Release date</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>${id}</code></td><td>January 1, 2026</td><td>${date}</td><td><code>gemini-next</code></td></tr></table>`
-const googlePrecisions = html => Object.fromEntries(parseGoogleDeprecations(html).map(record => [record.id, record.date_precision ?? 'exact']))
+const googlePrecisions = html => Object.fromEntries(parseGoogleDeprecationsHtml(html).map(record => [record.id, record.date_precision ?? 'exact']))
 reviewTest('Scoped precision: Google applies the page note to every model section below it', () => {
   const html = `<h1>Gemini deprecations</h1><p>Note: The shutdown dates listed in the table indicate the earliest possible dates on which a model might be retired.</p><h2>Gemini 3 models</h2>${precisionGoogleTable('gemini-a', 'May 7, 2027')}<h2>Embedding models</h2>${precisionGoogleTable('gemini-b', 'May 14, 2028')}`
   strictAssert.deepEqual(googlePrecisions(html), { 'gemini-a': 'earliest', 'gemini-b': 'earliest' })
@@ -4098,6 +4115,125 @@ reviewTest('Scoped precision: Google ignores a precision phrase in an unrelated 
 reviewTest('Scoped precision: Google keeps a sibling section qualifier and script text out of other tables', () => {
   const html = `<h1>Gemini deprecations</h1><h2>Gemini 3 models</h2><p>These dates are no sooner than listed.</p>${precisionGoogleTable('gemini-a', 'May 7, 2027')}<h2>Embedding models</h2>${precisionGoogleTable('gemini-b', 'May 14, 2028')}<script>const hint = "earliest possible"</script>`
   strictAssert.deepEqual(googlePrecisions(html), { 'gemini-a': 'earliest', 'gemini-b': 'exact' })
+})
+const googleMarkdocCells = cells => cells.map(cell => `  * ${cell}`).join('\n')
+const googleMarkdocTable = (rows, header = ['Model', 'Release date', 'Shutdown date', 'Recommended replacement']) =>
+  `{% table %}\n${[header, ...rows].map(googleMarkdocCells).join('\n\n  ---\n\n')}\n{% /table %}`
+const googleMarkdocRow = (id, date, replacement = '`gemini-next`') => [`\`${id}\``, 'January 1, 2026', date, replacement]
+const googleMarkdocNote = '{% callout type="note" %}\n  Note: The **shutdown dates listed in the table indicate the *earliest possible\n  dates* on which a model might be retired**.\n\n{% /callout %}'
+const googleMarkdocPage = (body, note = googleMarkdocNote) => `# Gemini deprecations\n\n${note}\n\n${body}\n`
+const googleMarkdownPrecisions = markdown => Object.fromEntries(parseGoogleDeprecations(markdown).map(record => [record.id, record.date_precision ?? 'exact']))
+reviewTest('Google Markdown: heading ids are stripped into attributes and table rows become cells', () => {
+  const html = googleMarkdownToHtml(googleMarkdocPage(`## Gemini 3 models  {% id="gemini-3-models" %}\n\n${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])}`))
+  assert(html.includes('<h2 id="gemini-3-models">Gemini 3 models</h2>') && html.includes('<td><code>gemini-a</code></td><td>January 1, 2026</td><td>May 7, 2027</td><td><code>gemini-next</code></td>'), 'Markdoc heading and table convert')
+})
+reviewTest('Google Markdown: the page callout makes every dated row earliest, and a page without it stays exact', () => {
+  const body = `## Gemini 3 models  {% id="gemini-3-models" %}\n\n${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027'), googleMarkdocRow('gemini-b', 'No shutdown date announced', '')])}\n\n### Deprecated models  {% id="gemini-3-deprecated-models" %}\n\n${googleMarkdocTable([googleMarkdocRow('gemini-old', 'March 9, 2026')])}`
+  strictAssert.deepEqual(googleMarkdownPrecisions(googleMarkdocPage(body)), { 'gemini-a': 'earliest', 'gemini-b': 'exact', 'gemini-old': 'earliest' })
+  strictAssert.deepEqual(googleMarkdownPrecisions(googleMarkdocPage(body, 'Shutdown dates are listed below.')), { 'gemini-a': 'exact', 'gemini-b': 'exact', 'gemini-old': 'exact' })
+  strictAssert.equal(parseGoogleDeprecations(googleMarkdocPage(body)).find(record => record.id === 'gemini-b').shutdown, undefined)
+})
+reviewTest('Google Markdown: a retired-models archive id reaches the archive rule and yields to the available row', () => {
+  const available = `## Gemini 3 models\n\n${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])}`
+  const archive = `## Archive  {% id="retired-models" %}\n\n${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027'), googleMarkdocRow('gemini-old', 'March 9, 2026')])}`
+  strictAssert.deepEqual(googleMarkdownPrecisions(googleMarkdocPage(`${archive}\n\n${available}`)), { 'gemini-a': 'earliest', 'gemini-old': 'exact' })
+})
+reviewTest('Google Markdown: wrapped cells, linked IDs, agent tables, and self-routing replacements', () => {
+  const rows = [
+    ['[`gemini-a`](/docs/models/gemini-a)', 'November 11, 2026', 'December 3,\n    2026', '`gemini-next` (Effective December 3, 2026, requests to `gemini-a` route to\n    `gemini-next`)'],
+  ]
+  const [record] = parseGoogleDeprecations(googleMarkdocPage(googleMarkdocTable(rows)))
+  strictAssert.deepEqual(record, { id: 'gemini-a', source: PROVIDERS.google.deprecationsUrl, shutdown: '2026-12-03', date_precision: 'earliest', replacement: 'gemini-next', replacement_note: 'Effective December 3, 2026, requests to gemini-a route to gemini-next' })
+  const [agent] = parseGoogleDeprecations(googleMarkdocPage(googleMarkdocTable([googleMarkdocRow('agent-preview-05-2026', 'October 5, 2026')], ['Agent', 'Release date', 'Shutdown date', 'Recommended replacement'])))
+  strictAssert.equal(agent.shutdown, '2026-10-05')
+})
+reviewTest('Google Markdown: a row whose cell count differs from the header stops the run', () => {
+  for (const row of [['`gemini-a`', 'January 1, 2026', 'May 7, 2027'], [...googleMarkdocRow('gemini-a', 'May 7, 2027'), 'extra']]) {
+    strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage(`## Gemini 3 models\n\n${googleMarkdocTable([row])}`)), /^Error: google deprecations table under "Gemini 3 models" row 1 has \d cells; the header has 4$/)
+  }
+})
+reviewTest('Google Markdown: an unknown header layout stops the run', () => {
+  for (const header of [['Model', 'Shutdown date', 'Recommended replacement'], ['Model', 'Release date', 'Shutdown date', 'Recommended replacement', 'Notes'], ['Endpoint', 'Release date', 'Shutdown date', 'Recommended replacement'], ['Model', 'Release date', 'Retirement date', 'Recommended replacement']]) {
+    strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage(googleMarkdocTable([header.map((_, index) => index ? 'x' : '`gemini-a`')], header))), /^Error: google deprecations table under "Gemini deprecations" has an unrecognised header layout: /, header.join())
+  }
+})
+reviewTest('Google Markdown: zero tables, header-only tables, and an empty page stop the run', () => {
+  strictAssert.throws(() => parseGoogleDeprecations('<!doctype html><html><body><div id="root"></div></body></html>'), /^Error: google deprecations page has no recognised model tables$/)
+  strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage('No tables here.')), /^Error: google deprecations page has no recognised model tables$/)
+  strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage(googleMarkdocTable([]))), /google deprecations table under "Gemini deprecations" has no rows/)
+  strictAssert.throws(() => parseGoogleDeprecations('  \n'), /google deprecations page is empty/)
+})
+reviewTest('Google Markdown: malformed Markdoc stops the run instead of guessing', () => {
+  const cases = [
+    [googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')]).replace('{% /table %}', ''), /is not closed/],
+    [googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')]).replace('  * `gemini-a`', 'stray text\n  * `gemini-a`'), /has text outside a cell: stray text/],
+    [googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')]).replace('  * May 7, 2027', '    * May 7, 2027'), /has a nested list/],
+    [googleMarkdocTable([['`gemini-a` or `gemini-b`', 'January 1, 2026', 'May 7, 2027', '']]), /under "Gemini deprecations" row 1 model cell is not one model ID: `gemini-a` or `gemini-b`$/],
+    [googleMarkdocTable([['`gemini-a` and gemini-b', 'January 1, 2026', 'May 7, 2027', '']]), /under "Gemini deprecations" row 1 model cell is not one model ID: `gemini-a` and gemini-b$/],
+    [googleMarkdocTable([['Gemini 3.1 Flash-Lite', 'January 1, 2026', 'May 7, 2027', '']]), /under "Gemini deprecations" row 1 model cell is not one model ID: Gemini 3.1 Flash-Lite$/],
+    ...['gemini-_a', 'gemini__a', 'gemini-a_'].map(id => [googleMarkdocTable([[id, 'January 1, 2026', 'May 7, 2027', '']]), new RegExp(`row 1 model cell is not one model ID: ${id}$`)]),
+    ...['- | - | -', ':-- | :-: | --:'].map(delimiter => [`${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])}\n\nModel | Shutdown date | Replacement\n${delimiter}`, /has an unsupported table/]),
+    [`${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])}\n\n> | Model | Shutdown date |\n> | --- | --- |\n> | gemini-b | May 7, 2027 |`, /has an unsupported table/],
+    [`${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])}\n\n> Model | Shutdown date\n> --- | ---`, /has an unsupported table/],
+    [`${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])}\n\nModel | Shutdown date\n--- | ---\ngemini-b | May 7, 2027`, /has an unsupported table/],
+    [`${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])}\n\nModel | Shutdown date\n:--- | ---:`, /has an unsupported table/],
+    [googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')]).replace('  * May 7, 2027', '  * May 7, 2027\n\n    ---\n'), /has a row separator inside a cell/],
+    [googleMarkdocTable([['', 'January 1, 2026', 'May 7, 2027', '']]), /row 1 has an empty model cell/],
+    [googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027', '`gemini-next')]), /has an unbalanced code span/],
+    [googleMarkdocTable([googleMarkdocRow('gemini-a', '{% colspan=2 %} May 7, 2027')]), /has a Markdoc tag in a cell/],
+    [`${googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])}\n\n| Model | Shutdown date |\n| --- | --- |`, /has an unsupported table/],
+    [googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')]).replace('\n\n  ---\n\n', '\n\n  ---\n\n  ---\n\n'), /has an empty row/],
+    [googleMarkdocTable([googleMarkdocRow('gemini a', 'May 7, 2027')]), /refused row: endpoint-or-product-row: gemini a/],
+  ]
+  for (const [body, pattern] of cases) strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage(body)), error => error.message.startsWith('google deprecations ') && pattern.test(error.message), String(pattern))
+})
+reviewTest('Google Markdown: emphasis and inline Markdoc tags in prose still carry the earliest qualifier', () => {
+  const table = googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])
+  for (const note of [
+    'Note: The shutdown dates indicate the *earliest*\n  possible dates on which a model might be retired.',
+    'Note: The shutdown dates indicate the **earliest** possible dates.',
+    'Note: The shutdown dates indicate the _earliest_ ~~possible~~ possible dates.',
+    '{% callout type="note" %}Note: The shutdown dates indicate the earliest possible dates.{% /callout %}',
+  ]) {
+    strictAssert.deepEqual(googleMarkdownPrecisions(googleMarkdocPage(table, note)), { 'gemini-a': 'earliest' }, note)
+  }
+})
+reviewTest('Google Markdown: reworded earliest wording stops the run instead of turning dates exact', () => {
+  const table = googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])
+  for (const note of ['Note: Models retire on the listed date at the *earliest*.', 'Note: Shutdown will come no sooner.', 'Note: Retirement is not earlier than listed.', 'Note: Models retire no earlier than the listed date.', 'Note: Models retire not before the listed date.', 'Note: Models retire on or after the listed date.', 'Note: The listed date is the soonest a model retires.']) {
+    strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage(table, note)), /^Error: google deprecations section prose qualifies dates in unrecognised words: /, note)
+  }
+  strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage(googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027 at the earliest')]), '')), /^Error: google deprecations entry gemini-a shutdown cell qualifies dates in unrecognised words: May 7, 2027 at the earliest$/)
+})
+reviewTest('Google Markdown: the row\'s own ID is never its replacement, but a longer ID that contains it is', () => {
+  const replacementOf = cell => {
+    const { id, source, shutdown, date_precision: precision, ...fields } = parseGoogleDeprecations(googleMarkdocPage(googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027', cell)])))[0]
+    return fields
+  }
+  strictAssert.deepEqual(replacementOf('`gemini-a`'), {})
+  strictAssert.deepEqual(replacementOf('gemini-a'), {})
+  strictAssert.deepEqual(replacementOf('`gemini-a` (still served until shutdown)'), { replacement_note: 'still served until shutdown' })
+  strictAssert.deepEqual(replacementOf('`gemini-a-002` (requests to `gemini-a` route to `gemini-a-002`)'), { replacement: 'gemini-a-002', replacement_note: 'requests to gemini-a route to gemini-a-002' })
+  strictAssert.deepEqual(replacementOf('`gemini-b` or `gemini-a`'), { replacement: 'gemini-b', replacement_note: 'gemini-a' })
+  for (const [cell, note] of [
+    ['`gemini-a` on the v1beta API', 'on the v1beta API'],
+    ['`gemini-a` (no change; v2 endpoint)', 'no change; v2 endpoint'],
+    ['`gemini-a` remains available; the endpoint routes to Gemini 3.8 Flash', 'remains available; the endpoint routes to Gemini 3.8 Flash'],
+    ['Keep using `gemini-a` with thinking_budget=0', 'Keep using gemini-a with thinking_budget=0'],
+  ]) strictAssert.deepEqual(replacementOf(cell), { replacement_note: note }, cell)
+})
+reviewTest('Google Markdown: cells drop emphasis and process backslash escapes', () => {
+  const [record] = parseGoogleDeprecations(googleMarkdocPage(googleMarkdocTable([['gemini\\_a', 'January 1, 2026', '*May 7, 2027*', '_Use_ `gemini-next` **now**']]), ''))
+  strictAssert.deepEqual(record, { id: 'gemini_a', source: PROVIDERS.google.deprecationsUrl, shutdown: '2027-05-07', replacement: 'gemini-next', replacement_note: 'Use gemini-next now' })
+})
+reviewTest('Google Markdown: offline runs read the Markdown fixture and cite the human page', () => {
+  assert(findFixture(fixtures, 'google', 'deprecations').endsWith('google-deprecations.md'), 'Google fixture is the Markdown page')
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-google-md-'))
+  const generated = run(['--provider', 'google', '--fixtures', fixtures, '--out', out])
+  strictAssert.equal(generated.code, 0, generated.err)
+  const feed = JSON.parse(fs.readFileSync(path.join(out, 'google.json'), 'utf8'))
+  strictAssert.equal(feed.source, PROVIDERS.google.deprecationsUrl)
+  strictAssert.equal(feed.models.find(model => model.id === 'gemini-3.1-flash-lite')?.source, PROVIDERS.google.deprecationsUrl)
 })
 const precisionVertexTable = (...rows) => `<table><tr><th>Model ID</th><th>Release date</th><th>Retirement date</th><th>Replacement model ID</th></tr>${rows.map(([id, date]) => `<tr><td><code>${id}</code></td><td>May 1, 2025</td><td>${date}</td><td></td></tr>`).join('')}</table>`
 const vertexPrecisions = html => Object.fromEntries(parseVertexModelVersionsHtml(html).map(record => [record.vertexId, record.date_precision ?? 'exact']))
@@ -4157,7 +4293,7 @@ reviewTest('PR 126 review: Vertex keeps the available row when the archive repea
 })
 reviewTest('PR 126 review: Google names both precisions when two available sections disagree', () => {
   const html = `<h1>Gemini deprecations</h1><h2>Gemini 3 models</h2><p>These dates are no sooner than listed.</p>${precisionGoogleTable('gemini-a', 'May 7, 2027')}<h2>Live API models</h2>${precisionGoogleTable('gemini-a', 'May 7, 2027')}`
-  strictAssert.throws(() => parseGoogleDeprecations(html), /conflicting rows for gemini-a: 2027-05-07 \(earliest\) and 2027-05-07 \(exact\)/)
+  strictAssert.throws(() => parseGoogleDeprecationsHtml(html), /conflicting rows for gemini-a: 2027-05-07 \(earliest\) and 2027-05-07 \(exact\)/)
 })
 reviewTest('PR 126 review: section prose excludes table text behind a heading inside a table or a nested table', () => {
   const lifecycle = precisionVertexTable(['gemini-y', 'October 20, 2026'])

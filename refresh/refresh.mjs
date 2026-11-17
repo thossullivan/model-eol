@@ -110,9 +110,8 @@ export async function generateProviderFeed(providerName, options = {}) {
   const committed = readCommitted(provider)
   const sourceProvider = {
     ...provider,
-    // The committed feed is the source of truth for the docs URL. The
-    // constant is only a fallback for a feed that predates this tool.
-    deprecationsUrl: committed.source ?? provider.deprecationsUrl,
+    // The constant wins so a moved docs page reaches the feed on the next refresh.
+    deprecationsUrl: provider.deprecationsUrl ?? committed.source,
   }
   const sources = await loadProviderSources(sourceProvider, options)
   const merged = mergeFeed(committed, {
