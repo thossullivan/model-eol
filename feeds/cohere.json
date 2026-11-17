@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "cohere",
-  "generated": "2026-09-09T00:22:25.924Z",
+  "generated": "2026-11-17T21:02:23.225Z",
   "source": "https://docs.cohere.com/docs/deprecations",
   "models": [
     {
@@ -113,18 +113,173 @@
       "source": "https://docs.cohere.com/docs/deprecations",
       "announced": "2024-12-02",
       "shutdown": "2025-04-30",
-      "replacement_options": [
-        "rerank-v3.5"
-      ]
+      "replacement": "rerank-v3.5"
     },
     {
       "id": "rerank-multilingual-v2.0",
       "source": "https://docs.cohere.com/docs/deprecations",
       "announced": "2024-12-02",
       "shutdown": "2025-04-30",
-      "replacement_options": [
-        "rerank-v3.5"
+      "replacement": "rerank-v3.5"
+    },
+    {
+      "id": "c4ai-aya-expanse-32b"
+    },
+    {
+      "id": "c4ai-aya-vision-32b"
+    },
+    {
+      "id": "cohere-transcribe-03-2026"
+    },
+    {
+      "id": "command-a-03-2025"
+    },
+    {
+      "id": "command-a-plus-05-2026",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2026-10-16",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
       ]
+    },
+    {
+      "id": "command-a-reasoning-08-2025"
+    },
+    {
+      "id": "command-a-translate-08-2025"
+    },
+    {
+      "id": "command-a-vision-07-2025"
+    },
+    {
+      "id": "command-r-08-2024",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2026-05-12",
+          "status": "retired",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
+    },
+    {
+      "id": "command-r-plus-08-2024",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2026-05-12",
+          "status": "retired",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
+    },
+    {
+      "id": "command-r7b-12-2024"
+    },
+    {
+      "id": "command-r7b-arabic-02-2025"
+    },
+    {
+      "id": "embed-english-light-v3.0"
+    },
+    {
+      "id": "embed-english-light-v3.0-image"
+    },
+    {
+      "id": "embed-english-v3.0"
+    },
+    {
+      "id": "embed-english-v3.0-image"
+    },
+    {
+      "id": "embed-multilingual-light-v3.0"
+    },
+    {
+      "id": "embed-multilingual-light-v3.0-image"
+    },
+    {
+      "id": "embed-multilingual-v3.0"
+    },
+    {
+      "id": "embed-multilingual-v3.0-image"
+    },
+    {
+      "id": "embed-v4.0"
+    },
+    {
+      "id": "embed-v5.0-fast"
+    },
+    {
+      "id": "embed-v5.0-pro"
+    },
+    {
+      "id": "north-mini-code-1.0"
+    },
+    {
+      "id": "north-small-translate-1.0"
+    },
+    {
+      "id": "parse-v5.0"
+    },
+    {
+      "id": "rerank-english-v3.0"
+    },
+    {
+      "id": "rerank-multilingual-v3.0"
+    },
+    {
+      "id": "rerank-v3.5",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2026-05-14",
+          "status": "retired",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
+    },
+    {
+      "id": "rerank-v4.0-fast",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-09-13",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
+    },
+    {
+      "id": "rerank-v4.0-pro",
+      "distributions": [
+        {
+          "via": "azure-ai-foundry",
+          "shutdown": "2027-09-13",
+          "status": "active",
+          "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        }
+      ]
+    },
+    {
+      "id": "rerank-v5.0-fast"
+    },
+    {
+      "id": "rerank-v5.0-pro"
+    },
+    {
+      "id": "tiny-aya-earth"
+    },
+    {
+      "id": "tiny-aya-fire"
+    },
+    {
+      "id": "tiny-aya-global"
+    },
+    {
+      "id": "tiny-aya-water"
     }
   ]
 }
