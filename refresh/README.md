@@ -9,6 +9,7 @@ the weekly workflow uses this code, see [docs/FEEDS.md](../docs/FEEDS.md).
 | `refresh.mjs` | Entry point. Fetches, parses, merges, writes, and prints the semantic diff. |
 | `providers.mjs` | Publisher parsers: OpenAI, Anthropic, Google, Mistral, Cohere. |
 | `distributors.mjs` | Distributor parsers: Bedrock, Vertex AI, Azure AI Foundry. |
+| `azure-models-api.mjs` | The Azure models API reader and its comparison with the Azure retirement page. |
 | `markdown.mjs` | Strict reader for GitHub-flavored Markdown pipe tables, with an HTML rendering for the HTML row readers. |
 | `fetch.mjs` | Bounded HTTP fetches (30-second deadline, 8 MiB limit) for Anthropic model pages and distributor pages. It re-exports `lib/fetch-bounded.mjs`, which the bot's `--feeds-url` download also uses. |
 | `diff.mjs` | The semantic diff used for `--check` and for refresh PR bodies. |
@@ -48,8 +49,9 @@ are accepted.
 
 Every fetch has a 30-second deadline over the request and body, and an 8 MiB
 body limit (`fetch.mjs`). Requests that carry an API key (the models endpoints)
-refuse redirects, so a key never follows a redirect to another origin; page
-fetches follow redirects. Error messages include at most 300 characters of the
+refuse redirects, so a key never follows a redirect to another origin. So does
+any request with extra headers, such as the Azure page's `Accept:
+text/markdown`; other page fetches follow redirects. Error messages include at most 300 characters of the
 error body on one line, with request header values redacted. Paged models
 endpoints stop the run if they still have more pages after 20; Mistral's is
 read in one request.
@@ -496,6 +498,37 @@ paragraphs so the section rules see the same text as on the HTML page.
 
 ## Azure AI Foundry
 
+The refresh reads the
+[Azure retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule)
+with `Accept: text/markdown` (`sourceHeaders`), which makes Microsoft Learn
+return the page's Markdown source instead of HTML. This content negotiation is
+undocumented. The URL answers without a redirect, which matters because a fetch
+with extra headers refuses redirects. Records and the feed cite the same URL.
+It runs only with `--distributor azure-ai-foundry`.
+
+The Markdown is rendered as HTML and read by the HTML page parser, so the
+footnote, section, and binding rules below apply to both. Pipe tables are read
+with [`markdown.mjs`](#markdown-pipe-tables); ATX headings become headings;
+consecutive prose lines become one paragraph, and a list item becomes an `li`.
+A `^N^` footnote marker outside a code span becomes `<sup>N</sup>`, so a cell
+`2027-04-14^3^` and a paragraph starting `^3^` read exactly as on the HTML page.
+
+- The body must be Markdown. An HTML body (content negotiation stopped working),
+  a raw HTML `<table>` outside fenced code, a setext heading, a misaligned pipe
+  table, or the private-use characters U+E000 and U+E001 (reserved for the
+  marker conversion) stop the run.
+- An escaped marker (`\^3\^`) or one inside a code span stays literal text, so
+  a retirement cell holding it is an invalid date. A footnote written as a list
+  item is not a footnote paragraph and doesn't define the marker.
+- Offline runs read `test/fixture/azure-model-retirement-schedule.md`, or
+  `azure-ai-foundry.md` or `azure-ai-foundry-lifecycle.md` in the fixtures
+  directory. `test/fixture/azure-model-retirement-schedule-paired.html` is the
+  HTML page recorded with it, and the older
+  `test/fixture/azure-model-retirement-schedule.html` is kept for the HTML
+  parser tests.
+
+Page rules:
+
 - Rows bind to publisher feeds through the Azure OpenAI, Anthropic, Mistral AI,
   and Cohere section headings.
 - OpenAI rows first try exact snapshot IDs and aliases. A bare model ID is used
@@ -531,6 +564,47 @@ paragraphs so the section rules see the same text as on the HTML page.
   lifecycle table stops the run.
 - Azure's status labels are mapped to `distributions[].status` as described in
   [SPEC.md](../SPEC.md#distributions).
+
+### Azure models API cross-check
+
+When `AZURE_MANAGEMENT_TOKEN` (a bearer token for
+`https://management.azure.com`) and `AZURE_SUBSCRIPTION_ID` are both set, the
+refresh also reads `GET /subscriptions/{id}/providers/Microsoft.CognitiveServices/locations/{location}/models?api-version=2026-11-01`
+for `eastus`, `eastus2`, `swedencentral`, and `westus`. In November 2026 those
+four locations together listed every OpenAI, Anthropic, Mistral, and Cohere
+entry seen in twelve sampled locations; `eastus` alone missed 37 of them.
+Fixture runs never read the API.
+
+- Neither variable set: the cross-check is skipped with a notice and the run is
+  unchanged. Only one set, a subscription that isn't a GUID, or a token with
+  whitespace stops the Azure source, and so does any HTTP error, including 401
+  and 403. Error messages show the subscription as `{subscriptionId}` and never
+  include the token.
+- Requests carry the token and refuse redirects. `nextLink` is followed up to
+  20 pages per location; a link that leaves the models endpoint for that
+  location, a repeated link, or a 21st page stops the run.
+- A response without a `value` array, an entry without `model.format`, `name`,
+  or `version`, a `lifecycleStatus` other than GenerallyAvailable, Preview,
+  Deprecating, Deprecated, or Legacy, or a `deprecation.inference` that isn't a
+  date at midnight UTC stops the run. OpenAI, Anthropic, Mistral AI, and Cohere
+  entries must also have names and versions that pass the identifier grammar.
+- Entries bind by `format` (OpenAI, Anthropic, Mistral AI, Cohere) and name the
+  way page rows do: OpenAI dated and four-digit versions use the snapshot ID,
+  and every other version and publisher uses the bare name, so hosting versions
+  collapse. Names are compared case-sensitively. Other formats are counted but
+  not compared.
+- The page stays authoritative and the API creates no records. A source
+  conflict is listed, with a notice, when an API date differs from the page
+  record's date (including a page record with no date), when the page has a date
+  and the API calls the model GenerallyAvailable or Preview with no date, or
+  when the API lists a Deprecating, Deprecated, or Legacy entry that the page
+  doesn't. Each distinct status and date is one conflict that names its
+  locations. Conflicts never fail the run.
+- One summary notice follows: `azure models API: N entries in L locations; N
+  deprecating/deprecated/legacy; N conflicts with the retirement page`.
+- The comparison is `reconcileAzureModelsApi` in `azure-models-api.mjs`. It
+  returns the page records unchanged, so letting API dates win later is a
+  change to that one function.
 
 ## All distributor tables
 

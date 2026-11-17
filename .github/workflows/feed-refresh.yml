@@ -5,7 +5,9 @@
 #
 # Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY / COHERE_API_KEY enable
 # the models endpoints so current-model entries (and policy-floor horizons)
-# populate.
+# populate. AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID sign in to
+# Azure through OIDC on main for the Azure models API cross-check; a failed
+# login fails the run, and other refs skip the cross-check with a notice.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
 # fine-grained PAT as MODEL_EOL_BOT_TOKEN if feed PRs should run checks.
 # Failures open or update one durable issue; the next successful check closes it.
@@ -21,6 +23,7 @@ concurrency: feed-refresh
 
 permissions:
   contents: write
+  id-token: write
   issues: write
   pull-requests: write
 
@@ -35,6 +38,17 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
+      # The Entra federated credential trusts only main, so other refs skip the Azure models API with a notice.
+      - name: Sign in to Azure for the models API
+        id: azure-login
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Check live sources for changes
         id: check
         env:
@@ -43,11 +57,34 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          AZURE_LOGIN: ${{ steps.azure-login.outcome }}
+          AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
+          # Exports the models API credentials; without a token the subscription alone makes the Azure source fail, never skip.
+          azure_api_env() {
+            if [ "$AZURE_LOGIN" = skipped ]; then
+              echo "::notice::Azure login runs only on main; the distributor check skips the Azure models API on $GITHUB_REF."
+              return 0
+            fi
+            local token=''
+            if [ "$AZURE_LOGIN" = success ]; then
+              token=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv) || token=''
+            fi
+            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
+            if [ -n "$token" ]; then
+              echo "::add-mask::$token"
+              export AZURE_MANAGEMENT_TOKEN="$token"
+            else
+              echo "::error::No Azure management token (azure/login outcome: $AZURE_LOGIN); the Azure models API check fails."
+            fi
+          }
           set +e
           node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
           providers=$?
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
+          (
+            azure_api_env
+            node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
+          )
           distributors=$?
           set -e
           cat provider-err.txt distributor-err.txt >&2 || true
@@ -76,9 +113,32 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          AZURE_LOGIN: ${{ steps.azure-login.outcome }}
+          AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
+          # Exports the models API credentials; without a token the subscription alone makes the Azure source fail, never skip.
+          azure_api_env() {
+            if [ "$AZURE_LOGIN" = skipped ]; then
+              echo "::notice::Azure login runs only on main; the distributor refresh skips the Azure models API on $GITHUB_REF."
+              return 0
+            fi
+            local token=''
+            if [ "$AZURE_LOGIN" = success ]; then
+              token=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv) || token=''
+            fi
+            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
+            if [ -n "$token" ]; then
+              echo "::add-mask::$token"
+              export AZURE_MANAGEMENT_TOKEN="$token"
+            else
+              echo "::error::No Azure management token (azure/login outcome: $AZURE_LOGIN); the Azure models API check fails."
+            fi
+          }
           node refresh/refresh.mjs
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
+          (
+            azure_api_env
+            node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
+          )
           node scripts/update-readme-freshness.mjs
           npm test
 

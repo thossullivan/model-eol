@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
   issues: write
 
 jobs:
@@ -30,6 +31,17 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
+      # The Entra federated credential trusts only main, so other refs skip the Azure models API with a notice.
+      - name: Sign in to Azure for the models API
+        id: azure-login
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Run the refresh parsers against live sources
         id: refresh
         timeout-minutes: 40
@@ -39,7 +51,27 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          AZURE_LOGIN: ${{ steps.azure-login.outcome }}
+          AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
+          # Exports the models API credentials; without a token the subscription alone makes the Azure source fail, never skip.
+          azure_api_env() {
+            if [ "$AZURE_LOGIN" = skipped ]; then
+              echo "::notice::Azure login runs only on main; the distributor check skips the Azure models API on $GITHUB_REF."
+              return 0
+            fi
+            local token=''
+            if [ "$AZURE_LOGIN" = success ]; then
+              token=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv) || token=''
+            fi
+            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
+            if [ -n "$token" ]; then
+              echo "::add-mask::$token"
+              export AZURE_MANAGEMENT_TOKEN="$token"
+            else
+              echo "::error::No Azure management token (azure/login outcome: $AZURE_LOGIN); the Azure models API check fails."
+            fi
+          }
           # Runs one check, retrying once after a pause when it exits other than 0 or 3; the files keep the last attempt.
           check_once_more() {
             local name=$1 code
@@ -58,7 +90,10 @@ jobs:
           set +e
           check_once_more provider node refresh/refresh.mjs --check
           providers=$?
-          check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check
+          (
+            azure_api_env
+            check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check
+          )
           distributors=$?
           set -e
           echo "provider check exited $providers" >&2

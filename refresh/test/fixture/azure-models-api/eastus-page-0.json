@@ -1,0 +1,852 @@
+{
+  "nextLink": "https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2026-11-01&$skiptoken=djE6NTA&$top=50",
+  "value": [
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/OpenAI.whisper.001",
+      "kind": "OpenAI",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "area": "US",
+          "audio": "true",
+          "audioTranscriptions": "true",
+          "audioTranslations": "true",
+          "scaleType": "Standard"
+        },
+        "deprecation": {
+          "inference": "2027-02-26T00:00:00Z"
+        },
+        "format": "OpenAI",
+        "isDefaultVersion": true,
+        "isMarketplaceRequired": false,
+        "lifecycleStatus": "GenerallyAvailable",
+        "maxCapacity": 9999,
+        "modelCatalogAssetId": "azureml://registries/azure-openai/models/whisper/versions/001",
+        "name": "whisper",
+        "skus": [],
+        "systemData": {
+          "createdAt": "2023-09-14T00:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2023-09-14T00:00:00Z",
+          "lastModifiedBy": "Microsoft",
+          "lastModifiedByType": "Application"
+        },
+        "version": "001"
+      },
+      "name": "OpenAI.whisper.001",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/OpenAI.gpt-4o.2024-05-13",
+      "kind": "OpenAI",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "FineTuneTokensMaxValue": "2000000000",
+          "FineTuneTokensMaxValuePerExample": "131072",
+          "agentsV2": "true",
+          "allowProvisionedManagedCommitment": "true",
+          "area": "US",
+          "assistants": "true",
+          "chatCompletion": "true",
+          "jsonObjectResponse": "true",
+          "maxContextToken": "128000",
+          "maxOutputToken": "4096",
+          "responses": "true"
+        },
+        "deprecation": {
+          "fineTune": "2026-12-09T00:00:00Z",
+          "inference": "2027-01-14T00:00:00Z"
+        },
+        "description": "GPT-4o integrates text and images in a single model, enabling it to handle multiple data types simultaneously. This multimodal approach enhances accuracy and responsiveness in human-computer interactions. GPT-4o matches GPT-4 Turbo in English text and coding tasks while offering superior performance in non-English languages and vision tasks, setting new benchmarks for AI capabilities.\r\ninput format: text + image",
+        "format": "OpenAI",
+        "isDefaultVersion": false,
+        "isMarketplaceRequired": false,
+        "lifecycleStatus": "Deprecating",
+        "maxCapacity": 3,
+        "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-4o/versions/2024-05-13",
+        "name": "gpt-4o",
+        "replacementConfig": {
+          "autoUpgradeStartDate": "2026-11-24T00:00:00Z",
+          "targetModelName": "gpt-5.1",
+          "targetModelVersion": "2025-11-13",
+          "upgradeOnExpiryLeadTimeDays": 23
+        },
+        "skus": [
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "ContextToken",
+                "offeringId": "31051531-b204-5ce1-a4b2-95cb02d9e6d7",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "ce3aae19-43c8-54e2-93a2-b515ee7196d2",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2026-03-31T00:00:00Z",
+            "lifecycleStatus": "Deprecated",
+            "name": "Standard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 10
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Base",
+            "usageName": "OpenAI.Standard.gpt-4o"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "ContextToken",
+                "offeringId": "68c23cf3-993c-5bcc-bc07-038198859e16",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "249a516e-7e7d-5d01-8e87-095b199dd96c",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2027-01-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 10
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Base",
+            "usageName": "OpenAI.GlobalStandard.gpt-4o"
+          },
+          {
+            "capacity": {
+              "maximum": 30000,
+              "minimum": 50,
+              "step": 50
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "Hosting",
+                "offeringId": "dbad17fa-3e49-5871-9cda-81a534d012c7",
+                "unit": "1 Hour"
+              }
+            ],
+            "deprecationDate": "2027-01-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "ProvisionedManaged",
+            "scope": "Base",
+            "usageName": "OpenAI.ProvisionedManaged"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 100000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "ContextToken",
+                "offeringId": "6ab3e1d6-a70b-5aba-8367-966214d3c6fc",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "5ce49748-e935-5f51-9f85-38dec003bcd2",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2027-01-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "GlobalBatch",
+            "scope": "Base",
+            "usageName": "OpenAI.GlobalBatch.gpt-4o"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "ContextToken",
+                "offeringId": "b1a42e7f-46b3-5616-b882-03abf8321a76",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "1f65d5cd-7141-53e4-959b-9451518658c7",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2027-01-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "DataZoneStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 10
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Base",
+            "usageName": "OpenAI.DataZoneStandard.gpt-4o"
+          },
+          {
+            "capacity": {
+              "maximum": 100000,
+              "minimum": 15,
+              "step": 5
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "Hosting",
+                "offeringId": "a3a3e931-a913-54e9-9976-c782e8b9c1e0",
+                "unit": "1 Hour"
+              }
+            ],
+            "deprecationDate": "2027-01-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "DataZoneProvisionedManaged",
+            "scope": "Base",
+            "usageName": "OpenAI.DataZoneProvisionedManaged"
+          },
+          {
+            "capacity": {
+              "maximum": 100000,
+              "minimum": 15,
+              "step": 5
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "Hosting",
+                "offeringId": "142dc9c2-3cef-572a-933b-7006c665a4f3",
+                "unit": "1 Hour"
+              }
+            ],
+            "deprecationDate": "2027-01-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "GlobalProvisionedManaged",
+            "scope": "Base",
+            "usageName": "OpenAI.GlobalProvisionedManaged"
+          }
+        ],
+        "systemData": {
+          "createdAt": "2024-05-13T00:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2024-08-21T00:00:00Z",
+          "lastModifiedBy": "Microsoft",
+          "lastModifiedByType": "Application"
+        },
+        "version": "2024-05-13"
+      },
+      "name": "OpenAI.gpt-4o.2024-05-13",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/OpenAI.gpt-4o.2024-08-06",
+      "kind": "OpenAI",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "FineTuneTokensMaxValue": "2000000000",
+          "FineTuneTokensMaxValuePerExample": "131072",
+          "agentsV2": "true",
+          "allowProvisionedManagedCommitment": "true",
+          "area": "US",
+          "assistants": "true",
+          "chatCompletion": "true",
+          "datazoneFineTune": "true",
+          "devTierFineTune": "true",
+          "globalFineTune": "true",
+          "jsonSchemaResponse": "true",
+          "maxContextToken": "128000",
+          "maxOutputToken": "16384",
+          "responses": "true"
+        },
+        "deprecation": {
+          "fineTune": "2027-04-14T00:00:00Z",
+          "inference": "2027-04-14T00:00:00Z"
+        },
+        "description": "GPT-4o integrates text and images in a single model, enabling it to handle multiple data types simultaneously. This multimodal approach enhances accuracy and responsiveness in human-computer interactions. GPT-4o matches GPT-4 Turbo in English text and coding tasks while offering superior performance in non-English languages and vision tasks, setting new benchmarks for AI capabilities.\r\ninput format: text + image",
+        "finetuneCapabilities": {
+          "FineTuneTokensMaxValue": "2000000000",
+          "FineTuneTokensMaxValuePerExample": "131072",
+          "agentsV2": "true",
+          "allowProvisionedManagedCommitment": "true",
+          "area": "US",
+          "assistants": "true",
+          "chatCompletion": "true",
+          "datazoneFineTune": "true",
+          "devTierFineTune": "true",
+          "globalFineTune": "true",
+          "jsonSchemaResponse": "true",
+          "maxContextToken": "128000",
+          "maxOutputToken": "16384",
+          "responses": "true"
+        },
+        "format": "OpenAI",
+        "isDefaultVersion": false,
+        "isMarketplaceRequired": false,
+        "lifecycleStatus": "Deprecating",
+        "maxCapacity": 3,
+        "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-4o/versions/2024-08-06",
+        "name": "gpt-4o",
+        "replacementConfig": {
+          "autoUpgradeStartDate": "2026-03-09T00:00:00Z",
+          "targetModelName": "gpt-5.1",
+          "targetModelVersion": "2025-11-13",
+          "upgradeOnExpiryLeadTimeDays": 23
+        },
+        "skus": [
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "NoCachedContextToken",
+                "offeringId": "ce7a8192-ad43-51ae-ba54-4addacbb6d3e",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "CachedContextToken",
+                "offeringId": "aa6c6c62-3e0f-5b0b-bea4-586b3d9b2191",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "fec68f36-e863-5eba-9363-8c72ee08aa3e",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2026-03-31T00:00:00Z",
+            "lifecycleStatus": "Deprecated",
+            "name": "Standard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 10
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Base",
+            "usageName": "OpenAI.Standard.gpt-4o"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "NoCachedContextToken",
+                "offeringId": "7b3273b4-ebab-52b7-b833-30bf173f7fb8",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "NoCachedContextToken.Priority",
+                "offeringId": "53e1627a-8b95-57d9-9035-daeac61a1d1d",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "CachedContextToken",
+                "offeringId": "4f7b22c5-09aa-5861-9546-a150ae00aa45",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "CachedContextToken.Priority",
+                "offeringId": "4edc763f-3173-5821-8f1f-78a720821812",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "27e5f847-ea21-5fb3-8444-5a88acb2ed99",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken.Priority",
+                "offeringId": "447590e8-c027-5311-92e0-94ecfe3f7925",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2027-04-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 10,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Base",
+            "usageName": "OpenAI.GlobalStandard.gpt-4o"
+          },
+          {
+            "capacity": {
+              "maximum": 30000,
+              "minimum": 50,
+              "step": 50
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "Hosting",
+                "offeringId": "dbad17fa-3e49-5871-9cda-81a534d012c7",
+                "unit": "1 Hour"
+              }
+            ],
+            "deprecationDate": "2027-04-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "ProvisionedManaged",
+            "scope": "Base",
+            "usageName": "OpenAI.ProvisionedManaged"
+          },
+          {
+            "capacity": {
+              "maximum": 100000,
+              "minimum": 15,
+              "step": 5
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "Hosting",
+                "offeringId": "142dc9c2-3cef-572a-933b-7006c665a4f3",
+                "unit": "1 Hour"
+              }
+            ],
+            "deprecationDate": "2027-04-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "GlobalProvisionedManaged",
+            "scope": "Base",
+            "usageName": "OpenAI.GlobalProvisionedManaged"
+          },
+          {
+            "capacity": {
+              "default": 50,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "Hosting",
+                "offeringId": "ba62fbc8-7125-5f13-b9ff-3b30aee74af3",
+                "unit": "1 Hour"
+              },
+              {
+                "meterId": "",
+                "name": "NoCachedContextToken",
+                "offeringId": "82faff3a-f22f-5a8d-81fa-76db578d46eb",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "28fde63b-714e-51fb-88a2-58c3ce3c9655",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "CachedContextToken",
+                "offeringId": "16fb7985-8246-506a-8512-8df70577ad72",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2028-04-13T00:00:00Z",
+            "lifecycleStatus": "GenerallyAvailable",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 10
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Finetune",
+            "usageName": "OpenAI.GlobalStandard.gpt-4o-finetune"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 10000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "Hosting",
+                "offeringId": "d747b41b-60ba-51d1-b984-86fa717a3eff",
+                "unit": "1 Hour"
+              },
+              {
+                "meterId": "",
+                "name": "NoCachedContextToken",
+                "offeringId": "a2be370c-9887-51de-8a79-635375a10a2e",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "38d58dab-3058-5af9-9a25-c92e28534c23",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "CachedContextToken",
+                "offeringId": "608c62a2-d3d5-5e6d-9af8-787b2e0e7c12",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2028-04-13T00:00:00Z",
+            "lifecycleStatus": "GenerallyAvailable",
+            "name": "DataZoneStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Finetune",
+            "usageName": "OpenAI.DataZoneStandard.gpt-4o-finetune"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 100000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "ContextToken",
+                "offeringId": "8807780c-941c-5900-b56b-6923af37d080",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "69f231e7-5278-5971-b7b9-b5750a3b26dc",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2027-04-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "GlobalBatch",
+            "scope": "Base",
+            "usageName": "OpenAI.GlobalBatch.gpt-4o"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "CachedContextToken",
+                "offeringId": "1b3be393-2658-598e-92e8-f5d7f9fd2b8b",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "CachedContextToken.Priority",
+                "offeringId": "29e587ac-6f94-5786-86ea-afb71eafe719",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "NoCachedContextToken",
+                "offeringId": "0c1b099f-8967-5e17-89d8-fb38e2fd9566",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "NoCachedContextToken.Priority",
+                "offeringId": "7fa2d10d-8676-5e6a-9838-2ea18432fe02",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "703bc874-126e-5350-b413-44cf86755eeb",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken.Priority",
+                "offeringId": "22343b6b-53dd-5258-8e06-6e77953eb0b0",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2027-04-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "DataZoneStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 10
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Base",
+            "usageName": "OpenAI.DataZoneStandard.gpt-4o"
+          },
+          {
+            "capacity": {
+              "maximum": 100000,
+              "minimum": 15,
+              "step": 5
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "Hosting",
+                "offeringId": "a3a3e931-a913-54e9-9976-c782e8b9c1e0",
+                "unit": "1 Hour"
+              }
+            ],
+            "deprecationDate": "2027-04-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "DataZoneProvisionedManaged",
+            "scope": "Base",
+            "usageName": "OpenAI.DataZoneProvisionedManaged"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 100000000
+            },
+            "costs": [
+              {
+                "meterId": "",
+                "name": "ContextToken",
+                "offeringId": "cb030db0-6c64-5369-b93b-5a0d049aa8a3",
+                "unit": "1K Tokens"
+              },
+              {
+                "meterId": "",
+                "name": "GeneratedToken",
+                "offeringId": "8c505312-860a-5c79-a3fc-0d15df71a396",
+                "unit": "1K Tokens"
+              }
+            ],
+            "deprecationDate": "2027-04-14T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "DataZoneBatch",
+            "scope": "Base",
+            "usageName": "OpenAI.DataZoneBatch.gpt-4o"
+          }
+        ],
+        "systemData": {
+          "createdAt": "2024-08-06T00:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2024-08-21T00:00:00Z",
+          "lastModifiedBy": "Microsoft",
+          "lastModifiedByType": "Application"
+        },
+        "version": "2024-08-06"
+      },
+      "name": "OpenAI.gpt-4o.2024-08-06",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/OpenAI.gpt-chat-latest.2026-10-07",
+      "kind": "OpenAI",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "agentsV2": "true",
+          "area": "US",
+          "assistants": "true",
+          "chatCompletion": "true",
+          "responses": "true"
+        },
+        "deprecation": {
+          "inference": "2027-02-02T00:00:00Z"
+        },
+        "format": "OpenAI",
+        "isDefaultVersion": true,
+        "isMarketplaceRequired": false,
+        "lifecycleStatus": "Preview",
+        "maxCapacity": 3,
+        "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-chat-latest/versions/2026-10-07",
+        "name": "gpt-chat-latest",
+        "skus": [
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "name": "CachedContextToken",
+                "offeringId": "1353a5e6-7f44-5c1d-ab84-560aefec2223",
+                "unit": "1M Tokens"
+              },
+              {
+                "name": "NoCachedContextToken",
+                "offeringId": "8586bb3d-6876-5c5c-9af1-663913d6d1bc",
+                "unit": "1M Tokens"
+              },
+              {
+                "name": "GeneratedToken",
+                "offeringId": "044dae79-14c7-5d95-a087-97c2cb3bd3cd",
+                "unit": "1M Tokens"
+              }
+            ],
+            "deprecationDate": "2027-02-02T00:00:00Z",
+            "lifecycleStatus": "Preview",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Base",
+            "usageName": "OpenAI.GlobalStandard.gpt-chat-latest"
+          },
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "costs": [
+              {
+                "name": "CachedContextToken",
+                "offeringId": "f683188f-5a36-5289-ad39-163ff3f02b1a",
+                "unit": "1M Tokens"
+              },
+              {
+                "name": "NoCachedContextToken",
+                "offeringId": "6cb9d36c-793e-5c14-884c-b97249363f6b",
+                "unit": "1M Tokens"
+              },
+              {
+                "name": "GeneratedToken",
+                "offeringId": "040a7ae0-19bf-5168-8eff-f1849ca434e4",
+                "unit": "1M Tokens"
+              }
+            ],
+            "deprecationDate": "2027-02-02T00:00:00Z",
+            "lifecycleStatus": "Preview",
+            "name": "DataZoneStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "Base",
+            "usageName": "OpenAI.DataZoneStandard.gpt-chat-latest"
+          }
+        ],
+        "systemData": {
+          "createdAt": "2026-10-07T00:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2026-10-07T00:00:00Z",
+          "lastModifiedBy": "Microsoft",
+          "lastModifiedByType": "Application"
+        },
+        "version": "2026-10-07"
+      },
+      "name": "OpenAI.gpt-chat-latest.2026-10-07",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    }
+  ]
+}

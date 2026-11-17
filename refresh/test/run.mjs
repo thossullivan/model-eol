@@ -2577,8 +2577,8 @@ const tailRows = [azureRow('first-cited', '2024-05-13', 'Deprecated', '2027-01-1
 const tailFootnotes = offerFootnote(2, 'Offers retire on January 14, 2027.') + offerFootnote(3, 'April 14, 2027 applies to all active offers.')
 assert(footnotedError(footnotedTable(tailRows) + tailFootnotes + '<p>Global Batch for every version above retires on May 1, 2027.</p>').includes('first-cited version 2024-05-13 retirement cites footnote 2, and the notes after the last footnote states a later date 2027-05-01'), 'Azure applies the footnote date rules to notes after the last footnote')
 assert(parseFootnoted(footnotedTable(tailRows) + tailFootnotes + '<p>Regional Standard retired on March 31, 2026.</p>').records.length === 2, 'Azure accepts an already-past date after the last footnote and does not read later footnotes as trailing notes')
-const azureClockPage = footnotedTable() + offerFootnote(3)
-const azureClockLoad = now => loadDistributorSource('azure-ai-foundry', { fetchImpl: async () => new Response(azureClockPage), now, notice: () => {} }).then(() => '', error => error.message)
+const azureMarkdownFootnotePage = '### Azure OpenAI\n\n| Model | Version | Lifecycle | Retirement date | Replacement |\n| --- | --- | --- | --- | --- |\n| footnoted | 2025-04-14 | Deprecated | 2027-04-14^3^ | - |\n\n^3^ April 14, 2027 applies to all active offers for footnoted version 2025-04-14. Regional Standard deployments retired on March 31, 2026; that date is unchanged.\n'
+const azureClockLoad = now => loadDistributorSource('azure-ai-foundry', { fetchImpl: async () => new Response(azureMarkdownFootnotePage), now, env: {}, notice: () => {} }).then(() => '', error => error.message)
 assert(await azureClockLoad('2026-11-16T00:00:00Z') === '' && (await azureClockLoad('2026-03-31T00:00:00Z')).includes('not past on 2026-03-31'), 'Azure source loading passes the injected refresh clock to the parser')
 for (const [label, html] of [
   ['missing footnote', footnotedTable([footnotedRow('<sup>4</sup>')]) + offerFootnote(3)],
@@ -2723,7 +2723,7 @@ try {
 assert(azureBindingReason.includes('binds to anthropic') && azureBindingReason.includes('openai feed'), 'Azure section binding refuses a cross-publisher match')
 const azureNotices = []
 const loadedAzure = await loadDistributorSource('azure-ai-foundry', { fixtures, notice: notice => azureNotices.push(notice) })
-assert(loadedAzure.records.length === 174 && loadedAzure.conflicts.length === 2 && azureNotices.filter(notice => notice.startsWith('notice:') && notice.includes('earliest retirement wins')).length === 2, 'Azure fixture loading emits one notice per source conflict')
+assert(loadedAzure.records.length === 168 && loadedAzure.conflicts.length === 2 && azureNotices.filter(notice => notice.startsWith('notice:') && notice.includes('earliest retirement wins')).length === 2, 'Azure fixture loading emits one notice per source conflict')
 const azureUnchangedFeed = { publisher: 'openai', models: [] }
 const azureInformationalOptions = { sourceConflicts: azureSource.conflicts, unconfirmedDistributions: azureBinding.unconfirmedDistributions, noPublisherFeed: azureBinding.noPublisherFeed }
 const azureInformationalDiff = compareFeeds(azureUnchangedFeed, azureUnchangedFeed, azureInformationalOptions)
@@ -3817,7 +3817,7 @@ try {
   fs.writeFileSync(path.join(sources, 'openai-deprecations.md'), corruptOpenAIMarkdown)
   fs.writeFileSync(path.join(sources, 'google-deprecations.md'), '# Gemini deprecations\n\nNo lifecycle table here.\n')
   fs.writeFileSync(path.join(sources, 'bedrock-lifecycle.html'), '<html><body><table><tr><th>Model ID</th><th>Legacy date</th></tr></table></body></html>')
-  fs.writeFileSync(path.join(sources, 'azure-model-retirement-schedule.html'), '<html><body><h1>Retirements</h1><p>corrupt</p></body></html>')
+  fs.writeFileSync(path.join(sources, 'azure-model-retirement-schedule.md'), '# Retirements\n\ncorrupt\n')
   const out = path.join(multiFailureDir, 'out')
   fs.mkdirSync(out)
   const sourceLines = text => text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2, line.indexOf(':')))
@@ -4442,7 +4442,7 @@ reviewTest('Refresh clock: the CLI reads MODEL_EOL_GENERATED as the refresh day 
   try {
     fs.copyFileSync(path.join(fixtures, 'openai-models.json'), path.join(clockDir, 'openai-models.json'))
     fs.writeFileSync(path.join(clockDir, 'openai-deprecations.md'), openaiMdStatusPage('Shut down'))
-    fs.writeFileSync(path.join(clockDir, 'azure-model-retirement-schedule.html'), footnotedTable() + offerFootnote(3))
+    fs.writeFileSync(path.join(clockDir, 'azure-model-retirement-schedule.md'), azureMarkdownFootnotePage)
     const refreshAt = (source, generated) => run([...source, '--check', '--fixtures', clockDir], { env: { ...process.env, MODEL_EOL_GENERATED: generated } })
     const openai = ['--provider', 'openai']
     const azure = ['--distributor', 'azure-ai-foundry']

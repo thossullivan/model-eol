@@ -1,5 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import {
+  azureModelsApiConflictSummary,
+  azureModelsApiCredentials,
+  azureModelsApiSummary,
+  fetchAzureModelsApi,
+  reconcileAzureModelsApi,
+} from './azure-models-api.mjs'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
 import { markdownCellHtml, markdownPipeTables, markdownPipeTableToHtml, stripFencedCodeBlocks } from './markdown.mjs'
 
@@ -39,7 +46,8 @@ export const DISTRIBUTORS = {
   'azure-ai-foundry': {
     name: 'azure-ai-foundry',
     sourceUrl: AZURE_MODEL_RETIREMENT_SCHEDULE_URL,
-    fixture: 'azure-model-retirement-schedule.html',
+    sourceHeaders: { Accept: 'text/markdown' },
+    fixture: 'azure-model-retirement-schedule.md',
   },
 }
 
@@ -634,17 +642,22 @@ const blankKeepingLines = text => text.replace(/[^\n]/g, '')
 // Google's Markdown generator backslash-escapes punctuation even inside code spans, where CommonMark keeps it literal.
 const vertexCellHtml = text => markdownCellHtml(text).replace(/<code>([\s\S]*?)<\/code>/g, (_, code) => `<code>${code.replace(/\\([!-/:-@[-`{-~])/g, '$1')}</code>`)
 
-/** Render the Vertex Markdown copy as the headings, prose, and tables that parseVertexModelVersionsHtml reads. */
-export function vertexMarkdownToHtml(markdown) {
-  if (typeof markdown !== 'string') throw new Error('vertex-ai lifecycle page must be a string')
-  if (/^\s*<(?:!doctype|html)\b/i.test(markdown.replace(/^\uFEFF/, ''))) throw new Error('vertex-ai lifecycle source is HTML, not Markdown')
+/** Pipe tables keyed by line index, and the page lines without front matter, fenced code, comments, or quote markers. */
+function markdownPageLines(markdown, label) {
+  if (typeof markdown !== 'string') throw new Error(`${label} page must be a string`)
+  if (/^\s*<(?:!doctype|html)\b/i.test(markdown.replace(/^\uFEFF/, ''))) throw new Error(`${label} source is HTML, not Markdown`)
   const tables = markdownPipeTables(markdown)
   let source = stripFencedCodeBlocks(markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
     .replace(/^---[ \t]*\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?=\n|$)/, blankKeepingLines))
   while (/<!--[\s\S]*?--!?>/.test(source)) source = source.replace(/<!--[\s\S]*?--!?>/g, blankKeepingLines)
-  if (/<table\b/i.test(source)) throw new Error('vertex-ai lifecycle page has a raw HTML table, which the Markdown reader does not parse')
+  if (/<table\b/i.test(source)) throw new Error(`${label} page has a raw HTML table, which the Markdown reader does not parse`)
   const tableAt = new Map(tables.map(table => [table.line - 1, table]))
-  const lines = source.split('\n').map(line => line.replace(/^\s*(?:>\s?)+/, ''))
+  return { tableAt, lines: source.split('\n').map(line => line.replace(/^\s*(?:>\s?)+/, '')) }
+}
+
+/** Render the Vertex Markdown copy as the headings, prose, and tables that parseVertexModelVersionsHtml reads. */
+export function vertexMarkdownToHtml(markdown) {
+  const { tableAt, lines } = markdownPageLines(markdown, 'vertex-ai lifecycle')
   const html = []
   let paragraph = false
   for (let index = 0; index < lines.length; index++) {
@@ -918,7 +931,74 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
   return { records: [...unique.values()], conflicts }
 }
 
+const MARKDOWN_LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/
+const MARKDOWN_THEMATIC_BREAK = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/
+const AZURE_RESERVED_CHARACTERS = /[\uE000\uE001]/
+
+// Learn writes footnote markers as ^N^; outside code spans they become the <sup>N</sup> of the HTML page.
+function azureInlineHtml(text) {
+  return markdownCellHtml(text.replace(/(?<!\\)\^(\d+)\^/g, '\uE000$1\uE001')).replace(
+    /<code>[\s\S]*?<\/code>|\uE000(\d+)\uE001/g,
+    (match, number) => number === undefined ? match.replace(/\uE000(\d+)\uE001/g, '^$1^') : `<sup>${number}</sup>`,
+  )
+}
+
+/** Render the Azure retirement schedule's Markdown as the headings, paragraphs, and tables that parseAzureModelRetirementScheduleHtml reads. */
+export function azureMarkdownToHtml(markdown) {
+  const label = 'azure-ai-foundry lifecycle'
+  if (typeof markdown === 'string' && AZURE_RESERVED_CHARACTERS.test(markdown)) {
+    throw new Error(`${label} page contains U+E000 or U+E001, which the Markdown reader reserves for footnote markers`)
+  }
+  const { tableAt, lines } = markdownPageLines(markdown, label)
+  const html = []
+  let block
+  const flush = () => {
+    if (block) html.push(`<${block.tag}>${azureInlineHtml(block.lines.join('\n'))}</${block.tag}>`)
+    block = undefined
+  }
+  for (let index = 0; index < lines.length; index++) {
+    const table = tableAt.get(index)
+    const line = lines[index]
+    if (table) {
+      flush()
+      html.push(markdownPipeTableToHtml(table, { cellHtml: azureInlineHtml }))
+      index += table.rows.length + 1
+      continue
+    }
+    if (!line.trim()) {
+      flush()
+      continue
+    }
+    if (block?.tag === 'p' && /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)) {
+      throw new Error(`${label} page line ${index + 1}: setext heading; section headings must use #`)
+    }
+    const heading = line.match(MARKDOWN_ATX_HEADING)
+    const item = line.match(MARKDOWN_LIST_ITEM)
+    if (heading) {
+      flush()
+      html.push(`<h${heading[1].length}>${azureInlineHtml(heading[2] ?? '')}</h${heading[1].length}>`)
+    } else if (MARKDOWN_THEMATIC_BREAK.test(line)) {
+      flush()
+    } else if (item) {
+      flush()
+      block = { tag: 'li', lines: [line.slice(item[0].length).trim()] }
+    } else if (block) {
+      block.lines.push(line.trim())
+    } else {
+      block = { tag: 'p', lines: [line.trim()] }
+    }
+  }
+  flush()
+  return html.join('\n')
+}
+
+/** Parse the Markdown copy of the Azure retirement schedule with the same rules as the HTML page. */
+export function parseAzureModelRetirementScheduleMarkdown(markdown, options = {}) {
+  return parseAzureModelRetirementScheduleHtml(azureMarkdownToHtml(markdown), options)
+}
+
 export function sourceConflictSummary(conflict) {
+  if (conflict.source === 'models-api') return azureModelsApiConflictSummary(conflict)
   if (conflict.via === 'aws-bedrock') {
     return `${conflict.via} ${conflict.id}: kept ${conflict.kept.eol ?? conflict.kept.shutdown} (${conflict.kept.source}); discarded ${conflict.discarded.shutdown} (${conflict.discarded.source}); legacy table wins`
   }
@@ -1293,21 +1373,31 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
     html = fs.readFileSync(fixturePath, 'utf8')
     ;(options.notice ?? console.error)(`notice: ${distributor} lifecycle fixture: ${path.relative(process.cwd(), fixturePath)}`)
   } else {
-    html = await fetchBody(config.sourceFetchUrl ?? config.sourceUrl, distributor, options.fetchImpl)
+    html = await fetchBody(config.sourceFetchUrl ?? config.sourceUrl, distributor, options.fetchImpl, { headers: { ...config.sourceHeaders } })
   }
+  const notice = options.notice ?? console.error
   let parsed = distributor === 'azure-ai-foundry'
-    ? parseAzureModelRetirementScheduleHtml(html, { now: options.now ?? new Date() })
+    ? parseAzureModelRetirementScheduleMarkdown(html, { now: options.now ?? new Date() })
     : { records: distributor === 'aws-bedrock' ? parseBedrockLifecycleHtml(html) : parseVertexModelVersionsMarkdown(html) }
   if (distributor === 'aws-bedrock') {
     const cards = await loadBedrockCards(config, options)
     parsed = { ...mergeBedrockSources(parsed.records, cards.records), skipped: cards.skipped }
   }
-  for (const conflict of parsed.conflicts ?? []) {
-    ;(options.notice ?? console.error)(`notice: ${sourceConflictSummary(conflict)}`)
+  let apiSummary
+  if (distributor === 'azure-ai-foundry') {
+    const credentials = options.fixtures ? undefined : azureModelsApiCredentials(options.env ?? process.env)
+    if (options.fixtures) notice('notice: azure models API not read in a fixture run')
+    else if (!credentials) notice('notice: azure models API skipped: AZURE_MANAGEMENT_TOKEN and AZURE_SUBSCRIPTION_ID are not set')
+    else {
+      const api = await fetchAzureModelsApi(credentials, { fetchImpl: options.fetchImpl, locations: options.azureLocations })
+      const reconciled = reconcileAzureModelsApi(parsed.records, api.entries)
+      parsed = { ...parsed, records: reconciled.records, conflicts: [...parsed.conflicts, ...reconciled.conflicts] }
+      apiSummary = azureModelsApiSummary(api, reconciled.conflicts)
+    }
   }
-  for (const card of parsed.skipped ?? []) {
-    ;(options.notice ?? console.error)(`notice: ${skippedModelCardSummary(card)}`)
-  }
+  for (const conflict of parsed.conflicts ?? []) notice(`notice: ${sourceConflictSummary(conflict)}`)
+  if (apiSummary) notice(`notice: ${apiSummary}`)
+  for (const card of parsed.skipped ?? []) notice(`notice: ${skippedModelCardSummary(card)}`)
   return {
     ...config,
     fixturePath,

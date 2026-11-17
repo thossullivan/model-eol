@@ -27,11 +27,17 @@ Distributor dates are added to the publisher feeds as `distributions` entries:
   read from its Markdown copy (`model-versions.md.txt`). The feed cites the page
   itself.
 - **Azure AI Foundry**: the [model retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule),
-  matched to the OpenAI, Anthropic, Mistral, and Cohere feeds.
+  read as Markdown (the page returns its Markdown source for
+  `Accept: text/markdown`) and matched to the OpenAI, Anthropic, Mistral, and
+  Cohere feeds. The feed cites the page itself. When `AZURE_MANAGEMENT_TOKEN`
+  and `AZURE_SUBSCRIPTION_ID` are set, the refresh also reads the Azure models
+  API and lists every date on which it disagrees with the page under "Source
+  conflicts". The page stays the source of every Azure date.
 
 API keys are optional. Without them the refresh still reads every page and keeps
 the current models already in the feeds, but it can't add new ones from the
-OpenAI, Google, Mistral, or Cohere models endpoints. xAI isn't covered:
+OpenAI, Google, Mistral, or Cohere models endpoints. Without the Azure
+credentials it skips the Azure models API cross-check with a notice. xAI isn't covered:
 it has no lifecycle index, and its models API has no deprecation fields.
 
 How each page is parsed, and what makes a parser stop, is in
@@ -54,6 +60,14 @@ with the committed ones.
 - **Parse failure:** the run fails and opens or updates one issue. It never
   writes a partial or guessed feed, and its error names every source that
   failed, not only the first. The next successful run closes the issue.
+
+Both workflows sign in to Azure with OpenID Connect (`azure/login`, using the
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` secrets) and
+pass a management token for the Azure models API only to the distributor
+refresh. The federated credential trusts only `main`. On `main` a failed login
+fails the Azure source, so the weekly refresh fails and the daily check reports
+it like any unreadable source. A manual run on another branch skips the login
+and the models API with a notice and still checks the pages.
 
 ## The daily source check
 

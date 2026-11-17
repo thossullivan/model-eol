@@ -316,7 +316,7 @@ function renderResult(result, publisher) {
     result.newlyAnnounced.map(model => `- ${code(model.id)} - ${dateLine(model)}; ${replacementSummary(model)}`),
   ))
   pushSection(section('Distribution changes', renderDistributionChanges(result)))
-  pushSection(section('Source conflicts', (result.sourceConflicts ?? []).map(conflict => `- ${conflict.publisher ? providerSourceConflictSummary(conflict) : sourceConflictSummary(conflict)}`)))
+  pushSection(section('Source conflicts', (result.sourceConflicts ?? []).map(conflict => `- ${conflict.via === 'models-api' ? providerSourceConflictSummary(conflict) : sourceConflictSummary(conflict)}`)))
   pushSection(section('Model cards without lifecycle fields', (result.skippedModelCards ?? []).map(card => `- ${skippedModelCardSummary(card)}`)))
   pushSection(section(
     'Unconfirmed entries',

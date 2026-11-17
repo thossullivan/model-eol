@@ -1,0 +1,301 @@
+{
+  "value": [
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/Meta.Llama-3.3-70B-Instruct.1",
+      "kind": "AIServices",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "agentsV2": "true",
+          "chatCompletion": "true"
+        },
+        "deprecation": {
+          "inference": "2099-06-03T00:00:00Z"
+        },
+        "format": "Meta",
+        "isDefaultVersion": false,
+        "isMarketplaceRequired": false,
+        "lifecycleStatus": "GenerallyAvailable",
+        "maxCapacity": 3,
+        "modelCatalogAssetId": "azureml://registries/azureml-meta/models/Llama-3.3-70B-Instruct/versions/1",
+        "name": "Llama-3.3-70B-Instruct",
+        "publisher": "Meta",
+        "skus": [
+          {
+            "capacity": {
+              "default": 1000,
+              "maximum": 10000
+            },
+            "deprecationDate": "2099-06-03T00:00:00Z",
+            "lifecycleStatus": "GenerallyAvailable",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "All",
+            "usageName": "AIServices.GlobalStandard.Llama-3.3-70B-Instruct"
+          }
+        ],
+        "systemData": {
+          "createdAt": "2024-10-01T00:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2025-04-16T04:45:33.9367873Z",
+          "lastModifiedBy": "MaaSModelConverter",
+          "lastModifiedByType": "Application"
+        },
+        "version": "1"
+      },
+      "name": "Meta.Llama-3.3-70B-Instruct.1",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/Mistral AI.mistral-small-2503.1",
+      "kind": "AIServices",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "assistants": "false",
+          "chatCompletion": "true"
+        },
+        "deprecation": {
+          "inference": "2026-12-09T00:00:00Z"
+        },
+        "format": "Mistral AI",
+        "isDefaultVersion": true,
+        "isMarketplaceRequired": true,
+        "lifecycleStatus": "GenerallyAvailable",
+        "maxCapacity": 3,
+        "modelCatalogAssetId": "azureml://registries/azureml-mistral/models/mistral-small-2503/versions/1",
+        "name": "mistral-small-2503",
+        "publisher": "Mistral AI",
+        "skus": [
+          {
+            "capacity": {
+              "default": 1000,
+              "maximum": 10000
+            },
+            "deprecationDate": "2026-12-09T00:00:00Z",
+            "lifecycleStatus": "GenerallyAvailable",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "All",
+            "usageName": "AIServices.GlobalStandard.mistral-small-2503"
+          }
+        ],
+        "systemData": {
+          "createdAt": "2024-10-01T00:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2025-04-16T04:45:33.9367873Z",
+          "lastModifiedBy": "MaaSModelConverter",
+          "lastModifiedByType": "Application"
+        },
+        "version": "1"
+      },
+      "name": "Mistral AI.mistral-small-2503.1",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/Anthropic.claude-sonnet-4-5.20250929",
+      "kind": "AIServices",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "agentsV2": "true",
+          "chatCompletion": "true"
+        },
+        "deprecation": {
+          "inference": "2026-12-01T00:00:00Z"
+        },
+        "format": "Anthropic",
+        "isDefaultVersion": true,
+        "isMarketplaceRequired": true,
+        "lifecycleStatus": "Deprecating",
+        "maxCapacity": 3,
+        "modelCatalogAssetId": "azureml://registries/azureml-anthropic/models/claude-sonnet-4-5/versions/20250929",
+        "name": "claude-sonnet-4-5",
+        "publisher": "Anthropic",
+        "skus": [
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "deprecationDate": "2026-12-01T00:00:00Z",
+            "lifecycleStatus": "Deprecating",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "All",
+            "usageName": "AIServices.GlobalStandard.claude-sonnet-4-5"
+          }
+        ],
+        "systemData": {
+          "createdAt": "2025-10-20T00:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2025-10-20T00:00:00Z",
+          "lastModifiedBy": "MaaSModelConverter",
+          "lastModifiedByType": "Application"
+        },
+        "version": "20250929"
+      },
+      "name": "Anthropic.claude-sonnet-4-5.20250929",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/Anthropic.claude-haiku-4-5.20251001",
+      "kind": "AIServices",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "agentsV2": "true",
+          "chatCompletion": "true",
+          "hostedOn": "anthropic"
+        },
+        "deprecation": {
+          "inference": "2027-03-16T00:00:00Z"
+        },
+        "format": "Anthropic",
+        "isDefaultVersion": false,
+        "isMarketplaceRequired": true,
+        "lifecycleStatus": "GenerallyAvailable",
+        "maxCapacity": 3,
+        "modelCatalogAssetId": "azureml://registries/azureml-anthropic/models/claude-haiku-4-5/versions/20251001",
+        "name": "claude-haiku-4-5",
+        "publisher": "Anthropic",
+        "skus": [
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "deprecationDate": "2027-03-16T00:00:00Z",
+            "lifecycleStatus": "GenerallyAvailable",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "All",
+            "usageName": "AIServices.GlobalStandard.claude-haiku-4-5"
+          }
+        ],
+        "systemData": {
+          "createdAt": "2025-10-31T00:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2025-10-31T00:00:00Z",
+          "lastModifiedBy": "MaaSModelConverter",
+          "lastModifiedByType": "Application"
+        },
+        "version": "20251001"
+      },
+      "name": "Anthropic.claude-haiku-4-5.20251001",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.CognitiveServices/locations/EastUS/models/Anthropic.claude-haiku-4-5.2",
+      "kind": "AIServices",
+      "location": "EastUS",
+      "model": {
+        "capabilities": {
+          "agentsV2": "true",
+          "chatCompletion": "true",
+          "hostedOn": "azure"
+        },
+        "deprecation": {
+          "inference": "2027-03-16T00:00:00Z"
+        },
+        "format": "Anthropic",
+        "isDefaultVersion": true,
+        "isMarketplaceRequired": true,
+        "lifecycleStatus": "GenerallyAvailable",
+        "maxCapacity": 3,
+        "modelCatalogAssetId": "azureml://registries/azureml-anthropic/models/claude-haiku-4-5/versions/2",
+        "name": "claude-haiku-4-5",
+        "publisher": "Anthropic",
+        "skus": [
+          {
+            "capacity": {
+              "default": 10,
+              "maximum": 1000000
+            },
+            "deprecationDate": "2027-03-16T00:00:00Z",
+            "lifecycleStatus": "GenerallyAvailable",
+            "name": "GlobalStandard",
+            "rateLimits": [
+              {
+                "count": 1,
+                "key": "request",
+                "renewalPeriod": 60
+              },
+              {
+                "count": 1000,
+                "key": "token",
+                "renewalPeriod": 60
+              }
+            ],
+            "scope": "All",
+            "usageName": "AIServices.GlobalStandard.claude-haiku-4-5.Azure"
+          }
+        ],
+        "systemData": {
+          "createdAt": "2025-10-31T01:00:00Z",
+          "createdBy": "Microsoft",
+          "createdByType": "Application",
+          "lastModifiedAt": "2025-10-31T01:00:00Z",
+          "lastModifiedBy": "MaaSModelConverter",
+          "lastModifiedByType": "Application"
+        },
+        "version": "2"
+      },
+      "name": "Anthropic.claude-haiku-4-5.2",
+      "skuName": "S0",
+      "type": "Microsoft.CognitiveServices/locations/models"
+    }
+  ]
+}

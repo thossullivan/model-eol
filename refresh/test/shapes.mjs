@@ -208,7 +208,7 @@ const fixtureFiles = {
   'cohere-deprecations.html': `<h3>2026-09-01</h3>${htmlTable(cohereHeaders)}<h3>2026-10-01</h3>${htmlTable(cohereHeaders)}`,
   'bedrock-lifecycle.html': htmlTable(['Model ID', 'Legacy date', 'EOL date']),
   'vertex-model-versions.md': '## Models\n\n| Model ID | Release date | Retirement date |\n|---|---|---|\n| `gemini-a` | a | b |\n',
-  'azure-model-retirement-schedule.html': htmlTable(['Model', 'Version', 'Retirement date']),
+  'azure-model-retirement-schedule.md': '### Azure OpenAI\n\n| Model | Version | Retirement date |\n| --- | --- | --- |\n| gpt-a | 1 | 2027-01-01^1^ |\n',
 }
 const writeFixtures = (overrides = {}) => {
   fs.rmSync(fixtureDir, { recursive: true, force: true })
@@ -307,6 +307,58 @@ test('the daily source-check workflow runs both refresh checks and the structure
   strictAssert.ok(workflow.includes('--label model-eol; then') && workflow.includes('gh issue close "$issue" --reason completed'), 'label fallback and recovery close')
   strictAssert.ok(workflow.includes('node refresh/shapes.mjs --write') && workflow.includes('already reports this state'), 'issue tells how to update the snapshot and avoids repeat comments')
 })
+
+const workflowFile = name => fs.readFileSync(path.join(root, '.github', 'workflows', name), 'utf8')
+const azureHelper = workflow => {
+  const start = workflow.indexOf('          azure_api_env() {\n')
+  const end = workflow.indexOf('\n          }\n', start)
+  strictAssert.ok(start >= 0 && end > start, 'workflow defines azure_api_env')
+  return workflow.slice(start, end + 12).split('\n').map(line => line.slice(10)).join('\n')
+}
+
+for (const name of ['source-check.yml', 'feed-refresh.yml']) {
+  test(`${name} signs in to Azure on main only and gives the models API token only to the distributor refresh`, () => {
+    const workflow = workflowFile(name)
+    strictAssert.ok(/^permissions:\n(?: {2}\S.*\n)*? {2}id-token: write\n/m.test(workflow), 'OIDC token permission')
+    const login = workflow.match(/ {6}- name: Sign in to Azure for the models API\n((?: {8}.*\n)+)/)?.[1] ?? ''
+    for (const line of ["id: azure-login", "if: github.ref == 'refs/heads/main'", 'continue-on-error: true', 'uses: azure/login@v3', 'client-id: ${{ secrets.AZURE_CLIENT_ID }}', 'tenant-id: ${{ secrets.AZURE_TENANT_ID }}', 'subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}']) {
+      strictAssert.ok(login.includes(`        ${line}\n`), line)
+    }
+    strictAssert.equal(workflow.match(/uses: azure\/login@/g)?.length, 1)
+    const distributorRuns = workflow.match(/node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry/g)?.length
+    const scoped = workflow.match(/\(\n +azure_api_env\n +(?:check_once_more distributor )?node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry[^\n]*\n +\)\n/g)?.length
+    strictAssert.ok(distributorRuns > 0 && scoped === distributorRuns, 'every distributor refresh, and nothing else, runs in a subshell that exports the token')
+    strictAssert.equal(workflow.match(/^ {10}AZURE_LOGIN: \$\{\{ steps\.azure-login\.outcome \}\}\n {10}AZURE_SUBSCRIPTION: \$\{\{ secrets\.AZURE_SUBSCRIPTION_ID \}\}\n/gm)?.length, distributorRuns)
+    strictAssert.ok(!/AZURE_MANAGEMENT_TOKEN[^\n]*GITHUB_ENV|GITHUB_ENV[^\n]*AZURE_MANAGEMENT_TOKEN|AZURE_MANAGEMENT_TOKEN: \$\{\{/.test(workflow), 'the token never reaches GITHUB_ENV or a step env')
+    const helper = azureHelper(workflow)
+    strictAssert.ok(helper.indexOf('echo "::add-mask::$token"') < helper.indexOf('export AZURE_MANAGEMENT_TOKEN="$token"'), 'the token is masked before it is exported')
+    strictAssert.ok(helper.includes('az account get-access-token --resource https://management.azure.com --query accessToken -o tsv'))
+  })
+
+  test(`${name} fails the Azure source after a failed login and skips it with a notice off main`, () => {
+    const helper = azureHelper(workflowFile(name))
+    const bin = fs.mkdtempSync(path.join(tempRoot, 'az-'))
+    const az = path.join(bin, 'az')
+    const runHelper = (login, azBody, subscription = 'sub-from-secret') => {
+      fs.writeFileSync(az, `#!/bin/sh\n${azBody}\n`, { mode: 0o755 })
+      const script = `${helper}\nazure_api_env\necho "subscription=\${AZURE_SUBSCRIPTION_ID-unset} token=\${AZURE_MANAGEMENT_TOKEN-unset}"\n`
+      const env = { PATH: `${bin}:${process.env.PATH}`, AZURE_LOGIN: login, AZURE_SUBSCRIPTION: subscription, GITHUB_REF: 'refs/heads/topic' }
+      const result = spawnSync('bash', ['-c', script], { env, encoding: 'utf8' })
+      strictAssert.equal(result.status, 0, result.stderr)
+      return result.stdout
+    }
+    const ok = runHelper('success', 'echo fake-token')
+    strictAssert.ok(ok.indexOf('::add-mask::fake-token') >= 0 && ok.indexOf('::add-mask::fake-token') < ok.indexOf('token=fake-token'), ok)
+    strictAssert.match(ok, /subscription=sub-from-secret token=fake-token\n$/)
+    for (const [login, azBody, subscription] of [['failure', 'exit 1'], ['success', 'exit 1'], ['success', 'echo ""'], ['failure', 'exit 1', '']]) {
+      const out = runHelper(login, azBody, subscription)
+      strictAssert.match(out, /::error::No Azure management token/, `${login} ${azBody}`)
+      strictAssert.match(out, /subscription=\S+ token=unset\n$/, 'the subscription alone makes the refresh fail as half-configured')
+    }
+    const skipped = runHelper('skipped', 'echo should-not-run')
+    strictAssert.match(skipped, /::notice::Azure login runs only on main; .* on refs\/heads\/topic\.\nsubscription=unset token=unset\n$/)
+  })
+}
 
 test('the public contract does not react to the source check', () => {
   const publicWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'public-contract.yml'), 'utf8')
