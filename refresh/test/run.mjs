@@ -4051,7 +4051,7 @@ reviewTest('Notice-date layout: each OpenAI row takes its announcement from its 
 reviewTest('Notice-date layout: every OpenAI record carries the shutdown, notice date, replacement, and aliases of a row that names it', () => {
   const rows = [...noticeDateHtml.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].flatMap(table => {
     const cells = [...table[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map(row => [...row[1].matchAll(/<(?:th|td)\b[^>]*>([\s\S]*?)<\/(?:th|td)>/gi)].map(cell => cell[1]))
-    const header = cells[0].map(cell => cell.replace(/<[^>]+>/g, '').trim())
+    const header = cells[0].map(cell => cell.split(/<[^>]*>/).join('').trim())
     const at = label => header.indexOf(label)
     const model = at('Affected model') >= 0 ? at('Affected model') : at('Affected model or feature')
     if (model < 0) return []
@@ -4190,7 +4190,7 @@ reviewTest('Notice-date layout: an OpenAI notice header the parser does not acce
   for (const label of ['Notice date (UTC)', 'Notice date¹', 'Date announced', 'Last notice date', 'Notice', 'Announced', 'Notice dates']) {
     const headers = noticeHeaders.filter(header => header !== 'Status').map(header => header === 'Notice date' ? label : header)
     const rows = [noticeRow.filter(cell => cell !== 'Deprecated')]
-    strictAssert.throws(() => noticeTableRecords(headers, rows), new RegExp(`table has an unrecognised notice header: ${label.toLowerCase().replace(/[()]/g, '\\$&')}$`), label)
+    strictAssert.throws(() => noticeTableRecords(headers, rows), new RegExp(`table has an unrecognised notice header: ${label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), label)
   }
   const fallback = noticeTable(noticeHeaders.filter(header => header !== 'Status' && header !== 'Notice date'), [noticeRow.filter(cell => cell !== 'Deprecated' && cell !== 'Oct 1, 2026')])
   strictAssert.deepEqual(noticeParse(fallback).map(record => record.announced), ['2026-01-01'])
