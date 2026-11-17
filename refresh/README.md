@@ -120,12 +120,36 @@ The daily `source-check` workflow runs this check; see
 
 ## Anthropic
 
-The refresh reads the Anthropic model deprecations page for dates and the
-model overview pages for IDs and aliases.
+The refresh reads the Anthropic model deprecations page for dates, the model
+overview pages for IDs and aliases, and, with a key, the models API for
+current IDs and a lifecycle cross-check.
 
 - Dates come only from the
-  [model deprecations page](https://platform.claude.com/docs/en/about-claude/model-deprecations).
-  Its "not sooner than" dates for active models become `tentative` shutdowns.
+  [model deprecations page](https://platform.claude.com/docs/en/about-claude/model-deprecations),
+  fetched as its Markdown copy at
+  `https://platform.claude.com/docs/en/about-claude/model-deprecations.md`
+  (listed in the site's `llms.txt`). Records and the feed cite the human page
+  as `source`. Its "not sooner than" dates for active models become
+  `tentative` shutdowns.
+- The page has a model status table (API model name, Current state,
+  Deprecated, Tentative retirement date) and a `### YYYY-MM-DD: ...` section
+  per announcement, each with a Retirement date, Deprecated model, Recommended
+  replacement table. Tables are read with the strict pipe-table reader above,
+  then rendered as HTML for the row readers, so every rule below applies to
+  the Markdown page as it did to the HTML one.
+- An announcement's date is its section heading's date. A heading without one
+  falls back to the dates in the prose between it and the table, which must
+  hold exactly one; a `<Note>` saying when the model retired counts as prose,
+  so a section with both a retirement note and a notification date stops the
+  run.
+- `<Note>`, `<Warning>`, `<Tip>`, and `<Info>` tags are read as prose. Any
+  other tag at the start or end of a line, an HTML table or heading, a setext
+  heading, or an unbalanced comment marker stops the run. Front matter, HTML
+  comments, and fenced code are ignored.
+- A pipe table must be the status table, an announcement table, an endpoint
+  table, or a table whose header names neither a model nor a retirement,
+  deprecation, shutdown, or sunset, such as the API parameter table, which
+  yields no records. Any other table stops the run instead of being skipped.
 - Model IDs and aliases come from the overview pages listed in
   `https://platform.claude.com/docs/llms.txt`. Only `Claude API` and
   `Claude API alias` rows are imported. Those pages supply no dates.
@@ -138,7 +162,33 @@ model overview pages for IDs and aliases.
   otherwise the announcement is used. This also applies when one of the rows
   names an alias of the model, and two status rows that reach one model must
   give the same state and dates.
-- Offline runs read `test/fixture/anthropic-llms.txt` and
+- With `ANTHROPIC_API_KEY`, the refresh lists
+  `https://api.anthropic.com/v1/models` with `lifecycle[]=active`,
+  `lifecycle[]=deprecated`, `lifecycle[]=retired` (the array encoding the
+  official SDKs send) and `limit=1000`, following `after_id` for up to 20
+  pages. Active and deprecated IDs are the current IDs, the same set the list
+  returns without a `lifecycle` filter; retired IDs are only compared.
+- Every listed model must carry `lifecycle` (`active`, `deprecated`, or
+  `retired`), `deprecated_at`, and `retires_at`, each date an RFC 3339
+  date-time with a `Z` or numeric offset, or null. An active model must have
+  both dates null, a deprecated or retired model must have `deprecated_at`,
+  and `retires_at` can't precede it. Anything else stops the run.
+- The page stays authoritative. The API's lifecycle is compared with the
+  page's stated state, `deprecated_at` (as a UTC calendar date) with the
+  page's deprecated date, and `retires_at` with the page's exact retirement
+  date (a tentative page date matches a null `retires_at`). Each disagreement,
+  and each deprecated or retired API model the page doesn't list, becomes a
+  `Source conflicts` line in the semantic diff and a `notice:` line on stderr.
+  Neither fails the run, puts an API date or state in the feed, or counts as a
+  material change. A deprecated model the page doesn't list is still a current
+  ID, as it was before the lifecycle fields were read, so it can enter the
+  feed with no dates. The
+  run then prints `notice: anthropic models API lifecycle: N active, N
+  deprecated, N retired; N conflicts with the deprecations page`. Without the
+  key, none of this runs.
+- Offline runs read `test/fixture/anthropic-deprecations.md`,
+  `test/fixture/anthropic-models.json` (with the lifecycle fields),
+  `test/fixture/anthropic-llms.txt`, and
   `test/fixture/anthropic-model-pages/<slug>.md`.
 
 ## OpenAI

@@ -2,7 +2,7 @@
   "version": 1,
   "sources": {
     "anthropic": {
-      "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+      "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations.md",
       "tables": [
         "api model name | current state | deprecated | tentative retirement date [4 cols]",
         "parameter | status | behavior | recommended replacement [4 cols]",

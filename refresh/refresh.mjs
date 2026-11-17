@@ -128,6 +128,7 @@ export async function generateProviderFeed(providerName, options = {}) {
     unconfirmedIds: merged.unconfirmedIds,
     skipped: sources.skipped,
     undatedDeprecatedIds: sources.undatedDeprecatedIds,
+    sourceConflicts: sources.sourceConflicts ?? [],
   }
 }
 
@@ -251,7 +252,7 @@ export async function run(options) {
       unconfirmed: item.unconfirmedIds,
       unconfirmedDistributions,
       noPublisherFeed,
-      sourceConflicts: index === 0 ? distributorState?.sourceConflicts ?? [] : [],
+      sourceConflicts: [...(item.sourceConflicts ?? []), ...(index === 0 ? distributorState?.sourceConflicts ?? [] : [])],
       skippedModelCards: index === 0 ? distributorState?.skippedModelCards ?? [] : [],
       publisher: item.provider.publisher,
       skipped: item.skipped,

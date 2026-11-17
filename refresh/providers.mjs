@@ -1,7 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fetchBoundedBody } from './fetch.mjs'
-import { MARKDOWN_ESCAPABLE, escapeHtml, markdownCellHtml, markdownInlineText, markdownPipeTableToHtml, markdownPipeTables, stripFencedCodeBlocks } from './markdown.mjs'
+import {
+  MARKDOWN_ESCAPABLE,
+  escapeHtml,
+  markdownCellHtml,
+  markdownInlineText,
+  markdownPipeTableToHtml,
+  markdownPipeTables,
+  stripFencedCodeBlocks,
+} from './markdown.mjs'
 
 export { markdownInlineText as googleInlineText, stripFencedCodeBlocks }
 
@@ -20,6 +28,7 @@ export const PROVIDERS = {
     feedFile: 'anthropic.json',
     modelsUrl: 'https://api.anthropic.com/v1/models',
     deprecationsUrl: 'https://platform.claude.com/docs/en/about-claude/model-deprecations',
+    deprecationsFetchUrl: 'https://platform.claude.com/docs/en/about-claude/model-deprecations.md',
     aliasesUrl: 'https://platform.claude.com/docs/llms.txt',
     keyEnv: 'ANTHROPIC_API_KEY',
     headers: {
@@ -864,6 +873,13 @@ function anthropicTentativeShutdown(text, id) {
 }
 
 const anthropicStatusStates = new WeakMap()
+// The page's stated lifecycle for each returned record, for the models API comparison only.
+const anthropicPageStates = new WeakMap()
+
+function noteAnthropicPageState(record, state) {
+  if (!anthropicPageStates.has(record)) anthropicPageStates.set(record, state)
+  else if (anthropicPageStates.get(record) !== state) anthropicPageStates.set(record, undefined)
+}
 
 function anthropicAnnouncementIndex(announcements) {
   const index = new Map()
@@ -940,10 +956,12 @@ function parseAnthropicStatusTables(html, sourceUrl, announcements) {
       if (matchingAnnouncements.length) {
         for (const announcement of matchingAnnouncements) {
           assertAnthropicStatusMatchesAnnouncement(id, state, item, announcement)
+          noteAnthropicPageState(announcement, state)
         }
         continue
       }
       anthropicStatusStates.set(item, state)
+      noteAnthropicPageState(item, state)
       records.push(item)
     }
     if (!parsedRows) throw new Error('anthropic model status table has no rows')
@@ -967,7 +985,8 @@ function parseAnthropicStatusTables(html, sourceUrl, announcements) {
   return { records: [...unique.values()], recognisedTables }
 }
 
-export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
+/** Parse the deprecations page as HTML; the Markdown parser feeds its converted page through here. */
+export function parseAnthropicDeprecationsHtml(html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
   let announcements = []
   try {
     announcements = parseDeprecationsHtml(html, sourceUrl, 'anthropic')
@@ -979,6 +998,87 @@ export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic
   const records = [...announcements, ...status.records]
   if (!records.length) throw new Error('anthropic deprecations page has no model entries')
   return records
+}
+
+const ANTHROPIC_COMPONENT_TAGS = new Set(['Note', 'Warning', 'Tip', 'Info'])
+const ANTHROPIC_LEADING_TAG = /^<\/?([A-Za-z][\w.-]*)(?=[\s/>])[^<>]*>/
+const ANTHROPIC_TRAILING_TAG = /<\/([A-Za-z][\w.-]*)\s*>$/
+const ANTHROPIC_HTML_STRUCTURE = /<\/?(?:table|thead|tbody|tr|td|th|h[1-6])(?=[\s/>])/i
+const ANTHROPIC_ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
+const ANTHROPIC_LIFECYCLE_LABEL = /\bmodels?\b|retire|deprecat|shutdown|sunset/i
+
+const blankLines = text => text.replace(/[^\n]/g, '')
+
+/** Source lines with front matter, fenced code, and comments blanked, numbered as markdownPipeTables numbers them. */
+export function anthropicMarkdownLines(markdown) {
+  let text = markdown.replace(/^﻿/, '').replace(/\r\n?/g, '\n')
+  const frontMatter = text.match(/^---[ \t]*\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?=\n|$)/)
+  if (frontMatter) text = blankLines(frontMatter[0]) + text.slice(frontMatter[0].length)
+  text = stripFencedCodeBlocks(text)
+  const comment = /<!--[\s\S]*?--!?>/g
+  while (comment.test(text)) text = text.replace(comment, blankLines)
+  return text.split('\n').map(line => line.replace(/^\s*(?:>\s?)+/, ''))
+}
+
+function anthropicProse(line, where) {
+  let text = line.trim()
+  if (/<!--|--!?>/.test(text)) throw new Error(`anthropic deprecations page has an unbalanced comment marker ${where}`)
+  for (let match; (match = text.match(ANTHROPIC_LEADING_TAG) ?? text.match(ANTHROPIC_TRAILING_TAG));) {
+    if (!ANTHROPIC_COMPONENT_TAGS.has(match[1])) throw new Error(`anthropic deprecations page has unsupported markup ${where}: ${line.trim()}`)
+    text = (match.index ? text.slice(0, match.index) : text.slice(match[0].length)).trim()
+  }
+  if (ANTHROPIC_HTML_STRUCTURE.test(text)) throw new Error(`anthropic deprecations page has an HTML table or heading ${where}: ${line.trim()}`)
+  return text
+}
+
+function assertAnthropicMarkdownTable(table, html, where) {
+  const rows = tableRows(html)
+  if (anthropicStatusHeaderRow(rows) || headerIndexes(rows, 'anthropic')) return
+  const labels = rows[0].cells.map(normaliseHeaderLabel)
+  if (labels.some(label => ANTHROPIC_LIFECYCLE_LABEL.test(label))) {
+    throw new Error(`anthropic deprecations table ${where} has an unrecognised layout: ${table.header.join(' | ')}`)
+  }
+}
+
+/** Convert the Markdown copy of the deprecations page to headings, prose, and tables in HTML. */
+export function anthropicMarkdownToHtml(markdown) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('anthropic deprecations page is empty')
+  const tables = new Map(markdownPipeTables(markdown).map(table => [table.line - 1, table]))
+  const lines = anthropicMarkdownLines(markdown)
+  const output = []
+  let where = 'before the first heading'
+  let previous = ''
+  for (let index = 0; index < lines.length; index++) {
+    const table = tables.get(index)
+    if (table) {
+      const html = markdownPipeTableToHtml(table)
+      assertAnthropicMarkdownTable(table, html, where)
+      output.push(html)
+      index += table.rows.length + 1
+      previous = ''
+      continue
+    }
+    const line = lines[index]
+    const heading = line.match(ANTHROPIC_ATX_HEADING)
+    if (heading) {
+      const text = anthropicProse(heading[2] ?? '', where)
+      output.push(`<h${heading[1].length}>${markdownCellHtml(text)}</h${heading[1].length}>`)
+      where = `under "${plainText(markdownCellHtml(text))}"`
+    } else if (/^ {0,3}=+[ \t]*$/.test(line) || (/^ {0,3}-{2,}[ \t]*$/.test(line) && previous)) {
+      throw new Error(`anthropic deprecations page has a setext heading ${where}: ${previous || line.trim()}`)
+    } else if (line.trim()) {
+      const text = anthropicProse(line, where)
+      if (text) output.push(`<p>${markdownCellHtml(text)}</p>`)
+    }
+    previous = heading || /^ {0,3}(?:[-*_][ \t]*){3,}$/.test(line) ? '' : line.trim()
+  }
+  return output.join('\n')
+}
+
+/** Parse the Markdown copy of the deprecations page; records cite the human page. */
+export function parseAnthropicDeprecations(markdown, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('anthropic deprecations page is empty')
+  return parseAnthropicDeprecationsHtml(anthropicMarkdownToHtml(markdown), sourceUrl)
 }
 
 export function parseAnthropicModelsIndex(markdown, url = PROVIDERS.anthropic.aliasesUrl) {
@@ -1871,6 +1971,130 @@ async function fetchPaginatedCohereModels(config, headers, fetchImpl) {
   throw new Error('cohere models endpoint pagination failed')
 }
 
+export const ANTHROPIC_LIFECYCLES = ['active', 'deprecated', 'retired']
+export const ANTHROPIC_MODELS_PAGE_SIZE = 1000
+const RFC3339_DATE_TIME = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
+
+function anthropicApiDate(value, id, field) {
+  if (value === null) return undefined
+  const match = typeof value === 'string' ? value.match(RFC3339_DATE_TIME) : null
+  let time = Number.NaN
+  try {
+    if (match && assertIsoDate(match[1])) time = Date.parse(value)
+  } catch {}
+  if (Number.isNaN(time)) throw new Error(`anthropic models response entry ${id} has an unparseable ${field}: ${JSON.stringify(value)}`)
+  return { date: new Date(time).toISOString().slice(0, 10), raw: value }
+}
+
+/** Parse one page of the models API with lifecycle fields; any undocumented lifecycle shape stops the run. */
+export function parseAnthropicModelsLifecyclePage(body) {
+  const page = parseModelsPage(body, 'anthropic')
+  const parsed = typeof body === 'string' ? JSON.parse(body) : body
+  if (Array.isArray(parsed) || typeof parsed.has_more !== 'boolean') {
+    throw new Error('anthropic models response must be an object with a data array and a boolean has_more')
+  }
+  const models = parsed.data.map((row, index) => {
+    const id = page.ids[index]
+    if (!MODEL_ID_PATTERN.test(id)) throw new Error(`anthropic models response contains an invalid model id: ${id}`)
+    for (const field of ['lifecycle', 'deprecated_at', 'retires_at']) {
+      if (!Object.hasOwn(row, field)) throw new Error(`anthropic models response entry ${id} has no ${field} field`)
+    }
+    if (!ANTHROPIC_LIFECYCLES.includes(row.lifecycle)) {
+      throw new Error(`anthropic models response entry ${id} has an unrecognised lifecycle: ${JSON.stringify(row.lifecycle)}`)
+    }
+    const deprecated = anthropicApiDate(row.deprecated_at, id, 'deprecated_at')
+    const retires = anthropicApiDate(row.retires_at, id, 'retires_at')
+    if (row.lifecycle === 'active' && (deprecated || retires)) {
+      throw new Error(`anthropic models response entry ${id} is active but has deprecated_at ${row.deprecated_at} and retires_at ${row.retires_at}`)
+    }
+    if (row.lifecycle !== 'active' && !deprecated) throw new Error(`anthropic models response entry ${id} is ${row.lifecycle} without deprecated_at`)
+    if (deprecated && retires && retires.date < deprecated.date) {
+      throw new Error(`anthropic models response entry ${id} retires before it was deprecated: ${row.retires_at} < ${row.deprecated_at}`)
+    }
+    return { id, lifecycle: row.lifecycle, deprecated, retires }
+  })
+  return { ...page, models }
+}
+
+/** The models API list URL that asks for every lifecycle stage, as the official SDKs encode the array. */
+export function anthropicModelsListUrl(modelsUrl) {
+  const url = new URL(modelsUrl)
+  for (const name of ['lifecycle', 'lifecycle[]', 'limit', 'after_id', 'before_id']) url.searchParams.delete(name)
+  for (const lifecycle of ANTHROPIC_LIFECYCLES) url.searchParams.append('lifecycle[]', lifecycle)
+  url.searchParams.set('limit', String(ANTHROPIC_MODELS_PAGE_SIZE))
+  return url.toString()
+}
+
+async function fetchAnthropicModels(config, headers, fetchImpl) {
+  const firstPage = anthropicModelsListUrl(config.modelsUrl)
+  const models = []
+  const seen = new Set()
+  let url = firstPage
+  let cursor
+  for (let page = 1; page <= MAX_MODEL_PAGES; page++) {
+    const parsed = parseAnthropicModelsLifecyclePage(await fetchBody(url, headers, config.publisher, fetchImpl))
+    for (const model of parsed.models) {
+      if (seen.has(model.id)) throw new Error(`anthropic models response contains duplicate model id across pages: ${model.id}`)
+      seen.add(model.id)
+      models.push(model)
+    }
+    if (!parsed.hasMore) return models
+    if (page === MAX_MODEL_PAGES) throw new Error(`anthropic models endpoint exceeded pagination cap of ${MAX_MODEL_PAGES} pages`)
+    if (!parsed.lastId) throw new Error('anthropic models response has_more is true without a last_id')
+    if (parsed.lastId === cursor) throw new Error('anthropic models pagination cursor did not advance')
+    cursor = parsed.lastId
+    url = nextPageUrl(firstPage, 'after_id', cursor)
+  }
+  throw new Error('anthropic models endpoint pagination failed')
+}
+
+/** Compare models API lifecycle rows with the deprecations page. The page is kept; disagreements are only reported. */
+export function compareAnthropicLifecycle(deprecations, apiModels) {
+  const counts = { active: 0, deprecated: 0, retired: 0 }
+  const pageIndex = new Map()
+  for (const record of deprecations) {
+    for (const key of [record.id, ...(record.aliases ?? [])]) {
+      if (!pageIndex.has(key)) pageIndex.set(key, record)
+    }
+  }
+  const conflicts = []
+  for (const model of apiModels) {
+    counts[model.lifecycle]++
+    const base = { publisher: 'anthropic', via: 'models-api', id: model.id, lifecycle: model.lifecycle, deprecated: model.deprecated, retires: model.retires }
+    const record = pageIndex.get(model.id)
+    if (!record) {
+      if (model.lifecycle !== 'active') conflicts.push({ ...base, field: 'uncovered' })
+      continue
+    }
+    const state = anthropicPageStates.get(record)
+    if (state && state !== model.lifecycle) conflicts.push({ ...base, field: 'lifecycle', page: { state } })
+    if ((record.announced ?? null) !== (model.deprecated?.date ?? null)) conflicts.push({ ...base, field: 'deprecated', page: { announced: record.announced } })
+    const pageRetirement = record.date_precision === 'tentative' ? undefined : record.shutdown
+    if ((pageRetirement ?? null) !== (model.retires?.date ?? null)) {
+      conflicts.push({ ...base, field: 'retirement', page: { shutdown: record.shutdown, date_precision: record.date_precision } })
+    }
+  }
+  return { counts, conflicts }
+}
+
+const apiDateLabel = value => value ? value.raw : 'null'
+
+/** One line for a publisher source conflict, as the semantic diff and the refresh notices print it. */
+export function providerSourceConflictSummary(conflict) {
+  const label = `${conflict.publisher} models API ${conflict.id}`
+  if (conflict.field === 'uncovered') {
+    return `${label}: ${conflict.lifecycle} (deprecated_at ${apiDateLabel(conflict.deprecated)}, retires_at ${apiDateLabel(conflict.retires)}) but not on the deprecations page; API dates not applied`
+  }
+  let detail
+  if (conflict.field === 'lifecycle') detail = `lifecycle ${conflict.lifecycle} on the API, ${conflict.page.state} on the deprecations page`
+  else if (conflict.field === 'deprecated') detail = `deprecated_at ${apiDateLabel(conflict.deprecated)} on the API, deprecated ${conflict.page.announced ?? 'not set'} on the deprecations page`
+  else {
+    const page = conflict.page.shutdown === undefined ? 'not set' : `${conflict.page.shutdown}${conflict.page.date_precision ? ` (${conflict.page.date_precision})` : ''}`
+    detail = `retires_at ${apiDateLabel(conflict.retires)} on the API, retirement ${page} on the deprecations page`
+  }
+  return `${label}: ${detail}; page kept`
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
@@ -2201,11 +2425,15 @@ export async function loadProviderSources(config, options = {}) {
   let endpointAvailable = false
   let currentModels = []
   let deprecatedIds = []
+  let anthropicLifecycle
 
   if (fixtures) {
     const modelFixture = findFixture(fixtures, config.publisher, 'models')
     const modelBody = fs.readFileSync(modelFixture, 'utf8')
-    if (config.publisher === 'mistral') {
+    if (config.publisher === 'anthropic') {
+      anthropicLifecycle = parseAnthropicModelsLifecyclePage(modelBody).models
+      currentIds = anthropicLifecycle.filter(model => model.lifecycle !== 'retired').map(model => model.id)
+    } else if (config.publisher === 'mistral') {
       const parsed = parseMistralModelsResponse(modelBody)
       currentIds = parsed.ids
       currentModels = parsed.models
@@ -2242,6 +2470,9 @@ export async function loadProviderSources(config, options = {}) {
         const parsed = await fetchPaginatedCohereModels(config, headers, fetchImpl)
         currentIds = parsed.ids
         deprecatedIds = parsed.deprecatedIds
+      } else if (config.publisher === 'anthropic') {
+        anthropicLifecycle = await fetchAnthropicModels(config, headers, fetchImpl)
+        currentIds = anthropicLifecycle.filter(model => model.lifecycle !== 'retired').map(model => model.id)
       } else {
         currentIds = await fetchPaginatedModels(config, headers, fetchImpl)
       }
@@ -2281,5 +2512,12 @@ export async function loadProviderSources(config, options = {}) {
     notice(`notice: ${config.publisher} models endpoint flags ${id} as deprecated without a dated announcement`)
   }
   if (config.publisher === 'anthropic') currentModels = await loadAnthropicModelPages(config, { fixtures, fetchImpl })
-  return { currentIds, currentModels, endpointAvailable, deprecations, skipped, undatedDeprecatedIds }
+  const sourceConflicts = []
+  if (anthropicLifecycle) {
+    const { counts, conflicts } = compareAnthropicLifecycle(deprecations, anthropicLifecycle)
+    for (const conflict of conflicts) notice(`notice: ${providerSourceConflictSummary(conflict)}`)
+    notice(`notice: anthropic models API lifecycle: ${counts.active} active, ${counts.deprecated} deprecated, ${counts.retired} retired; ${conflicts.length} conflicts with the deprecations page`)
+    sourceConflicts.push(...conflicts)
+  }
+  return { currentIds, currentModels, endpointAvailable, deprecations, skipped, undatedDeprecatedIds, sourceConflicts }
 }

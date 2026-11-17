@@ -39,6 +39,12 @@ import {
   loadProviderSources,
   mergeFeed,
   parseAnthropicDeprecations,
+  parseAnthropicDeprecationsHtml,
+  anthropicMarkdownToHtml,
+  anthropicModelsListUrl,
+  compareAnthropicLifecycle,
+  parseAnthropicModelsLifecyclePage,
+  providerSourceConflictSummary,
   parseAnthropicModels,
   dateFromText,
   parseGoogleDeprecations,
@@ -200,15 +206,16 @@ const unknownFlag = run(['--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown refresh flags exit 2 with the bad flag and help hint')
 
 const openaiHtml = fs.readFileSync(path.join(fixtures, 'openai-deprecations-headings.html'), 'utf8')
-const anthropicHtml = fs.readFileSync(path.join(fixtures, 'anthropic-deprecations.html'), 'utf8')
+const anthropicMarkdown = fs.readFileSync(path.join(fixtures, 'anthropic-deprecations.md'), 'utf8')
 const bedrockHtml = fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')
 const googleMarkdown = fs.readFileSync(path.join(fixtures, 'google-deprecations.md'), 'utf8')
 const vertexHtml = fs.readFileSync(path.join(fixtures, 'vertex-model-versions.html'), 'utf8')
-const endpointLookalikeHtml = fs.readFileSync(path.join(fixtures, 'anthropic-endpoint-lookalike.html'), 'utf8')
-const statusExtraColumnHtml = '<table><tr><th>Recommended replacement</th><th>Current state</th><th>API model name</th><th>Tentative retirement date</th><th>Deprecated</th></tr><tr><td><code>claude-next</code></td><td>Active</td><td><code>claude-extra-column</code></td><td>Not sooner than September 1, 2027</td><td>N/A</td></tr></table>'
-const statusRenamedColumnHtml = '<table><tr><th>API model name</th><th>Lifecycle state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-renamed-column</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>'
+const endpointLookalikeMarkdown = fs.readFileSync(path.join(fixtures, 'anthropic-endpoint-lookalike.md'), 'utf8')
+const mdTable = (header, rows) => `\n${[header, header.map(() => '---'), ...rows].map(cells => `| ${cells.join(' | ')} |`).join('\n')}\n\n`
+const statusExtraColumnMarkdown = mdTable(['Recommended replacement', 'Current state', 'API model name', 'Tentative retirement date', 'Deprecated'], [['`claude-next`', 'Active', 'claude-extra-column', 'Not sooner than September 1, 2027', 'N/A']])
+const statusRenamedColumnMarkdown = mdTable(['API model name', 'Lifecycle state', 'Deprecated', 'Tentative retirement date'], [['claude-renamed-column', 'Active', 'N/A', 'Not sooner than September 1, 2027']])
 const openaiEntries = parseOpenAIDeprecations(openaiHtml)
-const anthropicEntries = parseAnthropicDeprecations(anthropicHtml)
+const anthropicEntries = parseAnthropicDeprecations(anthropicMarkdown)
 const bedrockEntries = parseBedrockLifecycleHtml(bedrockHtml)
 const bedrockById = new Map(bedrockEntries.map(entry => [entry.bedrockId, entry]))
 const googleEntries = parseGoogleDeprecations(googleMarkdown)
@@ -290,7 +297,7 @@ const anthropicPageDates = mergeFeed({ ...anthropicFeed, models: [] }, { depreca
 assert(anthropicPageDates.announced === '2025-01-01' && anthropicPageDates.shutdown === '2026-01-01', 'Anthropic model-page lifecycle rows cannot override deprecation dates')
 const missingAnthropicPageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-missing-anthropic-page-'))
 try {
-  for (const name of ['anthropic-models.json', 'anthropic-deprecations.html', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(missingAnthropicPageDir, name))
+  for (const name of ['anthropic-models.json', 'anthropic-deprecations.md', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(missingAnthropicPageDir, name))
   await strictAssert.rejects(loadProviderSources(PROVIDERS.anthropic, { fixtures: missingAnthropicPageDir, notice: () => {} }), error => error.message.includes(anthropicModelUrls[0]) && error.message.includes('missing or unreadable fixture'))
   const missingPageOut = path.join(missingAnthropicPageDir, 'out')
   const missingPageRun = run(['--provider', 'anthropic', '--fixtures', missingAnthropicPageDir, '--out', missingPageOut])
@@ -697,20 +704,22 @@ for (const canonical of ['mistral-medium-2608', 'mistral-medium-2508']) {
   })
 }
 const openaiById = new Map(openaiEntries.map(entry => [entry.id, entry]))
+const anthropicStatusColumns = ['API model name', 'Current state', 'Deprecated', 'Tentative retirement date']
+const anthropicAnnouncementColumns = ['Retirement date', 'Deprecated model', 'Recommended replacement']
 const anthropicStatusHeader = '<tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>'
-const anthropicStatusTable = (id, state, deprecated, retirement) => `<table>${anthropicStatusHeader}<tr><td><code>${id}</code></td><td>${state}</td><td>${deprecated}</td><td>${retirement}</td></tr></table>`
-const anthropicAnnouncementTable = (id, announced, shutdown, aliases = []) => `<h2>${announced}: Model retirement</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>${shutdown}</td><td>${[id, ...aliases].map(token => `<code>${token}</code>`).join(' / ')}</td><td><code>claude-next</code></td></tr></table>`
+const anthropicStatusTable = (id, state, deprecated, retirement) => mdTable(anthropicStatusColumns, [[id, state, deprecated, retirement]])
+const anthropicAnnouncementTable = (id, announced, shutdown, aliases = []) => `\n### ${announced}: Model retirement\n${mdTable(anthropicAnnouncementColumns, [[shutdown, [id, ...aliases].map(token => `\`${token}\``).join(' / '), '`claude-next`']])}`
 
 let endpointLookalikeReason = ''
 try {
-  parseAnthropicDeprecations(endpointLookalikeHtml)
+  parseAnthropicDeprecations(endpointLookalikeMarkdown)
 } catch (error) {
   endpointLookalikeReason = error.message
 }
 assert(endpointLookalikeReason.includes('missing required columns') && endpointLookalikeReason.includes('api model name'), 'Anthropic rejects an endpoint lookalike carrying the status retirement header')
 
-const mixedEndpointHtml = `<h2>2026-01-01: Endpoint notice</h2><table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table><h2>2025-01-01: Model notice</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-mixed</code></td><td><code>claude-next</code></td></tr></table>${anthropicStatusTable('claude-mixed', 'Retired', '2025-01-01', '2027-01-01')}`
-const mixedEndpointEntries = parseAnthropicDeprecations(mixedEndpointHtml)
+const mixedEndpointMarkdown = `### 2026-01-01: Endpoint notice\n${mdTable(['Retirement date', 'Deprecated endpoint', 'Recommended replacement'], [['2027-01-01', '`/v1/old`', '`/v1/new`']])}### 2025-01-01: Model notice\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-mixed`', '`claude-next`']])}${anthropicStatusTable('claude-mixed', 'Retired', '2025-01-01', '2027-01-01')}`
+const mixedEndpointEntries = parseAnthropicDeprecations(mixedEndpointMarkdown)
 assert(mixedEndpointEntries.length === 1 && mixedEndpointEntries[0].id === 'claude-mixed', 'generic deprecation parser skips endpoint tables while retaining model tables')
 
 const googleEndpointOnlyHtml = '<table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table>'
@@ -752,21 +761,26 @@ try {
 }
 assert(googleInvalidRowReason.includes('refused row') && googleInvalidRowReason.includes('endpoint-or-product-row'), 'Google model rows enforce the model identifier grammar')
 
-const anthropicApiModelHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>API model name</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-api-model</code></td><td><code>claude-next</code></td></tr></table>${anthropicStatusTable('claude-api-model', 'Retired', '2026-01-01', '2027-01-01')}`
-const anthropicApiModel = parseAnthropicDeprecations(anthropicApiModelHtml)
+const anthropicApiModelMarkdown = `## 2026-01-01\n${mdTable(['Retirement date', 'API model name', 'Recommended replacement'], [['2027-01-01', '`claude-api-model`', '`claude-next`']])}${anthropicStatusTable('claude-api-model', 'Retired', '2026-01-01', '2027-01-01')}`
+const anthropicApiModel = parseAnthropicDeprecations(anthropicApiModelMarkdown)
 assert(anthropicApiModel.length === 1 && anthropicApiModel[0].id === 'claude-api-model' && anthropicApiModel[0].replacement === 'claude-next', 'Anthropic announcement tables keep their recommended replacement column')
 
-const ambiguousAnnouncementHtml = '<h1>Model deprecations</h1><h2>Announcement context</h2><p>Notified 2025-01-01; retirement 2026-01-01.</p><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-ambiguous</code></td><td><code>claude-next</code></td></tr></table>'
+const ambiguousAnnouncementMarkdown = `# Model deprecations\n\n## Announcement context\n\nNotified 2025-01-01; retirement 2026-01-01.\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-ambiguous`', '`claude-next`']])}`
 let ambiguousAnnouncementReason = ''
 try {
-  parseAnthropicDeprecations(ambiguousAnnouncementHtml)
+  parseAnthropicDeprecations(ambiguousAnnouncementMarkdown)
 } catch (error) {
   ambiguousAnnouncementReason = error.message
 }
 assert(ambiguousAnnouncementReason.includes('ambiguous-announcement-date'), 'generic deprecation parser rejects ambiguous announcement context')
 
-const anthropicStatusEdgeHtml = '<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-no-tentative-date</code></td><td>Active</td><td>N/A</td><td>N/A</td></tr><tr><td><code>claude-empty-tentative-date</code></td><td>Active</td><td>N/A</td><td></td></tr><tr><td><code>claude-retired-without-announcement</code></td><td>Retired</td><td>June 1, 2026</td><td>August 1, 2026</td></tr><tr><td><code>claude-deprecated-without-retirement</code></td><td>Deprecated</td><td>July 1, 2026</td><td>N/A</td></tr></table>'
-const anthropicStatusEdges = parseAnthropicDeprecations(anthropicStatusEdgeHtml)
+const anthropicStatusEdgeMarkdown = mdTable(anthropicStatusColumns, [
+  ['claude-no-tentative-date', 'Active', 'N/A', 'N/A'],
+  ['claude-empty-tentative-date', 'Active', 'N/A', ''],
+  ['claude-retired-without-announcement', 'Retired', 'June 1, 2026', 'August 1, 2026'],
+  ['claude-deprecated-without-retirement', 'Deprecated', 'July 1, 2026', 'N/A'],
+])
+const anthropicStatusEdges = parseAnthropicDeprecations(anthropicStatusEdgeMarkdown)
 const anthropicNoDates = anthropicStatusEdges.filter(entry => entry.id === 'claude-no-tentative-date' || entry.id === 'claude-empty-tentative-date')
 assert(anthropicNoDates.length === 2 && anthropicNoDates.every(entry => entry.shutdown === undefined && entry.date_precision === undefined), 'Anthropic treats active N/A and empty retirement dates as no date')
 const anthropicRetiredStatus = anthropicStatusEdges.find(entry => entry.id === 'claude-retired-without-announcement')
@@ -774,14 +788,15 @@ assert(anthropicRetiredStatus?.announced === '2026-06-01' && anthropicRetiredSta
 const anthropicDeprecatedStatus = anthropicStatusEdges.find(entry => entry.id === 'claude-deprecated-without-retirement')
 assert(anthropicDeprecatedStatus?.announced === '2026-07-01' && anthropicDeprecatedStatus.shutdown === undefined, 'Anthropic converts a deprecated N/A status row into an announced-only record')
 
-const anthropicStatusError = html => {
+const anthropicStatusError = (markdown, parse = parseAnthropicDeprecations) => {
   try {
-    parseAnthropicDeprecations(html)
+    parse(markdown)
     return ''
   } catch (error) {
     return error.message
   }
 }
+const anthropicHtmlStatusError = html => anthropicStatusError(html, parseAnthropicDeprecationsHtml)
 const activeAnnouncementConflictId = 'claude-active-announcement-conflict'
 const activeAnnouncementConflictReason = anthropicStatusError(`${anthropicAnnouncementTable(activeAnnouncementConflictId, '2026-01-01', '2027-01-01')}${anthropicStatusTable(activeAnnouncementConflictId, 'Active', 'N/A', 'Not sooner than September 1, 2028')}`)
 assert(activeAnnouncementConflictReason.includes(activeAnnouncementConflictId) && activeAnnouncementConflictReason.includes('Active') && activeAnnouncementConflictReason.includes('2027-01-01'), 'Anthropic rejects an active status row that conflicts with an announcement')
@@ -803,31 +818,35 @@ assert(missingStatusShutdownReason.includes(missingStatusShutdownId) && missingS
 const announcedOnlyId = 'claude-announced-only-match'
 const announcedOnlyMatch = parseAnthropicDeprecations(`${anthropicAnnouncementTable(announcedOnlyId, '2026-01-01', 'N/A')}${anthropicStatusTable(announcedOnlyId, 'Deprecated', '2026-01-01', 'N/A')}`)
 assert(announcedOnlyMatch.length === 1 && announcedOnlyMatch[0].announced === '2026-01-01' && announcedOnlyMatch[0].shutdown === undefined, 'Anthropic deduplicates matching announced-only lifecycle rows')
-const extraColumnStatus = parseAnthropicDeprecations(statusExtraColumnHtml)
+const extraColumnStatus = parseAnthropicDeprecations(statusExtraColumnMarkdown)
 assert(extraColumnStatus.length === 1 && extraColumnStatus[0].id === 'claude-extra-column' && extraColumnStatus[0].date_precision === 'tentative' && extraColumnStatus[0].replacement === undefined, 'Anthropic status parsing owns a table with an extra recommended replacement column')
-const footnotedStatusHtml = '<h2>2026-01-01</h2><table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date¹</th><th>Recommended replacement</th></tr><tr><td><code>claude-footnoted-status</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td><td><code>claude-next</code></td></tr></table>'
-const footnotedStatus = parseAnthropicDeprecations(footnotedStatusHtml)
+const footnotedStatusMarkdown = `## 2026-01-01\n${mdTable(['API model name', 'Current state', 'Deprecated', 'Tentative retirement date¹', 'Recommended replacement'], [['claude-footnoted-status', 'Active', 'N/A', 'Not sooner than September 1, 2027', '`claude-next`']])}`
+const footnotedStatus = parseAnthropicDeprecations(footnotedStatusMarkdown)
 assert(footnotedStatus.length === 1 && footnotedStatus[0].date_precision === 'tentative' && footnotedStatus[0].announced === undefined && footnotedStatus[0].replacement === undefined, 'Anthropic parses a footnoted tentative header only as status data')
 const tdHeaderStatusHtml = '<h2>2026-01-01</h2><table><tr><td>API model name</td><td>Current state</td><td>Deprecated</td><td>Tentative retirement *</td><td>Recommended replacement</td></tr><tr><td><code>claude-td-header-status</code></td><td>Active</td><td>N/A</td><td>Not sooner than October 1, 2027</td><td><code>claude-next</code></td></tr></table>'
-const tdHeaderStatus = parseAnthropicDeprecations(tdHeaderStatusHtml)
-assert(tdHeaderStatus.length === 1 && tdHeaderStatus[0].date_precision === 'tentative' && tdHeaderStatus[0].announced === undefined && tdHeaderStatus[0].replacement === undefined, 'Anthropic treats a td-only first row with the status signature as the header')
+const tdHeaderStatus = parseAnthropicDeprecationsHtml(tdHeaderStatusHtml)
+assert(tdHeaderStatus.length === 1 && tdHeaderStatus[0].date_precision === 'tentative' && tdHeaderStatus[0].announced === undefined && tdHeaderStatus[0].replacement === undefined, 'Anthropic HTML core treats a td-only first row with the status signature as the header (a pipe table always has a header row)')
 const leadingTitleStatusHtml = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-leading-title-announcement</code></td><td><code>claude-next</code></td></tr></table><table><tr><th colspan="4">Model status</th></tr><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-leading-title-status</code></td><td>Active</td><td>N/A</td><td>Not sooner than November 1, 2027</td></tr></table>'
-const leadingTitleStatus = parseAnthropicDeprecations(leadingTitleStatusHtml)
+const leadingTitleStatus = parseAnthropicDeprecationsHtml(leadingTitleStatusHtml)
 const leadingTitleAnnouncement = leadingTitleStatus.find(entry => entry.id === 'claude-leading-title-announcement')
 const leadingTitleTentative = leadingTitleStatus.find(entry => entry.id === 'claude-leading-title-status')
-assert(leadingTitleStatus.length === 2 && leadingTitleAnnouncement?.replacement === 'claude-next', 'Anthropic keeps announcements beside a status table with a leading title row')
-assert(leadingTitleTentative?.date_precision === 'tentative' && leadingTitleTentative.announced === undefined && leadingTitleTentative.replacement === undefined, 'Anthropic owns a status table across its leading header block')
-const renamedColumnReason = anthropicStatusError(statusRenamedColumnHtml)
+assert(leadingTitleStatus.length === 2 && leadingTitleAnnouncement?.replacement === 'claude-next', 'Anthropic HTML core keeps announcements beside a status table with a leading title row (a pipe table has no colspan)')
+assert(leadingTitleTentative?.date_precision === 'tentative' && leadingTitleTentative.announced === undefined && leadingTitleTentative.replacement === undefined, 'Anthropic HTML core owns a status table across its leading header block')
+const renamedColumnReason = anthropicStatusError(statusRenamedColumnMarkdown)
 assert(renamedColumnReason.includes('missing required columns') && renamedColumnReason.includes('current state'), 'Anthropic status parsing fails loudly on a renamed required column')
-const multipleStatusDriftReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than September 1, 2027')}<h2>2026-01-01</h2><table><tr><th>API model name</th><th>Lifecycle state</th><th>Deprecated</th><th>Tentative retirement [1]</th><th>Recommended replacement</th></tr><tr><td><code>claude-drifted-status</code></td><td>Active</td><td>N/A</td><td>September 1, 2027</td><td><code>claude-next</code></td></tr></table>`)
+const multipleStatusDriftReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than September 1, 2027')}## 2026-01-01\n${mdTable(['API model name', 'Lifecycle state', 'Deprecated', 'Tentative retirement [1]', 'Recommended replacement'], [['claude-drifted-status', 'Active', 'N/A', 'September 1, 2027', '`claude-next`']])}`)
 assert(multipleStatusDriftReason.includes('missing required columns') && multipleStatusDriftReason.includes('current state'), 'Anthropic never classifies a drifted second status table as an announcement')
-const ambiguousStatusSignatureReason = anthropicStatusError(`<table><tr><th colspan="4">Tentative retirement overview</th></tr>${anthropicStatusHeader}<tr><td><code>claude-ambiguous-status-header</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>`)
-assert(ambiguousStatusSignatureReason.includes('ambiguous signature rows'), 'Anthropic rejects two status signature rows in one leading header block')
-const missingStatusReason = anthropicStatusError('<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th></tr><tr><td>2027-01-01</td><td><code>claude-no-status-table</code></td></tr></table>')
+const ambiguousStatusSignatureReason = anthropicHtmlStatusError(`<table><tr><th colspan="4">Tentative retirement overview</th></tr>${anthropicStatusHeader}<tr><td><code>claude-ambiguous-status-header</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>`)
+assert(ambiguousStatusSignatureReason.includes('ambiguous signature rows'), 'Anthropic HTML core rejects two status signature rows in one leading header block (a pipe table has one header row)')
+const missingStatusReason = anthropicStatusError(`## 2026-01-01\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-no-status-table`', '`claude-next`']])}`)
 assert(missingStatusReason === 'anthropic deprecations page has no model status table', 'Anthropic parsing requires a recognised model status table')
-const headerOnlyStatusReason = anthropicStatusError(`<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-header-only-status</code></td><td><code>claude-next</code></td></tr></table><table>${anthropicStatusHeader}</table>`)
+const missingStatusHtmlReason = anthropicHtmlStatusError('<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th></tr><tr><td>2027-01-01</td><td><code>claude-no-status-table</code></td></tr></table>')
+assert(missingStatusHtmlReason === 'anthropic deprecations page has no model status table', 'Anthropic HTML core skips a two-column history table and still requires a status table')
+const twoColumnHistoryReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'N/A')}## 2026-01-01\n${mdTable(['Retirement date', 'Deprecated model'], [['2027-01-01', '`claude-no-replacement-column`']])}`)
+assert(twoColumnHistoryReason.includes('unrecognised layout: Retirement date | Deprecated model') && twoColumnHistoryReason.includes('under "2026-01-01"'), 'Anthropic Markdown refuses a model table it cannot classify instead of skipping it')
+const headerOnlyStatusReason = anthropicStatusError(`## 2026-01-01\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-header-only-status`', '`claude-next`']])}${mdTable(anthropicStatusColumns, [])}`)
 assert(headerOnlyStatusReason === 'anthropic model status table has no rows', 'Anthropic rejects a header-only status table even when announcements parsed')
-const duplicateStatusHeaderReason = anthropicStatusError('<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-duplicate-header</code></td><td>Active</td><td>N/A</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>')
+const duplicateStatusHeaderReason = anthropicStatusError(mdTable(['API model name', 'Current state', 'Deprecated', 'Deprecated', 'Tentative retirement date'], [['claude-duplicate-header', 'Active', 'N/A', 'N/A', 'Not sooner than September 1, 2027']]))
 assert(duplicateStatusHeaderReason.includes('duplicate required column') && duplicateStatusHeaderReason.includes('deprecated'), 'Anthropic rejects duplicate required status headers')
 const anthropicDeprecatedExact = parseAnthropicDeprecations(anthropicStatusTable('claude-deprecated-exact', 'Deprecated', 'July 1, 2026', 'October 1, 2026'))[0]
 assert(anthropicDeprecatedExact.announced === '2026-07-01' && anthropicDeprecatedExact.shutdown === '2026-10-01', 'Anthropic parses a deprecated status row with exact lifecycle dates')
@@ -855,11 +874,11 @@ assert(tbaConflictReason.includes(tbaConflictId) && tbaConflictReason.includes('
 const tbaAnnouncementId = 'claude-tba-announcement'
 const tbaAnnouncement = parseAnthropicDeprecations(`${anthropicAnnouncementTable(tbaAnnouncementId, '2026-01-01', 'To be announced')}${anthropicStatusTable(tbaAnnouncementId, 'Deprecated', '2026-01-01', 'To be announced')}`)
 assert(tbaAnnouncement.length === 1 && tbaAnnouncement[0].announced === '2026-01-01' && tbaAnnouncement[0].shutdown === undefined, 'Anthropic converts a To-be-announced announcement row into an announced-only record')
-const populatedRowWithoutIdReason = anthropicStatusError(`<table>${anthropicStatusHeader}<tr><td><code>claude-kept-row</code></td><td>Active</td><td>N/A</td><td>Not sooner than June 9, 2027</td></tr><tr><td></td><td>Active</td><td>N/A</td><td>Not sooner than July 1, 2027</td></tr></table>`)
+const populatedRowWithoutIdReason = anthropicStatusError(mdTable(anthropicStatusColumns, [['claude-kept-row', 'Active', 'N/A', 'Not sooner than June 9, 2027'], ['', 'Active', 'N/A', 'Not sooner than July 1, 2027']]))
 assert(populatedRowWithoutIdReason.includes('populated row without a model id'), 'a populated status row with an empty model cell fails closed')
-const spacerRowRecords = parseAnthropicDeprecations(`<table>${anthropicStatusHeader}<tr><td><code>claude-kept-row</code></td><td>Active</td><td>N/A</td><td>Not sooner than June 9, 2027</td></tr><tr><td></td><td></td><td></td><td></td></tr></table>`)
+const spacerRowRecords = parseAnthropicDeprecations(mdTable(anthropicStatusColumns, [['claude-kept-row', 'Active', 'N/A', 'Not sooner than June 9, 2027'], ['', '', '', '']]))
 assert(spacerRowRecords.length === 1 && spacerRowRecords[0].id === 'claude-kept-row', 'a wholly empty spacer row is still skipped')
-const renamedSignatureReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than June 9, 2027')}<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Retirement date</th></tr><tr><td><code>claude-drifted-status</code></td><td>Active</td><td>N/A</td><td>September 1, 2027</td></tr></table>`)
+const renamedSignatureReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than June 9, 2027')}${mdTable(['API model name', 'Current state', 'Deprecated', 'Retirement date'], [['claude-drifted-status', 'Active', 'N/A', 'September 1, 2027']])}`)
 assert(renamedSignatureReason.includes('missing required columns: tentative retirement'), 'a status-shaped table with a renamed tentative column fails closed instead of parsing as an announcement')
 const twoDateCellReason = anthropicStatusError(anthropicStatusTable('claude-two-dates', 'Retired', 'June 1, 2026', '2026-08-01 August 5, 2026'))
 assert(twoDateCellReason.includes('unrecognised retirement date'), 'a status date cell with two date candidates fails closed')
@@ -871,6 +890,179 @@ const activeDeprecatedReason = anthropicStatusError(anthropicStatusTable('claude
 assert(activeDeprecatedReason.includes('claude-active-deprecated') && activeDeprecatedReason.includes('June 1, 2026'), 'Anthropic rejects an active row with a deprecated date')
 const reversedLifecycleReason = anthropicStatusError(anthropicStatusTable('claude-reversed-lifecycle', 'Retired', 'August 1, 2026', 'June 1, 2026'))
 assert(reversedLifecycleReason.includes('claude-reversed-lifecycle') && reversedLifecycleReason.includes('before'), 'Anthropic rejects retirement before deprecation')
+
+const anthropicStatusOnly = anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'N/A')
+reviewTest('Anthropic Markdown: front matter, Note and Warning components, lists, links, and the parameter table are read as prose or skipped', () => {
+  const html = anthropicMarkdownToHtml(anthropicMarkdown)
+  strictAssert.ok(!/title: Model deprecations|&lt;Note|&lt;Warning|<Note|<Warning/.test(html))
+  strictAssert.ok(html.includes('<h3>2026-06-05: Claude Opus 4.1 model</h3>') && html.includes('<p>This model was retired August 5, 2026.</p>'))
+  strictAssert.equal((html.match(/<table>/g) ?? []).length, 8)
+  strictAssert.deepEqual(parseAnthropicDeprecations(anthropicMarkdown.replace(/\n/g, '\r\n')), anthropicEntries)
+})
+reviewTest('Anthropic Markdown: the heading date wins over the dates in a Note callout and the prose below it', () => {
+  strictAssert.equal(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805').announced, '2026-06-05')
+  const undated = `### Claude X model\n\n<Note>\n  This model was retired August 5, 2026.\n</Note>\n\nOn June 5, 2026, Anthropic notified developers.\n${mdTable(anthropicAnnouncementColumns, [['August 5, 2026', '`claude-x`', '`claude-next`']])}${anthropicStatusOnly}`
+  strictAssert.throws(() => parseAnthropicDeprecations(undated), /ambiguous-announcement-date/)
+})
+reviewTest('Anthropic Markdown: undocumented components, raw HTML blocks, and HTML tables or headings fail closed', () => {
+  for (const markup of ['<Accordion title="Retired models">', '<div class="history">', '<table><tr><td>x</td></tr></table>', '<h3>2026-01-01: Claude X</h3>', '<Tabs>']) {
+    strictAssert.throws(() => parseAnthropicDeprecations(`## History\n\n${markup}\n${anthropicStatusOnly}`), /unsupported markup under "History"/, markup)
+  }
+  strictAssert.throws(() => parseAnthropicDeprecations(`## History\n\nSee <table> below.\n${anthropicStatusOnly}`), /HTML table or heading under "History"/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`<Note>This was <h3>moved</h3> here</Note>\n${anthropicStatusOnly}`), /HTML table or heading/)
+  strictAssert.deepEqual(parseAnthropicDeprecations(`<Tip title="x">See <https://example.com/a>.</Tip>\n${anthropicStatusOnly}`).map(entry => entry.id), ['claude-valid-status'])
+})
+reviewTest('Anthropic Markdown: a setext heading cannot stand in for a dated section heading', () => {
+  const setext = `2026-01-01: Claude X model\n---\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-x`', '`claude-next`']])}${anthropicStatusOnly}`
+  strictAssert.throws(() => parseAnthropicDeprecations(setext), /setext heading before the first heading: 2026-01-01: Claude X model/)
+  strictAssert.throws(() => parseAnthropicDeprecations(setext.replace('---', '===')), /setext heading/)
+  strictAssert.deepEqual(parseAnthropicDeprecations(`Intro.\n\n---\n${anthropicStatusOnly}`).map(entry => entry.id), ['claude-valid-status'])
+})
+reviewTest('Anthropic Markdown: malformed pipe tables, comments, and fenced code follow the strict reader', () => {
+  strictAssert.throws(() => parseAnthropicDeprecations(`| API model name | Current state | Deprecated | Tentative retirement date |\n| --- | --- | --- | --- |\n| claude-short | Active | N/A |\n`), /line 3: table row has 3 cells; the header has 4/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`${anthropicStatusOnly}\n| claude-orphan | Active | N/A | N/A |\n`), /table row outside a table/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`${anthropicStatusOnly}<!-- unclosed\n`), /unbalanced comment marker/)
+  const hidden = mdTable(anthropicStatusColumns, [['claude-hidden', 'Retired', 'June 1, 2026', 'August 1, 2026']])
+  strictAssert.deepEqual(parseAnthropicDeprecations(`<!--\n${hidden}-->\n\`\`\`\n${hidden}\`\`\`\n${anthropicStatusOnly}`).map(entry => entry.id), ['claude-valid-status'])
+})
+reviewTest('Anthropic Markdown: the API parameter table is skipped, but a renamed table that names models or retirement fails closed', () => {
+  const parameters = columns => `## API parameter deprecations\n${mdTable(columns, [['`temperature`, `top_p`', 'Removed', 'Returns a 400 error.', 'Omit']])}`
+  strictAssert.deepEqual(parseAnthropicDeprecations(`${anthropicStatusOnly}${parameters(['Parameter', 'Status', 'Behavior', 'Recommended replacement'])}`).map(entry => entry.id), ['claude-valid-status'])
+  strictAssert.throws(() => parseAnthropicDeprecations(`${anthropicStatusOnly}${parameters(['Parameter', 'Status', 'Affected models', 'Recommended replacement'])}`), /table under "API parameter deprecations" has an unrecognised layout: Parameter \| Status \| Affected models/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`${anthropicStatusOnly}${parameters(['Parameter', 'Retirement', 'Behavior', 'Recommended replacement'])}`), /unrecognised layout/)
+})
+
+const anthropicApiRow = (id, lifecycle, deprecated_at = null, retires_at = null) => ({ type: 'model', id, display_name: id, created_at: '2025-01-01T00:00:00Z', lifecycle, deprecated_at, retires_at })
+const anthropicApiPage = (rows, extra = {}) => JSON.stringify({ data: rows, first_id: rows[0]?.id ?? null, has_more: false, last_id: rows.at(-1)?.id ?? null, ...extra })
+const anthropicApiAgreeing = [
+  anthropicApiRow('claude-fable-5-1', 'active'),
+  anthropicApiRow('claude-opus-4-6', 'active'),
+  anthropicApiRow('claude-opus-4-1-20250805', 'retired', '2026-06-05T00:00:00Z', '2026-08-05T00:00:00Z'),
+  anthropicApiRow('claude-3-haiku-20240307', 'retired', '2026-02-19T00:00:00Z', '2026-04-20T00:00:00Z'),
+]
+const anthropicApiConflicting = [
+  anthropicApiRow('claude-fable-5-1', 'active'),
+  anthropicApiRow('claude-opus-4-6', 'deprecated', '2026-11-01T00:00:00Z', null),
+  anthropicApiRow('claude-opus-4-1-20250805', 'deprecated', '2026-06-04T20:00:00-04:00', '2026-08-05T00:00:00Z'),
+  anthropicApiRow('claude-sonnet-4-20250514', 'retired', '2026-04-14T00:00:00Z', '2026-06-16T00:00:00Z'),
+  anthropicApiRow('claude-mystery-1', 'deprecated', '2026-10-01T00:00:00Z', null),
+  anthropicApiRow('claude-mystery-0', 'retired', '2025-01-01T00:00:00.123Z', '2025-06-01T00:00:00Z'),
+  anthropicApiRow('claude-new-active', 'active'),
+]
+const anthropicApiLoad = async (pages, { notices = [], requests = [] } = {}) => loadProviderSources(PROVIDERS.anthropic, {
+  env: { ANTHROPIC_API_KEY: 'fixture-key' },
+  notice: message => notices.push(message),
+  fetchImpl: async (url, options) => {
+    const parsed = new URL(url)
+    requests.push({ url: parsed, options })
+    const text = body => ({ ok: true, status: 200, text: async () => body })
+    if (parsed.hostname === 'api.anthropic.com') return text(pages[parsed.searchParams.get('after_id') ?? ''])
+    if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return text(anthropicMarkdown)
+    if (url === PROVIDERS.anthropic.aliasesUrl) return text(anthropicIndex)
+    return text(anthropicModelMarkdown(url))
+  },
+})
+const agreeingNotices = []
+const agreeingRequests = []
+const agreeingSources = await anthropicApiLoad({ '': anthropicApiPage(anthropicApiAgreeing) }, { notices: agreeingNotices, requests: agreeingRequests })
+assert(agreeingNotices.at(-1) === 'notice: anthropic models API lifecycle: 2 active, 0 deprecated, 2 retired; 0 conflicts with the deprecations page' && !agreeingSources.sourceConflicts.length, 'Anthropic models API counts each lifecycle stage and finds no conflict when the API agrees with the page')
+assert(JSON.stringify(agreeingSources.deprecations) === JSON.stringify(anthropicEntries) && agreeingSources.currentIds.join() === 'claude-fable-5-1,claude-opus-4-6', 'Anthropic models API leaves page records untouched and keeps retired models out of the current ids')
+const agreeingModelsRequest = agreeingRequests.find(request => request.url.hostname === 'api.anthropic.com')
+assert(agreeingModelsRequest.options.headers['x-api-key'] === 'fixture-key' && agreeingModelsRequest.options.headers['anthropic-version'] === '2023-06-01' && agreeingModelsRequest.options.redirect === 'error', 'Anthropic models API request carries the key and version and refuses redirects')
+
+const conflictNotices = []
+const conflictSources = await anthropicApiLoad({ '': anthropicApiPage(anthropicApiConflicting) }, { notices: conflictNotices })
+const conflictLines = conflictSources.sourceConflicts.map(providerSourceConflictSummary)
+const expectedConflictLines = [
+  'anthropic models API claude-opus-4-6: lifecycle deprecated on the API, active on the deprecations page; page kept',
+  'anthropic models API claude-opus-4-6: deprecated_at 2026-11-01T00:00:00Z on the API, deprecated not set on the deprecations page; page kept',
+  'anthropic models API claude-opus-4-1-20250805: lifecycle deprecated on the API, retired on the deprecations page; page kept',
+  'anthropic models API claude-sonnet-4-20250514: retires_at 2026-06-16T00:00:00Z on the API, retirement 2026-06-15 on the deprecations page; page kept',
+  'anthropic models API claude-mystery-1: deprecated (deprecated_at 2026-10-01T00:00:00Z, retires_at null) but not on the deprecations page; API dates not applied',
+  'anthropic models API claude-mystery-0: retired (deprecated_at 2025-01-01T00:00:00.123Z, retires_at 2025-06-01T00:00:00Z) but not on the deprecations page; API dates not applied',
+]
+reviewTest('Anthropic models API: a state or date disagreement and an API-only deprecated or retired model are reported, not fatal', () => {
+  strictAssert.deepEqual(conflictLines, expectedConflictLines)
+  strictAssert.deepEqual(conflictNotices.slice(-7), [...expectedConflictLines.map(line => `notice: ${line}`), 'notice: anthropic models API lifecycle: 2 active, 3 deprecated, 2 retired; 6 conflicts with the deprecations page'].slice(-7))
+  strictAssert.deepEqual(conflictSources.deprecations, anthropicEntries)
+  strictAssert.deepEqual(conflictSources.currentIds, ['claude-fable-5-1', 'claude-opus-4-6', 'claude-opus-4-1-20250805', 'claude-mystery-1', 'claude-new-active'])
+})
+reviewTest('Anthropic models API: an offset timestamp compares by its UTC calendar date, and a tentative page date never conflicts with a null retires_at', () => {
+  strictAssert.ok(!conflictLines.some(line => line.includes('claude-opus-4-1-20250805: deprecated_at')))
+  strictAssert.ok(!conflictLines.some(line => line.includes('claude-fable-5-1') || line.includes('claude-new-active')))
+  const tentative = compareAnthropicLifecycle(anthropicEntries, [{ id: 'claude-opus-4-6', lifecycle: 'deprecated', deprecated: { date: '2026-11-01', raw: '2026-11-01T00:00:00Z' }, retires: { date: '2027-02-05', raw: '2027-02-05T00:00:00Z' } }])
+  strictAssert.deepEqual(tentative.conflicts.map(providerSourceConflictSummary).at(-1), 'anthropic models API claude-opus-4-6: retires_at 2027-02-05T00:00:00Z on the API, retirement 2027-02-05 (tentative) on the deprecations page; page kept')
+})
+reviewTest('Anthropic models API conflicts render in the semantic diff Source conflicts section without counting as a change', () => {
+  const committed = { ...anthropicFeed, models: [{ id: 'claude-opus-4-6' }] }
+  const options = { sourceConflicts: conflictSources.sourceConflicts }
+  const markdown = renderSemanticDiff(committed, committed, options)
+  strictAssert.ok(!compareFeeds(committed, committed, options).changed)
+  strictAssert.ok(markdown.includes(`## Source conflicts\n\n${expectedConflictLines.map(line => `- ${line}`).join('\n')}\n`))
+  strictAssert.ok(markdown.includes('No semantic changes.'))
+})
+reviewTest('Anthropic models API: an undocumented lifecycle value, date, or missing field stops the run', () => {
+  const row = { ...anthropicApiRow('claude-x', 'deprecated', '2026-06-05T00:00:00Z', '2026-08-05T00:00:00Z') }
+  const page = changes => anthropicApiPage([{ ...row, ...changes }])
+  const without = field => anthropicApiPage([Object.fromEntries(Object.entries(row).filter(([key]) => key !== field))])
+  for (const [body, pattern] of [
+    [page({ lifecycle: 'legacy' }), /entry claude-x has an unrecognised lifecycle: "legacy"/],
+    [page({ lifecycle: 'Deprecated' }), /unrecognised lifecycle: "Deprecated"/],
+    [page({ lifecycle: null }), /unrecognised lifecycle: null/],
+    [without('lifecycle'), /entry claude-x has no lifecycle field/],
+    [without('deprecated_at'), /entry claude-x has no deprecated_at field/],
+    [without('retires_at'), /entry claude-x has no retires_at field/],
+    [page({ retires_at: 'August 5, 2026' }), /unparseable retires_at: "August 5, 2026"/],
+    [page({ deprecated_at: '2026-06-05' }), /unparseable deprecated_at: "2026-06-05"/],
+    [page({ deprecated_at: '2026-02-30T00:00:00Z' }), /unparseable deprecated_at/],
+    [page({ deprecated_at: '2026-06-05T24:00:00Z' }), /unparseable deprecated_at/],
+    [page({ deprecated_at: '2026-06-05T00:00:00' }), /unparseable deprecated_at/],
+    [page({ deprecated_at: 1780617600 }), /unparseable deprecated_at: 1780617600/],
+    [page({ lifecycle: 'active' }), /entry claude-x is active but has deprecated_at/],
+    [page({ lifecycle: 'active', deprecated_at: null }), /entry claude-x is active but has deprecated_at null and retires_at/],
+    [page({ deprecated_at: null }), /entry claude-x is deprecated without deprecated_at/],
+    [page({ lifecycle: 'retired', deprecated_at: null, retires_at: null }), /entry claude-x is retired without deprecated_at/],
+    [page({ retires_at: '2026-06-04T00:00:00Z' }), /entry claude-x retires before it was deprecated/],
+    [page({ id: 'claude x' }), /invalid model id: claude x/],
+    [anthropicApiPage([row], { has_more: undefined }), /boolean has_more/],
+    [JSON.stringify([row]), /boolean has_more/],
+  ]) {
+    strictAssert.throws(() => parseAnthropicModelsLifecyclePage(body), pattern, body)
+  }
+  strictAssert.deepEqual(parseAnthropicModelsLifecyclePage(anthropicApiPage([row])).models, [{ id: 'claude-x', lifecycle: 'deprecated', deprecated: { date: '2026-06-05', raw: '2026-06-05T00:00:00Z' }, retires: { date: '2026-08-05', raw: '2026-08-05T00:00:00Z' } }])
+})
+let anthropicApiUnknownReason = ''
+try {
+  await anthropicApiLoad({ '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) })
+} catch (error) { anthropicApiUnknownReason = error.message }
+assert(anthropicApiUnknownReason.includes('unrecognised lifecycle: "sunset"'), 'an unknown models API lifecycle value fails the Anthropic source load')
+const anthropicApiPagedRequests = []
+const anthropicApiPaged = await anthropicApiLoad({
+  '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
+  'claude-fable-5-1': anthropicApiPage([anthropicApiRow('claude-opus-4-1-20250805', 'retired', '2026-06-05T00:00:00Z', '2026-08-05T00:00:00Z')]),
+}, { requests: anthropicApiPagedRequests })
+const pagedModelsUrls = anthropicApiPagedRequests.filter(request => request.url.hostname === 'api.anthropic.com').map(request => request.url)
+assert(pagedModelsUrls.length === 2 && pagedModelsUrls[1].searchParams.get('after_id') === 'claude-fable-5-1' && pagedModelsUrls.every(url => url.searchParams.getAll('lifecycle[]').join() === 'active,deprecated,retired') && anthropicApiPaged.currentIds.join() === 'claude-fable-5-1' && !anthropicApiPaged.sourceConflicts.length, 'Anthropic models API pages through every lifecycle stage and compares the retired model on page two')
+let anthropicApiDuplicateReason = ''
+try {
+  await anthropicApiLoad({
+    '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
+    'claude-fable-5-1': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
+  })
+} catch (error) { anthropicApiDuplicateReason = error.message }
+assert(anthropicApiDuplicateReason.includes('duplicate model id across pages: claude-fable-5-1'), 'Anthropic models API pagination stops on a model repeated across pages')
+assert(anthropicModelsListUrl(`${PROVIDERS.anthropic.modelsUrl}?lifecycle=active&limit=5&after_id=x`) === 'https://api.anthropic.com/v1/models?lifecycle%5B%5D=active&lifecycle%5B%5D=deprecated&lifecycle%5B%5D=retired&limit=1000', 'Anthropic models list URL replaces any lifecycle, limit, or cursor with all three stages and the maximum page size')
+
+const anthropicApiCliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-anthropic-api-cli-'))
+try {
+  for (const name of ['anthropic-deprecations.md', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(anthropicApiCliDir, name))
+  fs.cpSync(path.join(fixtures, 'anthropic-model-pages'), path.join(anthropicApiCliDir, 'anthropic-model-pages'), { recursive: true })
+  fs.writeFileSync(path.join(anthropicApiCliDir, 'anthropic-models.json'), anthropicApiPage(anthropicApiConflicting))
+  const cli = spawnSync(process.execPath, [refresh, '--provider', 'anthropic', '--check', '--fixtures', anthropicApiCliDir], { encoding: 'utf8' })
+  assert([0, 3].includes(cli.status) && cli.stdout.includes(`## Source conflicts\n\n- ${expectedConflictLines[0]}`) && cli.stderr.includes('notice: anthropic models API lifecycle: 2 active, 3 deprecated, 2 retired; 6 conflicts with the deprecations page') && cli.stderr.includes(`notice: ${expectedConflictLines[4]}`), 'refresh --check prints Anthropic models API conflicts in the diff and on stderr without failing')
+} finally {
+  fs.rmSync(anthropicApiCliDir, { recursive: true, force: true })
+}
 
 assert(openaiEntries.every(entry => !/[\s/]/.test(entry.id)), 'OpenAI endpoint and product retirement rows are excluded from the model feed')
 assert(normalizeBedrockId('anthropic.claude-3-haiku-20240307-v1:0') === 'claude-3-haiku-20240307', 'Bedrock normalization strips a known provider prefix and v1 suffix')
@@ -1662,7 +1854,9 @@ const feedById = new Map(openaiFeed.models.map(model => [model.id, model]))
 const overlapping = openaiEntries.filter(entry => feedById.has(entry.id))
 assert(overlapping.length > 0, 'OpenAI fixture overlaps the committed feed')
 assert(anthropicEntries.length === 9, 'Anthropic deprecation fixture parses announcement and active status entries')
-assert(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805')?.replacement === 'claude-opus-4-6', 'Anthropic replacement parses')
+assert(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805')?.replacement === 'claude-opus-4-8', 'Anthropic replacement parses')
+assert(PROVIDERS.anthropic.deprecationsFetchUrl === `${PROVIDERS.anthropic.deprecationsUrl}.md` && anthropicEntries.every(entry => entry.source === PROVIDERS.anthropic.deprecationsUrl), 'Anthropic fetches the Markdown page but cites the human page as source')
+assert(!anthropicEntries.some(entry => /temperature|top_p|top_k/.test(entry.id)), 'Anthropic Markdown fixture: the API parameter table yields no model records')
 const anthropicTentative = anthropicEntries.find(entry => entry.id === 'claude-fable-5-1')
 assert(anthropicTentative?.shutdown === '2027-09-01' && anthropicTentative.date_precision === 'tentative' && anthropicTentative.announced === undefined, 'Anthropic parses active tentative retirement dates without an announcement date')
 assert(anthropicTentative?.source === PROVIDERS.anthropic.deprecationsUrl, 'Anthropic tentative entries carry deprecations-page provenance')
@@ -1689,9 +1883,9 @@ const googleFixtureRows = [
 strictAssert.deepEqual(googleEntries, googleFixtureRows, 'Google Markdown fixture: every row parses with the callout precision, deprecated sections, wrapped and linked cells, and the agent table')
 assert(PROVIDERS.google.deprecationsFetchUrl === `${PROVIDERS.google.deprecationsUrl}.md` && googleEntries.every(entry => entry.source === PROVIDERS.google.deprecationsUrl), 'Google fetches the Markdown page but cites the human page as source')
 assert(googleIds.length === 3 && googleIds.includes('gemini-2.5-pro'), 'Google models endpoint fixture strips the models/ prefix')
-const genericStructuredHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>generic-structured</code></td><td><code>first-model</code> or <code>second-model</code></td></tr></table>${anthropicStatusTable('generic-structured', 'Retired', '2026-01-01', '2027-01-01')}`
+const genericStructuredMarkdown = `## 2026-01-01\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`generic-structured`', '`first-model` or `second-model`']])}${anthropicStatusTable('generic-structured', 'Retired', '2026-01-01', '2027-01-01')}`
 const googleStructuredHtml = '<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>google-structured</code></td><td>2027-01-01</td><td>first-model or second-model*</td></tr></table>'
-const genericStructured = parseAnthropicDeprecations(genericStructuredHtml)[0]
+const genericStructured = parseAnthropicDeprecations(genericStructuredMarkdown)[0]
 const googleStructured = parseGoogleDeprecationsHtml(googleStructuredHtml)[0]
 assert(JSON.stringify(genericStructured.replacement_options) === JSON.stringify(['first-model', 'second-model']), 'generic parser uses structured replacement routing')
 assert(!googleStructured.replacement && JSON.stringify(googleStructured.replacement_options) === JSON.stringify(['first-model']) && googleStructured.replacement_note === 'second-model*', 'Google parser keeps prose replacement tokens issue-only')
@@ -2691,11 +2885,12 @@ const openaiMarkdown = fs.readFileSync(path.join(fixtures, 'openai-deprecations.
 const responseFor = body => ({ ok: true, status: 200, text: async () => body })
 
 const anthropicKeylessRequests = []
+const anthropicKeylessNotices = []
 const anthropicKeyless = await loadProviderSources(PROVIDERS.anthropic, {
-  env: {}, notice: () => {},
+  env: {}, notice: message => anthropicKeylessNotices.push(message),
   fetchImpl: async (url, options) => {
     anthropicKeylessRequests.push({ url, options })
-    if (url === PROVIDERS.anthropic.deprecationsUrl) return responseFor(anthropicHtml)
+    if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return responseFor(anthropicMarkdown)
     if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(`${anthropicIndex}\n${anthropicIndex}`)
     strictAssert.ok(anthropicModelUrls.includes(url))
     return responseFor(anthropicModelMarkdown(url))
@@ -2703,6 +2898,9 @@ const anthropicKeyless = await loadProviderSources(PROVIDERS.anthropic, {
 })
 assert(anthropicKeyless.currentIds === null && !anthropicKeyless.endpointAvailable && JSON.stringify(anthropicKeyless.currentModels) === JSON.stringify(anthropicPageModels) && anthropicKeylessRequests.length === 15, 'keyless Anthropic refresh reads the index and every unique model page')
 assert(anthropicKeylessRequests.every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en' && !options.headers['x-api-key']), 'Anthropic index and page requests use bounded fetches without credentials')
+assert(!anthropicKeylessRequests.some(({ url }) => new URL(url).hostname === 'api.anthropic.com') && JSON.stringify(anthropicKeyless.deprecations) === JSON.stringify(anthropicEntries) && !anthropicKeyless.sourceConflicts.length, 'keyless Anthropic refresh never calls the models API and reports no lifecycle conflicts')
+strictAssert.deepEqual(anthropicKeylessNotices, ['notice: ANTHROPIC_API_KEY is unset; skipping anthropic models endpoint and preserving committed entries'])
+assert(true, 'keyless Anthropic refresh prints only the unset-key notice, with no models API lifecycle summary')
 for (const [index, expectedPages, diagnostic] of [
   [[...anthropicCapUrls, ...anthropicCapUrls].join('\n'), 100, undefined],
   [[...anthropicCapUrls, anthropicTestUrl].join('\n'), 0, 'cap of 100 pages'],
@@ -2714,7 +2912,7 @@ for (const [index, expectedPages, diagnostic] of [
     await loadProviderSources(PROVIDERS.anthropic, {
       env: {}, notice: () => {},
       fetchImpl: async url => {
-        if (url === PROVIDERS.anthropic.deprecationsUrl) return responseFor(anthropicHtml)
+        if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return responseFor(anthropicMarkdown)
         if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(index)
         pageCalls++
         return responseFor(anthropicTestTable(`| Claude API | \`claude-test-${pageCalls}\` |`))
@@ -2727,7 +2925,7 @@ for (const failure of ['HTTP', 'empty', 'oversized-header', 'oversized-stream'])
   await strictAssert.rejects(loadProviderSources(PROVIDERS.anthropic, {
     env: {}, notice: () => {},
     fetchImpl: async url => {
-      if (url === PROVIDERS.anthropic.deprecationsUrl) return responseFor(anthropicHtml)
+      if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return responseFor(anthropicMarkdown)
       if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(anthropicTestUrl)
       if (failure === 'HTTP') return { ok: false, status: 503 }
       if (failure === 'empty') return responseFor('')
@@ -2739,7 +2937,7 @@ for (const failure of ['HTTP', 'empty', 'oversized-header', 'oversized-stream'])
 }
 const boundedPublishers = {
   openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiMarkdown, credential: 'Authorization' },
-  anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key' }, html: anthropicHtml, credential: 'x-api-key' },
+  anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key' }, html: anthropicMarkdown, credential: 'x-api-key' },
   google: { env: { GEMINI_API_KEY: 'fixture-key' }, html: googleMarkdown, credential: 'x-goog-api-key' },
   mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralHtml, credential: 'Authorization' },
   cohere: { env: { COHERE_API_KEY: 'fixture-key' }, html: cohereHtml, credential: 'Authorization' },
@@ -3139,16 +3337,19 @@ const paginatedAnthropic = await loadProviderSources(PROVIDERS.anthropic, {
     const parsedUrl = new URL(url)
     anthropicPageUrls.push(parsedUrl)
     if (parsedUrl.pathname === '/v1/models') {
+      const row = id => ({ type: 'model', id, lifecycle: 'active', deprecated_at: null, retires_at: null })
       return parsedUrl.searchParams.get('after_id')
-        ? responseFor(JSON.stringify({ data: [{ id: 'anthropic-page-two' }], has_more: false, last_id: 'anthropic-page-two' }))
-        : responseFor(JSON.stringify({ data: [{ id: 'anthropic-page-one' }], has_more: true, last_id: 'anthropic-page-one' }))
+        ? responseFor(JSON.stringify({ data: [row('anthropic-page-two')], has_more: false, first_id: 'anthropic-page-two', last_id: 'anthropic-page-two' }))
+        : responseFor(JSON.stringify({ data: [row('anthropic-page-one')], has_more: true, first_id: 'anthropic-page-one', last_id: 'anthropic-page-one' }))
     }
     if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(anthropicIndex)
     if (anthropicModelUrls.includes(url)) return responseFor(anthropicModelMarkdown(url))
-    return responseFor(anthropicHtml)
+    return responseFor(anthropicMarkdown)
   },
 })
-assert(paginatedAnthropic.currentIds.length === 2 && anthropicPageUrls[1]?.searchParams.get('after_id') === 'anthropic-page-one', 'Anthropic models pagination follows after_id from last_id')
+const anthropicModelsRequests = anthropicPageUrls.filter(url => url.pathname === '/v1/models')
+assert(paginatedAnthropic.currentIds.length === 2 && anthropicModelsRequests[1]?.searchParams.get('after_id') === 'anthropic-page-one', 'Anthropic models pagination follows after_id from last_id')
+assert(anthropicModelsRequests.length === 2 && anthropicModelsRequests.every(url => url.searchParams.getAll('lifecycle[]').join() === 'active,deprecated,retired' && url.searchParams.get('limit') === '1000' && !url.searchParams.has('lifecycle')), 'Anthropic models pagination asks every page for all three lifecycle stages, 1000 at a time, in the SDK bracket encoding')
 
 let capCalls = 0
 let paginationCapReason = ''
@@ -3563,16 +3764,16 @@ const corruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-corr
 for (const file of ['openai-models.json', 'anthropic-models.json', 'openai-deprecations.md']) {
   fs.copyFileSync(path.join(fixtures, file), path.join(corruptDir, file))
 }
-fs.writeFileSync(path.join(corruptDir, 'anthropic-deprecations.html'), '<html><body><table><tr><td>corrupt</td></tr></table></body></html>')
+fs.writeFileSync(path.join(corruptDir, 'anthropic-deprecations.md'), '<html><body><table><tr><td>corrupt</td></tr></table></body></html>')
 const corruptOut = path.join(corruptDir, 'out')
 const corruptRun = run(['--provider', 'anthropic', '--out', corruptOut, '--fixtures', corruptDir])
-assert(corruptRun.code === 1, 'corrupted fixture exits nonzero')
+assert(corruptRun.code === 1 && corruptRun.err.includes('unsupported markup'), 'an HTML body where the Markdown deprecations page belongs exits nonzero')
 assert(!fs.existsSync(corruptOut), 'corrupted fixture produces no output directory')
 
 const malformedStatusDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-malformed-status-'))
 fs.copyFileSync(path.join(fixtures, 'anthropic-models.json'), path.join(malformedStatusDir, 'anthropic-models.json'))
 fs.writeFileSync(
-  path.join(malformedStatusDir, 'anthropic-deprecations.html'),
+  path.join(malformedStatusDir, 'anthropic-deprecations.md'),
   anthropicStatusTable('claude-malformed-status-floor', 'Active', 'N/A', 'Not sooner than Q4 2027'),
 )
 const malformedStatusOut = path.join(malformedStatusDir, 'out')
@@ -4375,10 +4576,10 @@ reviewTest('Markdown source: an OpenAI page that is empty, has no pipe table, or
     'OpenAI deprecations are fetched from the Markdown copy and cite the human page',
   )
 }
-const anthropicAnnouncement = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-y-20250101</code></td><td><code>claude-next</code></td></tr></table>'
-const anthropicStatusRows = rows => `<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>${rows.map(cells => `<tr>${cells.map((cell, index) => `<td>${index ? cell : `<code>${cell}</code>`}</td>`).join('')}</tr>`).join('')}</table>`
-const anthropicAliasMerge = (html, reverse = false, models = [{ id: 'claude-y-20250101', aliases: ['claude-y'] }]) => {
-  const deprecations = parseAnthropicDeprecations(html)
+const anthropicAnnouncement = `## 2026-01-01\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-y-20250101`', '`claude-next`']])}`
+const anthropicStatusRows = rows => mdTable(anthropicStatusColumns, rows)
+const anthropicAliasMerge = (markdown, reverse = false, models = [{ id: 'claude-y-20250101', aliases: ['claude-y'] }]) => {
+  const deprecations = parseAnthropicDeprecations(markdown)
   return mergeFeed({ spec: 'model-eol/0.1', publisher: 'anthropic', models }, { deprecations: reverse ? deprecations.reverse() : deprecations, currentIds: null, provider: PROVIDERS.anthropic, notice: () => {} })
 }
 reviewTest('Issue 135 round 3: an Anthropic status row reaching an entry through an alias follows the rules for naming it directly, in either order', () => {
