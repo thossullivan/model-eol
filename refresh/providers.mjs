@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fetchBoundedBody } from './fetch.mjs'
-import { MARKDOWN_ESCAPABLE, escapeHtml, markdownInlineText, stripFencedCodeBlocks } from './markdown.mjs'
+import { MARKDOWN_ESCAPABLE, escapeHtml, markdownCellHtml, markdownInlineText, markdownPipeTableToHtml, markdownPipeTables, stripFencedCodeBlocks } from './markdown.mjs'
 
 export { markdownInlineText as googleInlineText, stripFencedCodeBlocks }
 
@@ -11,6 +11,7 @@ export const PROVIDERS = {
     feedFile: 'openai.json',
     modelsUrl: 'https://api.openai.com/v1/models',
     deprecationsUrl: 'https://developers.openai.com/api/docs/deprecations',
+    deprecationsFetchUrl: 'https://developers.openai.com/api/docs/deprecations.md',
     keyEnv: 'OPENAI_API_KEY',
     headers: {},
   },
@@ -768,6 +769,46 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     if (!previous.aliases.length) delete previous.aliases
   }
   return [...unique.values()]
+}
+
+const OPENAI_MARKDOWN_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
+
+// Same blanking as markdownPipeTables, so heading line numbers line up with its table line numbers.
+function openAIMarkdownLines(markdown) {
+  const blank = match => match.replace(/[^\n]/g, '')
+  const text = markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  const frontMatter = text.match(/^---[ \t]*\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?=\n|$)/)
+  let source = stripFencedCodeBlocks(frontMatter ? blank(frontMatter[0]) + text.slice(frontMatter[0].length) : text)
+  const comment = /<!--[\s\S]*?--!?>/g
+  while (comment.test(source)) source = source.replace(comment, blank)
+  return source.split('\n').map(line => line.replace(/^\s*(?:>\s?)+/, ''))
+}
+
+/** Convert OpenAI's Markdown deprecations page to the headings and tables that parseOpenAIDeprecations reads. */
+export function openAIMarkdownToHtml(markdown) {
+  let tables
+  try {
+    tables = markdownPipeTables(markdown)
+  } catch (error) {
+    throw new Error(`openai deprecations page: ${error.message}`)
+  }
+  const lines = openAIMarkdownLines(markdown)
+  const rawTable = lines.findIndex(line => /<table\b/i.test(line))
+  if (rawTable >= 0) throw new Error(`openai deprecations page: line ${rawTable + 1}: HTML table in the Markdown source`)
+  const blocks = tables.map(table => ({ line: table.line, html: markdownPipeTableToHtml(table) }))
+  for (const [index, line] of lines.entries()) {
+    const heading = line.match(OPENAI_MARKDOWN_HEADING)
+    if (heading) blocks.push({ line: index + 1, html: `<h${heading[1].length}>${markdownCellHtml((heading[2] ?? '').trim())}</h${heading[1].length}>` })
+  }
+  return blocks.sort((a, b) => a.line - b.line).map(block => block.html).join('\n')
+}
+
+/** Parse the Markdown copy of the OpenAI docs page; the row rules stay in parseOpenAIDeprecations. */
+export function parseOpenAIDeprecationsMarkdown(markdown, sourceUrl = PROVIDERS.openai.deprecationsUrl, options = {}) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('openai deprecations page is empty')
+  const html = openAIMarkdownToHtml(markdown)
+  if (!html) throw new Error('openai deprecations page has no recognisable deprecations content')
+  return parseOpenAIDeprecations(html, sourceUrl, options)
 }
 
 function anthropicStatusHeaderIndexes(rows) {
@@ -2220,7 +2261,7 @@ export async function loadProviderSources(config, options = {}) {
 
   const mistral = config.publisher === 'mistral' ? parseMistralDeprecations(html, config.deprecationsUrl) : undefined
   const deprecations = config.publisher === 'openai'
-    ? parseOpenAIDeprecations(html, config.deprecationsUrl, { now: options.now })
+    ? parseOpenAIDeprecationsMarkdown(html, config.deprecationsUrl, { now: options.now })
     : config.publisher === 'google'
       ? parseGoogleDeprecations(html, config.deprecationsUrl)
       : config.publisher === 'anthropic'

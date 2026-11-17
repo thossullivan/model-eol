@@ -43,7 +43,7 @@
       ]
     },
     "openai": {
-      "url": "https://developers.openai.com/api/docs/deprecations",
+      "url": "https://developers.openai.com/api/docs/deprecations.md",
       "tables": [
         "date | update [2 cols]",
         "shutdown date | affected feature or endpoint | status | recommended replacement | notice date [5 cols]",

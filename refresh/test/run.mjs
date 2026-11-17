@@ -51,6 +51,7 @@ import {
   parseCohereModelsResponse,
   parseModelsResponse,
   parseOpenAIDeprecations,
+  parseOpenAIDeprecationsMarkdown,
   parseOpenAIModels,
   stripComments,
 } from '../providers.mjs'
@@ -198,7 +199,7 @@ for (const via of ['publisher', 'publisher-fallback']) {
 const unknownFlag = run(['--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown refresh flags exit 2 with the bad flag and help hint')
 
-const openaiHtml = fs.readFileSync(path.join(fixtures, 'openai-deprecations.html'), 'utf8')
+const openaiHtml = fs.readFileSync(path.join(fixtures, 'openai-deprecations-headings.html'), 'utf8')
 const anthropicHtml = fs.readFileSync(path.join(fixtures, 'anthropic-deprecations.html'), 'utf8')
 const bedrockHtml = fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')
 const googleMarkdown = fs.readFileSync(path.join(fixtures, 'google-deprecations.md'), 'utf8')
@@ -2685,6 +2686,7 @@ assert(currentAdditionDiff.changed, 'semantic diff treats a current-model additi
 const openaiCheck = run(['--provider', 'openai', '--check', '--fixtures', fixtures])
 assert(openaiCheck.code === 0 || openaiCheck.code === 3, 'OpenAI --check exits 0 or 3 depending on committed feed state, never a failure')
 assert(openaiCheck.out.includes('Unconfirmed entries') && openaiCheck.out.includes('retained because neither source confirmed it'), '--check retains and reports committed entries the fixture slice does not confirm')
+const openaiMarkdown = fs.readFileSync(path.join(fixtures, 'openai-deprecations.md'), 'utf8')
 
 const responseFor = body => ({ ok: true, status: 200, text: async () => body })
 
@@ -2736,7 +2738,7 @@ for (const failure of ['HTTP', 'empty', 'oversized-header', 'oversized-stream'])
   assert(true, `Anthropic page loading fails closed on ${failure}`)
 }
 const boundedPublishers = {
-  openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiHtml, credential: 'Authorization' },
+  openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiMarkdown, credential: 'Authorization' },
   anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key' }, html: anthropicHtml, credential: 'x-api-key' },
   google: { env: { GEMINI_API_KEY: 'fixture-key' }, html: googleMarkdown, credential: 'x-goog-api-key' },
   mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralHtml, credential: 'Authorization' },
@@ -3124,7 +3126,7 @@ const paginatedOpenAI = await loadProviderSources(PROVIDERS.openai, {
         ? responseFor(JSON.stringify({ data: [{ id: 'page-two' }], has_more: false, last_id: 'page-two' }))
         : responseFor(JSON.stringify({ data: [{ id: 'page-one' }], has_more: true, last_id: 'page-one' }))
     }
-    return responseFor(openaiHtml)
+    return responseFor(openaiMarkdown)
   },
 })
 assert(paginatedOpenAI.currentIds.length === 2 && paginatedOpenAI.currentIds.includes('page-two') && openaiPageUrls[1]?.searchParams.get('after') === 'page-one', 'OpenAI models pagination follows the last id into the next page')
@@ -3160,7 +3162,7 @@ try {
         capCalls++
         return responseFor(JSON.stringify({ data: [{ id: `cap-page-${capCalls}` }], has_more: true, last_id: `cap-page-${capCalls}` }))
       }
-      return responseFor(openaiHtml)
+      return responseFor(openaiMarkdown)
     },
   })
 } catch (error) {
@@ -3505,15 +3507,15 @@ assert(!fs.existsSync(corruptBedrockOut), 'corrupted Bedrock fixture produces no
 
 const corruptOpenAIDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-openai-corrupt-'))
 fs.copyFileSync(path.join(fixtures, 'openai-models.json'), path.join(corruptOpenAIDir, 'openai-models.json'))
-fs.writeFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.html'), '<html><body><h1>Deprecations</h1><p>corrupt</p></body></html>')
+fs.writeFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.md'), '# Deprecations\n\ncorrupt\n')
 const corruptOpenAIOut = path.join(corruptOpenAIDir, 'out')
 const corruptOpenAIRun = run(['--provider', 'openai', '--out', corruptOpenAIOut, '--fixtures', corruptOpenAIDir])
 assert(corruptOpenAIRun.code === 1, 'corrupted OpenAI fixture exits nonzero')
 assert(!fs.existsSync(corruptOpenAIOut), 'corrupted OpenAI fixture produces no output directory')
-const corruptOpenAIHtml = fs.readFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.html'), 'utf8')
+const corruptOpenAIMarkdown = fs.readFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.md'), 'utf8')
 let corruptOpenAIMessage
 try {
-  parseOpenAIDeprecations(corruptOpenAIHtml)
+  parseOpenAIDeprecationsMarkdown(corruptOpenAIMarkdown)
 } catch (error) {
   corruptOpenAIMessage = error.message
 }
@@ -3524,7 +3526,7 @@ const multiFailureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh
 try {
   const sources = path.join(multiFailureDir, 'sources')
   fs.cpSync(fixtures, sources, { recursive: true })
-  fs.writeFileSync(path.join(sources, 'openai-deprecations.html'), corruptOpenAIHtml)
+  fs.writeFileSync(path.join(sources, 'openai-deprecations.md'), corruptOpenAIMarkdown)
   fs.writeFileSync(path.join(sources, 'google-deprecations.md'), '# Gemini deprecations\n\nNo lifecycle table here.\n')
   fs.writeFileSync(path.join(sources, 'bedrock-lifecycle.html'), '<html><body><table><tr><th>Model ID</th><th>Legacy date</th></tr></table></body></html>')
   fs.writeFileSync(path.join(sources, 'azure-model-retirement-schedule.html'), '<html><body><h1>Retirements</h1><p>corrupt</p></body></html>')
@@ -3558,7 +3560,7 @@ for (const code of [0, 3]) {
 }
 
 const corruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-corrupt-'))
-for (const file of ['openai-models.json', 'anthropic-models.json', 'openai-deprecations.html']) {
+for (const file of ['openai-models.json', 'anthropic-models.json', 'openai-deprecations.md']) {
   fs.copyFileSync(path.join(fixtures, file), path.join(corruptDir, file))
 }
 fs.writeFileSync(path.join(corruptDir, 'anthropic-deprecations.html'), '<html><body><table><tr><td>corrupt</td></tr></table></body></html>')
@@ -4123,6 +4125,16 @@ reviewTest('Notice-date layout: an OpenAI model row with an empty, unparseable, 
   }
 })
 const noticeStatusPage = status => noticeDateEdit(noticeCyberRow, noticeCyberRow.replace('>Deprecated<', `>${status}<`))
+const openaiMdParse = (page, now = noticeNow) => parseOpenAIDeprecationsMarkdown(page, undefined, { now })
+const openaiMdRow = (token, edit) => {
+  const lines = openaiMarkdown.split('\n')
+  const at = lines.flatMap((line, index) => line.startsWith('|') && line.includes(token) ? [index] : [])
+  strictAssert.equal(at.length, 1, token)
+  lines[at[0]] = `| ${edit(lines[at[0]].split('|').slice(1, -1).map(cell => cell.trim())).join(' | ')} |`
+  return lines.join('\n')
+}
+const openaiMdCyber = '`gpt-5.5-cyber-preview`'
+const openaiMdStatusPage = status => openaiMdRow(openaiMdCyber, cells => cells.with(2, status))
 reviewTest('Notice-date layout: an OpenAI Status other than Deprecated or a past Shut down fails closed naming the model', () => {
   for (const status of ['Read-only', 'Retired', 'Deprecated soon', '']) {
     strictAssert.throws(() => noticeParse(noticeStatusPage(status), new Date('2027-06-01T00:00:00Z')), new RegExp(`entry gpt-5\\.5-cyber-preview has an unrecognised status for shutdown 2027-02-01 on 2027-06-01: ${status || '\\(empty\\)'}$`), status)
@@ -4141,7 +4153,7 @@ reviewTest('Refresh clock: the CLI reads MODEL_EOL_GENERATED as the refresh day 
   const clockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-clock-'))
   try {
     fs.copyFileSync(path.join(fixtures, 'openai-models.json'), path.join(clockDir, 'openai-models.json'))
-    fs.writeFileSync(path.join(clockDir, 'openai-deprecations.html'), noticeStatusPage('Shut down'))
+    fs.writeFileSync(path.join(clockDir, 'openai-deprecations.md'), openaiMdStatusPage('Shut down'))
     fs.writeFileSync(path.join(clockDir, 'azure-model-retirement-schedule.html'), footnotedTable() + offerFootnote(3))
     const refreshAt = (source, generated) => run([...source, '--check', '--fixtures', clockDir], { env: { ...process.env, MODEL_EOL_GENERATED: generated } })
     const openai = ['--provider', 'openai']
@@ -4260,6 +4272,109 @@ reviewTest('Notice-date layout: an OpenAI family cell needs exactly one undated 
   }
   strictAssert.deepEqual(openAISnapshots('f', 'f-2025-03-20', 'f-2025-12-15'), [['f-2025-03-20', ['f']], ['f-2025-12-15', ['f']]])
 })
+const openaiMdHeaders = ['Shutdown date', 'Affected model', 'Status', 'Recommended replacement', 'Notice date']
+const openaiMdLine = cells => `| ${cells.join(' | ')} |`
+const openaiMdTable = (headers = openaiMdHeaders, rows = [['Jan 6, 2027', '`m-1`', 'Deprecated', '`gpt-next`', 'Oct 1, 2026']], heading = '## Upcoming deprecations') => `# Deprecations\n\n${heading}\n\n${openaiMdLine(headers)}\n${openaiMdLine(headers.map(() => '---'))}\n${rows.map(openaiMdLine).join('\n')}\n`
+const openaiMdRecords = page => openaiMdParse(page).map(record => [record.id, record.announced, record.shutdown, record.replacement ?? record.replacement_options])
+const openaiMdRecord = (id, page = openaiMarkdown) => openaiMdParse(page).find(record => record.id === id)
+reviewTest('Markdown source: the OpenAI Markdown fixture parses to the records of the rendered excerpt with the same rows, apart from curled apostrophes', () => {
+  strictAssert.deepEqual(openaiMdParse(openaiMarkdown), noticeParse(noticeDateHtml.replaceAll('’', "'")))
+  strictAssert.notDeepEqual(openaiMdParse(openaiMarkdown), noticeDateRecords())
+})
+reviewTest('Markdown source: each OpenAI row takes its announcement from its own notice date, and a bad notice cell stops the run naming the model', () => {
+  const lifecycle = id => { const { announced, shutdown } = openaiMdRecord(id) ?? {}; return [announced, shutdown] }
+  strictAssert.deepEqual(lifecycle('gpt-5-2025-08-07'), ['2026-06-11', '2026-12-11'])
+  strictAssert.deepEqual(lifecycle('gpt-5.5-cyber-preview'), ['2026-11-05', '2027-02-01'])
+  strictAssert.deepEqual(lifecycle('gpt-4-32k-0314'), ['2023-06-13', '2025-06-06'])
+  strictAssert.deepEqual(lifecycle('code-davinci-002'), ['2023-07-06', '2024-01-04'])
+  for (const notice of ['', 'TBD', 'Nov 5, 2026 (updated Nov 9, 2026)', 'Nov 31, 2026']) {
+    const page = openaiMdRow(openaiMdCyber, cells => cells.with(4, notice))
+    strictAssert.throws(() => openaiMdParse(page), notice === 'Nov 31, 2026' ? /entry gpt-5\.5-cyber-preview has no valid notice date: invalid date "Nov 31, 2026"$/ : /entry gpt-5\.5-cyber-preview has no valid notice date$/, notice)
+  }
+})
+reviewTest('Markdown source: an OpenAI status is Deprecated, or Shut down once the refresh clock reaches the shutdown date', () => {
+  for (const status of ['Read-only', 'Retired', 'Deprecated soon', '']) {
+    strictAssert.throws(() => openaiMdParse(openaiMdStatusPage(status), new Date('2027-06-01T00:00:00Z')), new RegExp(`entry gpt-5\\.5-cyber-preview has an unrecognised status for shutdown 2027-02-01 on 2027-06-01: ${status || '\\(empty\\)'}$`), status)
+  }
+  for (const status of ['Shut down', 'Shutdown']) {
+    strictAssert.throws(() => openaiMdParse(openaiMdStatusPage(status), new Date('2027-01-31T23:59:59Z')), /unrecognised status for shutdown 2027-02-01 on 2027-01-31/, status)
+    strictAssert.deepEqual(openaiMdParse(openaiMdStatusPage(status), new Date('2027-02-01T00:00:00Z')), openaiMdParse(openaiMarkdown), status)
+  }
+  strictAssert.throws(() => openaiMdParse(openaiMarkdown, new Date('not a date')), /refresh clock is not a valid date/)
+})
+reviewTest('Markdown source: OpenAI family-alias cells give one record per snapshot, and other multi-ID cells keep their aliases', () => {
+  const aliases = id => openaiMdRecord(id)?.aliases
+  strictAssert.deepEqual([aliases('gpt-4o-mini-tts-2025-03-20'), aliases('gpt-4o-mini-tts-2025-12-15')], [['gpt-4o-mini-tts'], ['gpt-4o-mini-tts']])
+  strictAssert.deepEqual([aliases('gpt-4o-2024-08-06'), aliases('gpt-4o-2024-11-20')], [undefined, undefined])
+  strictAssert.deepEqual(aliases('gpt-4-0613'), ['gpt-4', 'gpt-4-0613-completions', 'gpt-4-completions'])
+  strictAssert.deepEqual(aliases('gpt-4-0125-preview'), ['gpt-4-turbo-preview', 'gpt-4-turbo-preview-completions'])
+  strictAssert.ok(!openaiMdRecord('gpt-4o-mini-tts') && !openaiMdRecord('GPT-4o'))
+  const ambiguous = openaiMdRow('`gpt-4o-mini-tts-2025-03-20`', cells => cells.with(1, `${cells[1]}, \`gpt-4o-mini-tts-latest\``))
+  strictAssert.throws(() => openaiMdParse(ambiguous), /with ambiguous alias gpt-4o-mini-tts$/)
+})
+reviewTest('Markdown source: an OpenAI replacement cell without code spans is a note unless every part has the lowercase ID shape', () => {
+  const replacementOf = cell => Object.fromEntries(Object.entries(openaiMdRecord('gpt-4o-mini-transcribe-2025-03-20', openaiMdRow('`gpt-4o-mini-transcribe-2025-03-20`', cells => cells.with(3, cell)))).filter(([key]) => key.startsWith('replacement')))
+  strictAssert.deepEqual(replacementOf('`gpt-6-luna`'), { replacement: 'gpt-6-luna' })
+  strictAssert.deepEqual(replacementOf('gpt-6-luna'), { replacement: 'gpt-6-luna' })
+  for (const cell of ['gpt-5 or gpt-4.1', 'gpt-5, gpt-4.1', 'gpt-5 / gpt-4.1', '`gpt-5` or `gpt-4.1`']) strictAssert.deepEqual(replacementOf(cell), { replacement_options: ['gpt-5', 'gpt-4.1'] }, cell)
+  for (const cell of ['No one-to-one replacement', 'gpt-5 or later', 'GPT-5 / GPT-4.1', 'TBD']) strictAssert.deepEqual(replacementOf(cell), { replacement_note: cell }, cell)
+  for (const cell of ['---', 'N/A', 'none']) strictAssert.deepEqual(replacementOf(cell), {}, cell)
+  strictAssert.deepEqual(replacementOf('**No** one-to-one _replacement_'), { replacement_note: 'No one-to-one replacement' })
+  strictAssert.deepEqual(Object.entries(openaiMdRecord('sora-2')).filter(([key]) => key.startsWith('replacement')), [['replacement_note', 'No one-to-one replacement']])
+  strictAssert.deepEqual(Object.entries(openaiMdRecord('gpt-5.5-cyber-preview')).filter(([key]) => key.startsWith('replacement')), [['replacement_note', 'The most capable cyber model available to you.']])
+})
+reviewTest('Markdown source: an OpenAI notice header the parser does not accept stops the run, and a table without one dates from its heading', () => {
+  strictAssert.deepEqual(openaiMdRecords(openaiMdTable()), [['m-1', '2026-10-01', '2027-01-06', 'gpt-next']])
+  strictAssert.deepEqual(openaiMdRecords(openaiMdTable(openaiMdHeaders.with(4, 'Announcement date'))), [['m-1', '2026-10-01', '2027-01-06', 'gpt-next']])
+  const noStatus = [['Jan 6, 2027', '`m-1`', '`gpt-next`', 'Oct 1, 2026']]
+  for (const label of ['Notice date (UTC)', 'Date announced', 'Notice']) {
+    strictAssert.throws(() => openaiMdParse(openaiMdTable(['Shutdown date', 'Affected model', 'Recommended replacement', label], noStatus)), new RegExp(`table has an unrecognised notice header: ${label.toLowerCase().replace(/[()]/g, '\\$&')}$`), label)
+  }
+  strictAssert.throws(() => openaiMdParse(openaiMdTable(openaiMdHeaders.slice(0, 4), [['Jan 6, 2027', '`m-1`', 'Deprecated', '`gpt-next`']])), /table has a status column but no notice date column$/)
+  const undated = openaiMdTable(['Shutdown date', 'Affected model', 'Recommended replacement'], [['Jan 6, 2027', '`m-1`', '`gpt-next`']])
+  strictAssert.throws(() => openaiMdParse(undated), /^Error: openai deprecations table has no announcement date$/)
+  strictAssert.deepEqual(openaiMdRecords(undated.replace('## Upcoming deprecations', '## 2026-04-22: Upcoming deprecations')), [['m-1', '2026-04-22', '2027-01-06', 'gpt-next']])
+  const nested = undated.replace('## Upcoming deprecations', '## 2026-04-22: Legacy snapshots\n\n```\n## 2026-05-01: Fenced\n```\n\n<!--\n### 2026-05-02: Commented\n-->\n\n### July shutdown')
+  strictAssert.deepEqual(openaiMdRecords(nested), [['m-1', '2026-04-22', '2027-01-06', 'gpt-next']])
+})
+reviewTest('Markdown source: an OpenAI row whose cells do not line up with its header stops the run naming the line', () => {
+  const row = ['Jan 6, 2027', '`m-1`', 'Deprecated', '`gpt-next`', 'Oct 1, 2026']
+  strictAssert.throws(() => openaiMdParse(openaiMdTable(undefined, [row, [...row.slice(0, 4), 'Updated Nov 1, 2026', 'Oct 1, 2026']])), /^Error: openai deprecations page: line 8: table row has 6 cells; the header has 5$/)
+  strictAssert.throws(() => openaiMdParse(openaiMdTable(undefined, [row.slice(0, 4)])), /^Error: openai deprecations page: line 7: table row has 4 cells; the header has 5$/)
+  const missingNotice = openaiMdRow(openaiMdCyber, cells => cells.slice(0, 4))
+  const line = missingNotice.split('\n').findIndex(text => text.includes(openaiMdCyber)) + 1
+  strictAssert.throws(() => openaiMdParse(missingNotice), new RegExp(`^Error: openai deprecations page: line ${line}: table row has 4 cells; the header has 5$`))
+  strictAssert.deepEqual(openaiMdRecords(openaiMdTable(undefined, [row.with(3, '`gpt-next` \\| `gpt-other`')])), [['m-1', '2026-10-01', '2027-01-06', ['gpt-next', 'gpt-other']]])
+})
+reviewTest('Markdown source: OpenAI feature, endpoint, and product rows produce no records, and a model ID beside one stops the run', () => {
+  const ids = openaiMdParse(openaiMarkdown).flatMap(record => [record.id, ...(record.aliases ?? [])])
+  for (const token of ['/v1/prompts', '/v1/audio/translations', '/v1/realtime/translations', 'Agent Builder', 'Videos API', 'Assistants API', 'OpenAI-Beta: realtime=v1', '/v1/edits']) {
+    strictAssert.ok(!ids.includes(token), token)
+  }
+  strictAssert.ok(openaiMdParse(openaiMarkdown).every(record => record.shutdown !== '2026-11-30' && record.announced !== '2026-05-07'))
+  const features = openaiMdTable(openaiMdHeaders.with(1, 'Affected feature or endpoint'), [['Nov 30, 2026', '`/v1/prompts` and reusable prompt objects', 'Deprecated', 'Move prompt content into your application code.', 'Jun 3, 2026']])
+  strictAssert.throws(() => openaiMdParse(features), /has no recognisable deprecations content: endpoint-or-product-deprecation-table$/)
+  const mixed = openaiMdTable(undefined, [['Jan 6, 2027', '`m-1`, `/v1/m-1`', 'Deprecated', '`gpt-next`', 'Oct 1, 2026']])
+  strictAssert.throws(() => openaiMdParse(mixed), /refused row: model ids beside endpoint-or-product tokens: m-1, \/v1\/m-1$/)
+})
+reviewTest('Markdown source: an OpenAI page that is empty, has no pipe table, or carries an HTML table fails closed', () => {
+  strictAssert.throws(() => openaiMdParse(''), /^Error: openai deprecations page is empty$/)
+  strictAssert.throws(() => openaiMdParse('# Deprecations\n\nNo tables here.\n'), /^Error: openai deprecations page has no recognisable deprecations content$/)
+  strictAssert.throws(() => openaiMdParse('```\n| Shutdown date | Affected model | Recommended replacement |\n| --- | --- | --- |\n| Jan 6, 2027 | `m-1` | `gpt-next` |\n```\n'), /^Error: openai deprecations page has no recognisable deprecations content$/)
+  strictAssert.throws(() => openaiMdParse(`${openaiMdTable()}\n<table><tr><th>Shutdown date</th></tr></table>\n`), /^Error: openai deprecations page: line 9: HTML table in the Markdown source$/)
+  strictAssert.throws(() => openaiMdParse(noticeDateHtml), /^Error: openai deprecations page/)
+})
+{
+  const requested = []
+  const sources = await loadProviderSources(PROVIDERS.openai, { env: {}, notice: () => {}, fetchImpl: async url => { requested.push(url); return responseFor(openaiMarkdown) } })
+  assert(
+    PROVIDERS.openai.deprecationsFetchUrl === `${PROVIDERS.openai.deprecationsUrl}.md`
+      && JSON.stringify(requested) === JSON.stringify([PROVIDERS.openai.deprecationsFetchUrl])
+      && sources.deprecations.length === openaiMdParse(openaiMarkdown).length
+      && sources.deprecations.every(record => record.source === PROVIDERS.openai.deprecationsUrl),
+    'OpenAI deprecations are fetched from the Markdown copy and cite the human page',
+  )
+}
 const anthropicAnnouncement = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-y-20250101</code></td><td><code>claude-next</code></td></tr></table>'
 const anthropicStatusRows = rows => `<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>${rows.map(cells => `<tr>${cells.map((cell, index) => `<td>${index ? cell : `<code>${cell}</code>`}</td>`).join('')}</tr>`).join('')}</table>`
 const anthropicAliasMerge = (html, reverse = false, models = [{ id: 'claude-y-20250101', aliases: ['claude-y'] }]) => {

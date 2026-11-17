@@ -143,16 +143,26 @@ model overview pages for IDs and aliases.
 
 ## OpenAI
 
-The refresh reads the
-[OpenAI deprecations page](https://developers.openai.com/api/docs/deprecations)
-and expects tables with a shutdown date column, a model column, and a
-replacement column. Each row's announcement date comes from the table's notice
-date column, or, in a table without one, from the heading above it.
+The refresh reads the Markdown copy of the
+[OpenAI deprecations page](https://developers.openai.com/api/docs/deprecations),
+fetched from `https://developers.openai.com/api/docs/deprecations.md`. Records
+cite the page itself. It expects tables with a shutdown date column, a model
+column, and a replacement column. Each row's announcement date comes from the
+table's notice date column, or, in a table without one, from the heading above
+it.
 
 - The URL fetched is the constant in `providers.mjs`. The committed feed's
   `source` is used only when a provider has no constant.
-- `script`, `style`, `nav`, `header`, and `footer` elements are removed before
-  headings and tables are read.
+- The Markdown's ATX headings and pipe tables are rendered as HTML in page
+  order and read by the HTML parser, so every rule below applies to both. Pipe
+  tables follow the [Markdown pipe table](#markdown-pipe-tables) rules: a row
+  whose cell count differs from its header stops the run with its line number.
+  An HTML `<table>` in the Markdown stops the run, and a page without a
+  recognised table has no deprecations content and stops it too.
+- When the HTML parser reads a rendered page directly, `script`, `style`,
+  `nav`, `header`, and `footer` elements are removed first. The rendered page
+  curls apostrophes that the Markdown keeps straight, so a replacement note
+  can differ by that character.
 - The header is the first row with three labels: a shutdown, retirement,
   sunset, or removal date; a "model" or "system" label that doesn't mention a
   replacement; and a replacement, substitute, or successor label.
@@ -224,7 +234,7 @@ date column, or, in a table without one, from the heading above it.
 - The models endpoint (`https://api.openai.com/v1/models`, `OPENAI_API_KEY`) is
   paged for up to 20 pages. A repeated ID or a cursor that doesn't advance stops
   the run. Without the key, committed current-model entries are kept.
-- Offline runs read `test/fixture/openai-deprecations.html` and
+- Offline runs read `test/fixture/openai-deprecations.md` and
   `test/fixture/openai-models.json`.
 
 ## Google (Gemini API)
