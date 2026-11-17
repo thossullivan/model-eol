@@ -1292,8 +1292,6 @@ export function parseGoogleDeprecationsHtml(html, sourceUrl = PROVIDERS.google.d
   return [...unique.values()]
 }
 
-export const parseGoogleGeminiDeprecations = parseGoogleDeprecations
-
 function mistralHeaderIndexes(rows, pendingHeaders) {
   const hasHeaderCells = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
   for (const [index, row] of rows.entries()) {

@@ -4091,6 +4091,29 @@ reviewTest('Notice-date layout: OpenAI accepts Shut down only on or after the sh
   }
   strictAssert.throws(() => noticeParse(noticeDateHtml, new Date('not a date')), /refresh clock is not a valid date/)
 })
+reviewTest('Refresh clock: the CLI reads MODEL_EOL_GENERATED as the refresh day for the OpenAI and Azure parsers', () => {
+  const clockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-clock-'))
+  try {
+    fs.copyFileSync(path.join(fixtures, 'openai-models.json'), path.join(clockDir, 'openai-models.json'))
+    fs.writeFileSync(path.join(clockDir, 'openai-deprecations.html'), noticeStatusPage('Shut down'))
+    fs.writeFileSync(path.join(clockDir, 'azure-model-retirement-schedule.html'), footnotedTable() + offerFootnote(3))
+    const refreshAt = (source, generated) => run([...source, '--check', '--fixtures', clockDir], { env: { ...process.env, MODEL_EOL_GENERATED: generated } })
+    const openai = ['--provider', 'openai']
+    const azure = ['--distributor', 'azure-ai-foundry']
+    const openaiBefore = refreshAt(openai, '2027-01-31T23:59:59Z')
+    strictAssert.equal(openaiBefore.code, 1)
+    strictAssert.match(openaiBefore.err, /entry gpt-5\.5-cyber-preview has an unrecognised status for shutdown 2027-02-01 on 2027-01-31: Shut down/)
+    const openaiAfter = refreshAt(openai, '2027-02-01T00:00:00Z')
+    strictAssert.ok([0, 3].includes(openaiAfter.code), `OpenAI Shut down row refused on its shutdown day: ${openaiAfter.err}`)
+    const azureBefore = refreshAt(azure, '2026-03-31T12:00:00Z')
+    strictAssert.equal(azureBefore.code, 1)
+    strictAssert.match(azureBefore.err, /footnote 3 states an earlier date 2026-03-31 that is not past on 2026-03-31/)
+    const azureAfter = refreshAt(azure, '2026-04-01T00:00:00Z')
+    strictAssert.ok([0, 3].includes(azureAfter.code), `Azure footnote date refused once past: ${azureAfter.err}`)
+  } finally {
+    fs.rmSync(clockDir, { recursive: true, force: true })
+  }
+})
 reviewTest('Notice-date layout: the OpenAI feature and endpoint table and the fine-tuning timeline produce no records', () => {
   const ids = noticeDateRecords().flatMap(record => [record.id, ...(record.aliases ?? [])])
   for (const token of ['/v1/prompts', '/v1/audio/translations', '/v1/realtime/translations', 'Agent Builder', 'Videos API', 'Assistants API', 'OpenAI-Beta: realtime=v1', '/v1/edits']) {

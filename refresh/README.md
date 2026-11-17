@@ -356,13 +356,14 @@ only with `--distributor vertex-ai`.
   next heading or table. Commented-out footnotes don't count. A footnote may
   say which offers the date covers, and its own paragraph must state the cell's
   date. Any other date in the footnote, or in notes before the first footnote
-  or after the last one, must be earlier than the cell's date and already past on the refresh day
-  (offers that have already retired). The run stops on a later date, an earlier
-  date that isn't past yet, a year outside a recognised date ("Q3 2027",
-  "05/01/2027"), a missing or repeated footnote, any other text after the
-  cell's date, and wording anywhere in the notes after the table that makes a
-  date approximate ("no earlier than", "or later", "planned", "TBD", "until
-  further notice").
+  or after the last one, must be earlier than the cell's date and already past
+  on the refresh day (offers that have already retired). The refresh day is the
+  UTC date of `MODEL_EOL_GENERATED` when it is set, and of the current time
+  otherwise. The run stops on a later date, an earlier date that isn't past
+  yet, a year outside a recognised date ("Q3 2027", "05/01/2027"), a missing or
+  repeated footnote, any other text after the cell's date, and wording anywhere
+  in the notes after the table that makes a date approximate ("no earlier
+  than", "or later", "planned", "TBD", "until further notice").
 - Footnote markers in the version and lifecycle columns stop the run, and so do
   model-column markers in publisher sections.
 - Fine-tuning tables and other unrelated tables are skipped. Header drift in a

@@ -110,7 +110,7 @@ export async function generateProviderFeed(providerName, options = {}) {
   const committed = readCommitted(provider)
   const sourceProvider = {
     ...provider,
-    // The constant wins so a moved docs page reaches the feed on the next refresh.
+    // The constant wins so a moved docs page reaches the feed at the next regeneration.
     deprecationsUrl: provider.deprecationsUrl ?? committed.source,
   }
   const sources = await loadProviderSources(sourceProvider, options)
