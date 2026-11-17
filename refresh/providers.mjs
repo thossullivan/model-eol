@@ -1,6 +1,28 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { strictCrossChecks } from './cross-checks.mjs'
 import { fetchBoundedBody } from './fetch.mjs'
+import {
+  MARKDOWN_ATX_HEADING,
+  MARKDOWN_ESCAPABLE,
+  MARKDOWN_THEMATIC_BREAK,
+  escapeHtml,
+  headingHtml,
+  htmlHeadingLineIndex,
+  htmlTableLineIndex,
+  isHtmlBody,
+  isListItemHeading,
+  isSetextUnderline,
+  markdownCellHtml,
+  markdownHeading,
+  markdownInlineText,
+  markdownPage,
+  markdownPipeTableToHtml,
+  markdownPipeTables,
+  stripFencedCodeBlocks,
+} from './markdown.mjs'
+
+export { markdownInlineText as googleInlineText, stripFencedCodeBlocks }
 
 export const PROVIDERS = {
   openai: {
@@ -8,6 +30,7 @@ export const PROVIDERS = {
     feedFile: 'openai.json',
     modelsUrl: 'https://api.openai.com/v1/models',
     deprecationsUrl: 'https://developers.openai.com/api/docs/deprecations',
+    deprecationsFetchUrl: 'https://developers.openai.com/api/docs/deprecations.md',
     keyEnv: 'OPENAI_API_KEY',
     headers: {},
   },
@@ -16,6 +39,7 @@ export const PROVIDERS = {
     feedFile: 'anthropic.json',
     modelsUrl: 'https://api.anthropic.com/v1/models',
     deprecationsUrl: 'https://platform.claude.com/docs/en/about-claude/model-deprecations',
+    deprecationsFetchUrl: 'https://platform.claude.com/docs/en/about-claude/model-deprecations.md',
     aliasesUrl: 'https://platform.claude.com/docs/llms.txt',
     keyEnv: 'ANTHROPIC_API_KEY',
     headers: {
@@ -38,6 +62,7 @@ export const PROVIDERS = {
     feedFile: 'mistral.json',
     modelsUrl: 'https://api.mistral.ai/v1/models',
     deprecationsUrl: 'https://docs.mistral.ai/models',
+    deprecationsFetchUrl: 'https://docs.mistral.ai/models.md',
     keyEnv: 'MISTRAL_API_KEY',
     headers: {},
   },
@@ -46,6 +71,7 @@ export const PROVIDERS = {
     feedFile: 'cohere.json',
     modelsUrl: 'https://api.cohere.com/v1/models?page_size=1000',
     deprecationsUrl: 'https://docs.cohere.com/docs/deprecations',
+    deprecationsFetchUrl: 'https://docs.cohere.com/docs/deprecations.md',
     keyEnv: 'COHERE_API_KEY',
     headers: {},
   },
@@ -641,6 +667,21 @@ function openAIReplacement(fragment) {
 const OPENAI_NON_MODEL_TOKEN = /^\/v\d+\/[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)*$|^[A-Z][A-Za-z-]*(?: [A-Z][A-Za-z-]*)* API$|^OpenAI-Beta: [a-z_]+=v\d+$/
 
 /** Parse the OpenAI docs page, whose announcement date is a per-row notice date or a section heading. */
+const OPENAI_EARLIEST_ESTIMATE = /\s+earliest estimate$/i
+
+// The shutdown cell holds one date and nothing else, except the page's own "Earliest estimate" label.
+function openAIShutdownDate(text, id) {
+  const value = plainText(text)
+  const dateText = value.replace(OPENAI_EARLIEST_ESTIMATE, '')
+  let candidates = []
+  try {
+    candidates = dateCandidates(dateText)
+  } catch {}
+  const residual = dateText.replace(new RegExp(DATE_PATTERN.source, 'g'), '').replace(new RegExp(HUMAN_DATE_PATTERN.source, 'gi'), '').trim()
+  if (candidates.length !== 1 || residual) throw new Error(`openai deprecations entry ${id} has an unrecognised shutdown date: ${value}`)
+  return { shutdown: candidates[0].date, date_precision: dateText === value ? undefined : 'earliest' }
+}
+
 export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.deprecationsUrl, { now = new Date() } = {}) {
   if (typeof html !== 'string' || !html.trim()) throw new Error('openai deprecations page is empty')
   try {
@@ -692,8 +733,8 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
 
       const announced = headers.notice >= 0 ? openAINoticeDate(row.cells[headers.notice], parsedModels[0].id) : tableAnnounced
       const shutdownCell = row.cells[headers.date]
-      const shutdown = shutdownCell ? dateFromText(shutdownCell.text) : undefined
-      if (!shutdown) throw new Error(`openai deprecations entry ${parsedModels[0].id} has no valid shutdown date`)
+      if (!shutdownCell || !dateFromText(shutdownCell.text)) throw new Error(`openai deprecations entry ${parsedModels[0].id} has no valid shutdown date`)
+      const { shutdown, date_precision } = openAIShutdownDate(shutdownCell.text, parsedModels[0].id)
       if (headers.status >= 0) {
         const status = row.cells[headers.status]?.text.trim() ?? ''
         if (!openAIStatusAccepted(status, shutdown, today)) {
@@ -707,6 +748,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       const replacementCell = row.cells[headers.replacement]
       for (const parsedModel of parsedModels) {
         const item = { id: parsedModel.id, announced, shutdown, source: sourceUrl }
+        if (date_precision) item.date_precision = date_precision
         if (parsedModel.aliases.length) item.aliases = parsedModel.aliases
         if (replacementCell) Object.assign(item, openAIReplacement(replacementCell.html))
         records.push(item)
@@ -730,7 +772,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       unique.set(record.id, record)
       continue
     }
-    const sameLifecycle = previous.announced === record.announced && previous.shutdown === record.shutdown
+    const sameLifecycle = previous.announced === record.announced && previous.shutdown === record.shutdown && previous.date_precision === record.date_precision
     if (sameLifecycle && !sameReplacementPayload(previous, record)) {
       mergeReplacementPayloads(previous, record)
     }
@@ -757,7 +799,7 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
       if (!previous.aliases.length) delete previous.aliases
       continue
     }
-    if (record.shutdown !== previous.shutdown) {
+    if (record.shutdown !== previous.shutdown || record.date_precision !== previous.date_precision) {
       throw new Error(`openai deprecations page has conflicting rows for ${record.id}`)
     }
     previous.aliases = [...new Set([...(previous.aliases ?? []), ...(record.aliases ?? [])])]
@@ -765,6 +807,53 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
     if (!previous.aliases.length) delete previous.aliases
   }
   return [...unique.values()]
+}
+
+function sourceMarkdownPage(markdown, label) {
+  try {
+    return markdownPage(markdown)
+  } catch (error) {
+    throw new Error(`${label}: ${error.message}`)
+  }
+}
+
+/** Convert OpenAI's Markdown deprecations page to the headings and tables that parseOpenAIDeprecations reads. */
+export function openAIMarkdownToHtml(markdown) {
+  const { lines, tableAt } = sourceMarkdownPage(markdown, 'openai deprecations page')
+  const fail = (index, message) => {
+    throw new Error(`openai deprecations page: line ${index + 1}: ${message}`)
+  }
+  const rawTable = htmlTableLineIndex(lines)
+  if (rawTable >= 0) fail(rawTable, 'HTML table in the Markdown source')
+  const rawHeading = htmlHeadingLineIndex(lines)
+  if (rawHeading >= 0) fail(rawHeading, 'HTML heading in the Markdown source')
+  const blocks = []
+  let paragraph = false
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+    const table = tableAt.get(index)
+    const heading = markdownHeading(line)
+    if (table) {
+      blocks.push(markdownPipeTableToHtml(table))
+      index += table.rows.length + 1
+    } else if (heading) {
+      blocks.push(headingHtml(heading, markdownCellHtml(heading.text.trim())))
+    } else if (paragraph && isSetextUnderline(line)) {
+      fail(index, 'setext heading; headings must use #')
+    } else if (isListItemHeading(line)) {
+      fail(index, 'heading inside a list item')
+    }
+    paragraph = Boolean(!table && !heading && line.trim() && !MARKDOWN_THEMATIC_BREAK.test(line))
+  }
+  return blocks.join('\n')
+}
+
+/** Parse the Markdown copy of the OpenAI docs page; the row rules stay in parseOpenAIDeprecations. */
+export function parseOpenAIDeprecationsMarkdown(markdown, sourceUrl = PROVIDERS.openai.deprecationsUrl, options = {}) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('openai deprecations page is empty')
+  const html = openAIMarkdownToHtml(markdown)
+  if (!html) throw new Error('openai deprecations page has no recognisable deprecations content')
+  return parseOpenAIDeprecations(html, sourceUrl, options)
 }
 
 function anthropicStatusHeaderIndexes(rows) {
@@ -820,6 +909,13 @@ function anthropicTentativeShutdown(text, id) {
 }
 
 const anthropicStatusStates = new WeakMap()
+// The page's stated lifecycle for each returned record, for the models API comparison only.
+const anthropicPageStates = new WeakMap()
+
+function noteAnthropicPageState(record, state) {
+  if (!anthropicPageStates.has(record)) anthropicPageStates.set(record, state)
+  else if (anthropicPageStates.get(record) !== state) anthropicPageStates.set(record, undefined)
+}
 
 function anthropicAnnouncementIndex(announcements) {
   const index = new Map()
@@ -896,10 +992,12 @@ function parseAnthropicStatusTables(html, sourceUrl, announcements) {
       if (matchingAnnouncements.length) {
         for (const announcement of matchingAnnouncements) {
           assertAnthropicStatusMatchesAnnouncement(id, state, item, announcement)
+          noteAnthropicPageState(announcement, state)
         }
         continue
       }
       anthropicStatusStates.set(item, state)
+      noteAnthropicPageState(item, state)
       records.push(item)
     }
     if (!parsedRows) throw new Error('anthropic model status table has no rows')
@@ -923,7 +1021,8 @@ function parseAnthropicStatusTables(html, sourceUrl, announcements) {
   return { records: [...unique.values()], recognisedTables }
 }
 
-export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
+/** Parse the deprecations page as HTML; the Markdown parser feeds its converted page through here. */
+export function parseAnthropicDeprecationsHtml(html, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
   let announcements = []
   try {
     announcements = parseDeprecationsHtml(html, sourceUrl, 'anthropic')
@@ -937,6 +1036,100 @@ export function parseAnthropicDeprecations(html, sourceUrl = PROVIDERS.anthropic
   return records
 }
 
+const ANTHROPIC_COMPONENT_TAGS = new Set(['Note', 'Warning', 'Tip', 'Info'])
+const ANTHROPIC_LEADING_TAG = /^<\/?([A-Za-z][\w.-]*)(?=[\s/>])[^<>]*>/
+const ANTHROPIC_TRAILING_TAG = /<\/([A-Za-z][\w.-]*)\s*>$/
+const ANTHROPIC_HTML_STRUCTURE = /<\/?(?:table|thead|tbody|tr|td|th|h[1-6])(?=[\s/>])/i
+const ANTHROPIC_LIFECYCLE_LABEL = /\bmodels?\b|retire|deprecat|shutdown|sunset/i
+
+function anthropicProse(line, where) {
+  let text = line.trim()
+  let opened = 0
+  let closed = 0
+  if (/<!--|--!?>/.test(text)) throw new Error(`anthropic deprecations page has an unbalanced comment marker ${where}`)
+  for (let match; (match = text.match(ANTHROPIC_LEADING_TAG) ?? text.match(ANTHROPIC_TRAILING_TAG));) {
+    if (!ANTHROPIC_COMPONENT_TAGS.has(match[1])) throw new Error(`anthropic deprecations page has unsupported markup ${where}: ${line.trim()}`)
+    if (match[0].startsWith('</')) closed++
+    else if (!match[0].endsWith('/>')) opened++
+    text = (match.index ? text.slice(0, match.index) : text.slice(match[0].length)).trim()
+  }
+  if (ANTHROPIC_HTML_STRUCTURE.test(text)) throw new Error(`anthropic deprecations page has an HTML table or heading ${where}: ${line.trim()}`)
+  return { text, opened, closed }
+}
+
+const countDates = text => {
+  try {
+    return dateCandidates(text).length
+  } catch {
+    return 1
+  }
+}
+
+function assertAnthropicMarkdownTable(table, html, where) {
+  const rows = tableRows(html)
+  if (anthropicStatusHeaderRow(rows) || headerIndexes(rows, 'anthropic')) return
+  const labels = rows[0].cells.map(normaliseHeaderLabel)
+  if (labels.some(label => ANTHROPIC_LIFECYCLE_LABEL.test(label))) {
+    throw new Error(`anthropic deprecations table ${where} has an unrecognised layout: ${table.header.join(' | ')}`)
+  }
+}
+
+/** Convert the Markdown copy of the deprecations page to headings, prose, and tables in HTML. */
+export function anthropicMarkdownToHtml(markdown) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('anthropic deprecations page is empty')
+  const { lines, tableAt: tables } = markdownPage(markdown)
+  const output = []
+  let where = 'before the first heading'
+  let previous = ''
+  let componentDepth = 0
+  let dates = { heading: 0, prose: 0, component: 0 }
+  for (let index = 0; index < lines.length; index++) {
+    const table = tables.get(index)
+    if (table) {
+      const html = markdownPipeTableToHtml(table)
+      assertAnthropicMarkdownTable(table, html, where)
+      const announcement = headerIndexes(tableRows(html), 'anthropic')
+      if (announcement && !announcement.rejectedReason && !dates.heading && !dates.prose && dates.component) {
+        throw new Error(`anthropic deprecations table ${where} takes its only announcement date from a <Note> or other callout`)
+      }
+      output.push(html)
+      index += table.rows.length + 1
+      previous = ''
+      continue
+    }
+    const line = lines[index]
+    const heading = markdownHeading(line)
+    if (heading) {
+      if (componentDepth) throw new Error(`anthropic deprecations page has a heading inside a <Note> or other callout ${where}: ${line.trim()}`)
+      const { text } = anthropicProse(heading.text, where)
+      output.push(headingHtml(heading, markdownCellHtml(text)))
+      where = `under "${plainText(markdownCellHtml(text))}"`
+      dates = { heading: countDates(markdownCellHtml(text)), prose: 0, component: 0 }
+    } else if (/^ {0,3}=+[ \t]*$/.test(line) || (isSetextUnderline(line) && previous)) {
+      throw new Error(`anthropic deprecations page has a setext heading ${where}: ${previous || line.trim()}`)
+    } else if (isListItemHeading(line)) {
+      throw new Error(`anthropic deprecations page has a heading inside a list item ${where}: ${line.trim()}`)
+    } else if (line.trim()) {
+      const { text, opened, closed } = anthropicProse(line, where)
+      const inComponent = componentDepth > 0 || opened > 0
+      componentDepth = Math.max(0, componentDepth + opened - closed)
+      if (text) {
+        const html = markdownCellHtml(text)
+        dates[inComponent ? 'component' : 'prose'] += countDates(html)
+        output.push(`<p>${html}</p>`)
+      }
+    }
+    previous = heading || /^ {0,3}(?:[-*_][ \t]*){3,}$/.test(line) ? '' : line.trim()
+  }
+  return output.join('\n')
+}
+
+/** Parse the Markdown copy of the deprecations page; records cite the human page. */
+export function parseAnthropicDeprecations(markdown, sourceUrl = PROVIDERS.anthropic.deprecationsUrl) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('anthropic deprecations page is empty')
+  return parseAnthropicDeprecationsHtml(anthropicMarkdownToHtml(markdown), sourceUrl)
+}
+
 export function parseAnthropicModelsIndex(markdown, url = PROVIDERS.anthropic.aliasesUrl) {
   const urls = new Set()
   for (const match of String(markdown).matchAll(/https?:\/\/[^\s<>()[\]"'`]+/g)) {
@@ -948,21 +1141,6 @@ export function parseAnthropicModelsIndex(markdown, url = PROVIDERS.anthropic.al
   }
   if (!urls.size) throw new Error(`anthropic model index ${url} has no model pages`)
   return [...urls]
-}
-
-export function stripFencedCodeBlocks(markdown) {
-  let fence
-  return markdown.split(/\r?\n/).map(line => {
-    if (fence) {
-      const closing = line.match(/^\s*(`{3,}|~{3,})\s*$/)
-      if (closing && closing[1][0] === fence[0] && closing[1].length >= fence.length) fence = undefined
-      return ''
-    }
-    const opening = line.match(/^\s*(`{3,}|~{3,})/)
-    if (!opening) return line
-    fence = opening[1]
-    return ''
-  }).join('\n')
 }
 
 export function parseAnthropicModelPage(markdown, url) {
@@ -1072,23 +1250,8 @@ export const rowLifecycleLabel = record => `${record.shutdown ?? 'no date'} (${r
 
 const GOOGLE_TABLE_HEADER = ['Model', 'Release date', 'Shutdown date', 'Recommended replacement']
 
-const escapeHtml = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-const MARKDOWN_ESCAPABLE = /[!-/:-@[-`{-~]/
 const unescapeMarkdown = text => text.replace(/\\([!-/:-@[-`{-~])/g, '$1')
-
-// Drops Markdown emphasis and backslash escapes; an underscore inside a word is kept.
-export function googleInlineText(text) {
-  let output = ''
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index]
-    if (char === '\\' && MARKDOWN_ESCAPABLE.test(text[index + 1] ?? '')) output += text[++index]
-    else if (char === '~' && text[index + 1] === '~') index++
-    else if (char === '_' && !(/[\p{L}\p{N}]/u.test(text[index - 1] ?? '') && /[\p{L}\p{N}]/u.test(text[index + 1] ?? ''))) continue
-    else if (char !== '*') output += char
-  }
-  return output
-}
+const googleInlineText = markdownInlineText
 
 function googleCellHtml(markdown, where) {
   if (markdown.includes('{%')) throw new Error(`google deprecations table ${where} has a Markdoc tag in a cell: ${markdown}`)
@@ -1157,7 +1320,7 @@ function googleMarkdocTable(lines, where) {
     if (row.length !== header.length) throw new Error(`google deprecations table ${where} row ${index + 1} has ${row.length} cells; the header has ${header.length}`)
     if (!row[0]) throw new Error(`google deprecations table ${where} row ${index + 1} has an empty model cell`)
     const bare = unescapeMarkdown(row[0])
-    if (!GOOGLE_MODEL_CELL.test(row[0]) && !(MODEL_ID_PATTERN.test(bare) && googleInlineText(row[0]) === bare)) {
+    if (!GOOGLE_MODEL_CELL.test(row[0]) && !(MODEL_ID_PATTERN.test(bare) && !/[*_~]/.test(row[0].replace(/\\[!-/:-@[-`{-~]/g, '')) && googleInlineText(row[0]) === bare)) {
       throw new Error(`google deprecations table ${where} row ${index + 1} model cell is not one model ID: ${row[0]}`)
     }
   }
@@ -1297,82 +1460,85 @@ export function parseGoogleDeprecationsHtml(html, sourceUrl = PROVIDERS.google.d
   return [...unique.values()]
 }
 
-function mistralHeaderIndexes(rows, pendingHeaders) {
-  const hasHeaderCells = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
-  for (const [index, row] of rows.entries()) {
-    if (!row.cells.some(cell => cell.kind === 'th') && (hasHeaderCells || index > 0 || pendingHeaders)) continue
-    const labels = row.cells.map(cell => cell.text.trim().toLowerCase())
-    const required = { model: 'model', version: 'version', api: 'api', dates: 'deprecation retirement', alternative: 'alternative' }
-    const lifecycle = labels.some(label => /deprecation|retirement/.test(label)) ||
-      labels.filter(label => ['model', 'version', 'api', 'alternative'].includes(label)).length >= 2
-    if (!lifecycle) continue
-    if (row.cells.some(cell => cell.kind !== 'th') || labels.length !== Object.keys(required).length || Object.values(required).some(label => labels.filter(value => value === label).length !== 1)) {
-      throw new Error(`mistral deprecations table has unrecognised or ambiguous header: ${row.cells.map(cell => cell.text).join(' | ')}`)
-    }
-    return { row: index, width: labels.length, ...Object.fromEntries(Object.entries(required).map(([key, label]) => [key, labels.indexOf(label)])) }
+const MISTRAL_OVERVIEW_HEADER = ['model', 'api name', 'status', 'context', 'summary']
+const MISTRAL_LIFECYCLE_HEADER = [...MISTRAL_OVERVIEW_HEADER, 'deprecation', 'retirement', 'replacement']
+const MISTRAL_LIFECYCLE_STATUSES = ['deprecated', 'retired']
+const MISTRAL_HUMAN_DATE = new RegExp(`^(?:${HUMAN_DATE_PATTERN.source})$`, 'i')
+
+const markdownCellPlainText = cell => plainText(markdownCellHtml(cell))
+
+function mistralDate(text, id, field) {
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  let date
+  try {
+    date = iso ? validDate(iso[1], iso[2], iso[3]) : MISTRAL_HUMAN_DATE.test(text) ? dateFromText(text) : undefined
+  } catch {
+    date = undefined
   }
+  if (!date) throw new Error(`mistral deprecations row ${id} has an invalid ${field} date: ${text || '(empty)'}`)
+  return date
+}
+
+function mistralTableKind(table) {
+  const labels = table.header.map(cell => markdownCellPlainText(cell).toLowerCase())
+  if (labels.join('|') === MISTRAL_LIFECYCLE_HEADER.join('|')) return 'lifecycle'
+  if (labels.join('|') === MISTRAL_OVERVIEW_HEADER.join('|')) return 'overview'
+  const lifecycle = labels.some(label => /deprecat|retire|replacement|alternative/.test(label)) ||
+    labels.filter(label => ['model', 'version', 'api', 'api name', 'status'].includes(label)).length >= 2
+  if (lifecycle) throw new Error(`mistral deprecations table has unrecognised or ambiguous header: ${table.header.join(' | ')}`)
   return undefined
 }
 
-function mistralUsDate(text, id) {
-  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
-  if (match) {
-    const date = validDate(match[3], match[1], match[2])
-    if (date) return date
-  }
-  throw new Error(`mistral deprecations row ${id} has an invalid M/D/YYYY date: ${text}`)
-}
-
-export function parseMistralDeprecations(html, sourceUrl = PROVIDERS.mistral.deprecationsUrl) {
-  if (typeof html !== 'string' || !html.trim()) throw new Error('mistral deprecations page is empty')
+/** Parse the Markdown copy of Mistral's models page; records cite sourceUrl, the human page. */
+export function parseMistralDeprecationsMarkdown(markdown, sourceUrl = PROVIDERS.mistral.deprecationsUrl, { now = new Date() } = {}) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('mistral deprecations page is empty')
   try {
     new URL(sourceUrl)
   } catch {
     throw new Error(`mistral deprecations source is not a URL: ${sourceUrl}`)
   }
-
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new Error('mistral deprecations refresh clock is not a valid date')
+  if (isHtmlBody(markdown)) throw new Error('mistral deprecations page is HTML, not Markdown')
+  if (/<table\b/i.test(stripFencedCodeBlocks(stripComments(markdown)))) throw new Error('mistral deprecations page has an HTML table, which the Markdown reader does not parse')
+  let tables
+  try {
+    tables = markdownPipeTables(markdown)
+  } catch (error) {
+    throw new Error(`mistral deprecations page: ${error.message}`)
+  }
+  const today = now.toISOString().slice(0, 10)
   const records = new Map()
   const skipped = []
-  let pendingHeaders
   let recognisedTables = 0
-  for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
-    const rows = tableRows(table[1])
-    const ownHeaders = mistralHeaderIndexes(rows, pendingHeaders)
-    if (pendingHeaders && (/<h[1-6]\b/i.test(html.slice(pendingHeaders.end, table.index)) ||
-      ownHeaders || !rows.length || rows.some(row => !row.cells.length || row.cells.some(cell => cell.kind !== 'td')))) {
-      throw new Error('mistral deprecations table has a dangling header without an immediately following body table')
+  for (const table of tables) {
+    const kind = mistralTableKind(table)
+    if (kind === 'overview') {
+      for (const cells of table.rows) {
+        const status = markdownCellPlainText(cells[2])
+        if (/deprecat|retire/i.test(status)) {
+          throw new Error(`mistral models overview lists ${markdownCellPlainText(cells[1]) || markdownCellPlainText(cells[0])} as ${status} without lifecycle dates`)
+        }
+      }
     }
-    const headers = ownHeaders ?? pendingHeaders?.headers
-    const dataRows = ownHeaders ? rows.slice(ownHeaders.row + 1) : rows
-    pendingHeaders = undefined
-    if (!headers) continue
-    if (!dataRows.length) {
-      pendingHeaders = { headers, end: table.index + table[0].length }
-      continue
-    }
+    if (kind !== 'lifecycle' || !table.rows.length) continue
     recognisedTables++
-    for (const [index, row] of dataRows.entries()) {
-      const model = (row.cells[headers.model]?.text ?? '').replace(/\s*↗\s*$/, '')
-      const version = row.cells[headers.version]?.text ?? ''
-      const id = row.cells[headers.api]?.text ?? ''
-      const label = id || `${model || '(unnamed model)'} ${version} (row ${index + 1})`.trim()
-      if (row.cells.length !== headers.width || row.cells.some(cell => cell.kind !== 'td')) {
-        throw new Error(`mistral deprecations row ${label} has unexpected cells`)
+    for (const [index, cells] of table.rows.entries()) {
+      const [model, id, status, , , deprecation, retirement, alternative] = cells.map(markdownCellPlainText)
+      const label = id || `${model || '(unnamed model)'} (row ${index + 1})`
+      if (!MISTRAL_LIFECYCLE_STATUSES.includes(status.toLowerCase())) {
+        throw new Error(`mistral deprecations row ${label} has an unrecognised status: ${status || '(empty)'}`)
       }
       if (!id) {
-        skipped.push({ model, version })
+        skipped.push({ model, version: '' })
         continue
       }
-      if (!MODEL_ID_PATTERN.test(id)) {
-        throw new Error(`mistral deprecations table refused row: invalid-model-id: ${id}`)
-      }
-      const dates = row.cells[headers.dates].text
-      const match = dates.match(/^(\d{1,2}\/\d{1,2}\/\d{4}) (\d{1,2}\/\d{1,2}\/\d{4})$/)
-      if (!match) throw new Error(`mistral deprecations row ${id} must contain exactly two M/D/YYYY dates: ${dates || '(empty)'}`)
-      const announced = mistralUsDate(match[1], id)
-      const shutdown = mistralUsDate(match[2], id)
+      if (!MODEL_ID_PATTERN.test(id)) throw new Error(`mistral deprecations table refused row: invalid-model-id: ${id}`)
+      const announced = mistralDate(deprecation, id, 'deprecation')
+      const shutdown = mistralDate(retirement, id, 'retirement')
       if (shutdown < announced) throw new Error(`mistral deprecations row ${id} has shutdown before announcement`)
-      const alternative = row.cells[headers.alternative].text
+      if (status.toLowerCase() === 'retired' && shutdown > today) {
+        throw new Error(`mistral deprecations row ${id} is Retired but its retirement date ${shutdown} is after ${today}`)
+      }
       const record = { id, announced, shutdown, source: sourceUrl }
       if (alternative) record.replacement_note = `Mistral lists ${alternative} as the alternative`
       const previous = records.get(id)
@@ -1382,7 +1548,6 @@ export function parseMistralDeprecations(html, sourceUrl = PROVIDERS.mistral.dep
       if (!previous) records.set(id, record)
     }
   }
-  if (pendingHeaders) throw new Error('mistral deprecations table has a dangling header without a following body table')
   if (!recognisedTables) throw new Error('mistral deprecations page has no recognised model tables with data rows')
   if (!records.size) throw new Error('mistral deprecations page has no model entries')
   return { records: [...records.values()], skipped }
@@ -1643,6 +1808,127 @@ export function parseCohereDeprecations(html, sourceUrl = PROVIDERS.cohere.depre
   return [...records.values()]
 }
 
+const MARKDOWN_LIST_ITEM = /^( *)([*+-]|\d{1,9}[.)])(?:( +)(.*))?$/
+const MARKDOWN_HTML_BLOCK = /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)/
+
+/** Render Cohere's Markdown page as the headings, paragraphs, lists, and tables that parseCohereDeprecations reads. */
+export function cohereMarkdownToHtml(markdown) {
+  if (typeof markdown !== 'string') throw new Error('cohere deprecations page must be a string')
+  if (isHtmlBody(markdown)) throw new Error('cohere deprecations page is HTML, not Markdown')
+  const { lines, tableAt } = sourceMarkdownPage(markdown, 'cohere deprecations page')
+  const fail = (index, message) => {
+    throw new Error(`cohere deprecations page: line ${index + 1}: ${message}`)
+  }
+  const rawTable = htmlTableLineIndex(lines)
+  if (rawTable >= 0) fail(rawTable, 'HTML table in the Markdown source')
+  const html = []
+  const lists = []
+  let paragraph = []
+  let blank = false
+  const flushParagraph = () => {
+    if (paragraph.length) html.push(`<p>${markdownCellHtml(paragraph.join('\n'))}</p>`)
+    paragraph = []
+  }
+  const flushItem = () => {
+    const list = lists.at(-1)
+    if (list?.text.length) html.push(markdownCellHtml(list.text.join('\n')))
+    if (list) list.text = []
+  }
+  const closeLists = depth => {
+    while (lists.length > depth) {
+      flushItem()
+      html.push(`</li></${lists.pop().tag}>`)
+    }
+  }
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+    const indent = line.match(/^[ \t]*/)[0]
+    if (indent.includes('\t')) fail(index, 'tab indentation')
+    if (!line.trim()) {
+      flushParagraph()
+      blank = true
+      continue
+    }
+    const wasBlank = blank
+    blank = false
+    if (!lists.length && !paragraph.length && indent.length >= 4) fail(index, 'indented code block')
+    const table = tableAt.get(index)
+    if (table) {
+      if (lists.length && indent.length >= lists.at(-1).content) fail(index, 'table inside a list item')
+      flushParagraph()
+      closeLists(0)
+      html.push(markdownPipeTableToHtml(table))
+      index += table.rows.length + 1
+      continue
+    }
+    if (paragraph.length && isSetextUnderline(line)) fail(index, 'setext heading; headings must use #')
+    if (isListItemHeading(line)) fail(index, 'heading inside a list item')
+    const item = MARKDOWN_THEMATIC_BREAK.test(line) ? undefined : line.match(MARKDOWN_LIST_ITEM)
+    if (item) {
+      if ((item[3]?.length ?? 0) > 4) fail(index, 'list item content is indented code')
+      const tag = /\d/.test(item[2]) ? 'ol' : 'ul'
+      const marker = item[2].at(-1)
+      const content = indent.length + item[2].length + (item[3]?.length ?? 1)
+      flushParagraph()
+      while (lists.length) {
+        const list = lists.at(-1)
+        if (indent.length >= list.content || (indent.length === list.indent && tag === list.tag)) break
+        if (indent.length > list.indent) fail(index, 'ambiguous list item indentation')
+        closeLists(lists.length - 1)
+      }
+      const list = lists.at(-1)
+      if (list && indent.length === list.indent && tag === list.tag && marker !== list.marker) fail(index, 'list marker changes, which starts a new list')
+      flushItem()
+      if (list && indent.length === list.indent && tag === list.tag) {
+        html.push('</li><li>')
+        list.content = content
+      } else {
+        html.push(`<${tag}><li>`)
+        lists.push({ indent: indent.length, content, tag, marker, text: [] })
+      }
+      lists.at(-1).text.push(item[4] ?? '')
+      continue
+    }
+    if (lists.length && wasBlank) {
+      while (lists.length && indent.length < lists.at(-1).content) closeLists(lists.length - 1)
+    }
+    if (lists.length) {
+      const { content } = lists.at(-1)
+      const inner = indent.length >= content ? line.slice(content) : line
+      if ([MARKDOWN_ATX_HEADING, MARKDOWN_THEMATIC_BREAK, MARKDOWN_HTML_BLOCK].some(pattern => pattern.test(inner))) {
+        if (inner !== line) fail(index, 'unsupported block inside a list item')
+        closeLists(0)
+      } else {
+        lists.at(-1).text.push(line.trim())
+        continue
+      }
+    }
+    const heading = markdownHeading(line)
+    if (heading) {
+      flushParagraph()
+      html.push(headingHtml(heading, markdownCellHtml(heading.text.trim())))
+    } else if (MARKDOWN_THEMATIC_BREAK.test(line)) {
+      flushParagraph()
+      html.push('<hr>')
+    } else if (MARKDOWN_HTML_BLOCK.test(line)) {
+      fail(index, 'raw HTML block in the Markdown source')
+    } else if (!paragraph.length && indent.length >= 4) {
+      fail(index, 'indented code block')
+    } else {
+      paragraph.push(line.trim())
+    }
+  }
+  flushParagraph()
+  closeLists(0)
+  return html.join('\n')
+}
+
+/** Parse the Markdown copy of Cohere's deprecations page; the section rules stay in parseCohereDeprecations. */
+export function parseCohereDeprecationsMarkdown(markdown, sourceUrl = PROVIDERS.cohere.deprecationsUrl) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('cohere deprecations page is empty')
+  return parseCohereDeprecations(cohereMarkdownToHtml(markdown), sourceUrl)
+}
+
 const MAX_MODEL_PAGES = 20
 const GOOGLE_MODEL_PAGE_SIZE = 1000
 
@@ -1855,6 +2141,167 @@ async function fetchPaginatedCohereModels(config, headers, fetchImpl) {
     url = nextPageUrl(firstPage, 'page_token', parsed.nextPageToken)
   }
   throw new Error('cohere models endpoint pagination failed')
+}
+
+export const ANTHROPIC_LIFECYCLES = ['active', 'deprecated', 'retired']
+export const ANTHROPIC_MODELS_PAGE_SIZE = 1000
+const RFC3339_DATE_TIME = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
+
+function anthropicApiDate(value, id, field) {
+  if (value === null) return undefined
+  const match = typeof value === 'string' ? value.match(RFC3339_DATE_TIME) : null
+  let time = Number.NaN
+  try {
+    if (match && assertIsoDate(match[1])) time = Date.parse(value)
+  } catch {}
+  if (Number.isNaN(time)) throw new Error(`anthropic models response entry ${id} has an unparseable ${field}: ${JSON.stringify(value)}`)
+  return { date: new Date(time).toISOString().slice(0, 10), raw: value }
+}
+
+function anthropicModelLifecycle(row, id) {
+  for (const field of ['lifecycle', 'deprecated_at', 'retires_at']) {
+    if (!Object.hasOwn(row, field)) throw new Error(`anthropic models response entry ${id} has no ${field} field`)
+  }
+  if (!ANTHROPIC_LIFECYCLES.includes(row.lifecycle)) {
+    throw new Error(`anthropic models response entry ${id} has an unrecognised lifecycle: ${JSON.stringify(row.lifecycle)}`)
+  }
+  const deprecated = anthropicApiDate(row.deprecated_at, id, 'deprecated_at')
+  const retires = anthropicApiDate(row.retires_at, id, 'retires_at')
+  if (row.lifecycle === 'active' && deprecated) {
+    throw new Error(`anthropic models response entry ${id} is active but has deprecated_at ${row.deprecated_at}`)
+  }
+  if (row.lifecycle !== 'active' && !deprecated) throw new Error(`anthropic models response entry ${id} is ${row.lifecycle} without deprecated_at`)
+  if (deprecated && retires && retires.date < deprecated.date) {
+    throw new Error(`anthropic models response entry ${id} retires before it was deprecated: ${row.retires_at} < ${row.deprecated_at}`)
+  }
+  return { id, lifecycle: row.lifecycle, deprecated, retires }
+}
+
+/** Parse one page of the models API. A listing fault throws; a row whose lifecycle fields fail keeps its id and carries the error. */
+export function parseAnthropicModelsPage(body) {
+  const page = parseModelsPage(body, 'anthropic')
+  const parsed = typeof body === 'string' ? JSON.parse(body) : body
+  if (Array.isArray(parsed) || typeof parsed.has_more !== 'boolean') {
+    throw new Error('anthropic models response must be an object with a data array and a boolean has_more')
+  }
+  const rows = parsed.data.map((row, index) => {
+    const id = page.ids[index]
+    if (!MODEL_ID_PATTERN.test(id)) throw new Error(`anthropic models response contains an invalid model id: ${id}`)
+    try {
+      return anthropicModelLifecycle(row, id)
+    } catch (error) {
+      return { id, lifecycle: row.lifecycle, error: error.message }
+    }
+  })
+  return { ...page, rows }
+}
+
+/** Parse one page of the models API with lifecycle fields; any undocumented lifecycle shape throws. */
+export function parseAnthropicModelsLifecyclePage(body) {
+  const { rows, ...page } = parseAnthropicModelsPage(body)
+  const failed = rows.find(row => row.error)
+  if (failed) throw new Error(failed.error)
+  return { ...page, models: rows }
+}
+
+/** Every listed id except an explicitly retired one feeds the merge; the lifecycle rows feed only the cross-check and drop out when any row fails. */
+export function anthropicModelsResult(rows) {
+  const failed = rows.filter(row => row.error)
+  const more = failed.length > 1 ? ` (and ${failed.length - 1} more ${failed.length === 2 ? 'entry' : 'entries'})` : ''
+  return {
+    currentIds: rows.filter(row => row.lifecycle !== 'retired').map(row => row.id),
+    models: failed.length ? undefined : rows,
+    lifecycleFailure: failed.length ? `${failed[0].error}${more}` : undefined,
+  }
+}
+
+/** The models API list URL that asks for every lifecycle stage, as the official SDKs encode the array. */
+export function anthropicModelsListUrl(modelsUrl) {
+  const url = new URL(modelsUrl)
+  for (const name of ['lifecycle', 'lifecycle[]', 'limit', 'after_id', 'before_id']) url.searchParams.delete(name)
+  for (const lifecycle of ANTHROPIC_LIFECYCLES) url.searchParams.append('lifecycle[]', lifecycle)
+  url.searchParams.set('limit', String(ANTHROPIC_MODELS_PAGE_SIZE))
+  return url.toString()
+}
+
+async function fetchAnthropicModels(config, headers, fetchImpl) {
+  const firstPage = anthropicModelsListUrl(config.modelsUrl)
+  const models = []
+  const seen = new Set()
+  let url = firstPage
+  let cursor
+  for (let page = 1; page <= MAX_MODEL_PAGES; page++) {
+    const parsed = parseAnthropicModelsPage(await fetchBody(url, headers, config.publisher, fetchImpl))
+    for (const model of parsed.rows) {
+      if (seen.has(model.id)) throw new Error(`anthropic models response contains duplicate model id across pages: ${model.id}`)
+      seen.add(model.id)
+      models.push(model)
+    }
+    if (!parsed.hasMore) return models
+    if (page === MAX_MODEL_PAGES) throw new Error(`anthropic models endpoint exceeded pagination cap of ${MAX_MODEL_PAGES} pages`)
+    if (!parsed.lastId) throw new Error('anthropic models response has_more is true without a last_id')
+    if (parsed.lastId === cursor) throw new Error('anthropic models pagination cursor did not advance')
+    cursor = parsed.lastId
+    url = nextPageUrl(firstPage, 'after_id', cursor)
+  }
+  throw new Error('anthropic models endpoint pagination failed')
+}
+
+/** Compare models API lifecycle rows with the deprecations page. The page is kept; disagreements are only reported. */
+export function compareAnthropicLifecycle(deprecations, apiModels) {
+  const counts = { active: 0, deprecated: 0, retired: 0 }
+  const pageIndex = new Map()
+  for (const record of deprecations) {
+    for (const key of [record.id, ...(record.aliases ?? [])]) {
+      if (!pageIndex.has(key)) pageIndex.set(key, record)
+    }
+  }
+  const conflicts = []
+  const apiIds = new Set(apiModels.map(model => model.id))
+  for (const model of apiModels) {
+    counts[model.lifecycle]++
+    const base = { publisher: 'anthropic', via: 'models-api', id: model.id, lifecycle: model.lifecycle, deprecated: model.deprecated, retires: model.retires }
+    const record = pageIndex.get(model.id)
+    if (!record) {
+      if (model.lifecycle !== 'active') conflicts.push({ ...base, field: 'uncovered' })
+      continue
+    }
+    const state = anthropicPageStates.get(record)
+    if (state && state !== model.lifecycle) conflicts.push({ ...base, field: 'lifecycle', page: { state } })
+    if ((record.announced ?? null) !== (model.deprecated?.date ?? null)) conflicts.push({ ...base, field: 'deprecated', page: { announced: record.announced } })
+    const pageRetirement = record.date_precision === 'tentative' && !(model.lifecycle === 'active' && model.retires) ? undefined : record.shutdown
+    if ((pageRetirement ?? null) !== (model.retires?.date ?? null)) {
+      conflicts.push({ ...base, field: 'retirement', page: { shutdown: record.shutdown, date_precision: record.date_precision } })
+    }
+  }
+  for (const record of deprecations) {
+    const state = anthropicPageStates.get(record)
+    if (!['active', 'deprecated'].includes(state) || [record.id, ...(record.aliases ?? [])].some(id => apiIds.has(id))) continue
+    conflicts.push({ publisher: 'anthropic', via: 'models-api', id: record.id, field: 'missing', page: { state } })
+  }
+  return { counts, conflicts }
+}
+
+const apiDateLabel = value => value ? value.raw : 'null'
+
+/** One line for a publisher source conflict, as the semantic diff and the refresh notices print it. */
+export function providerSourceConflictSummary(conflict) {
+  if (conflict.reason === 'cross-check-failed') {
+    return `${conflict.publisher} models API cross-check failed: ${conflict.message}; the deprecations page was used without it`
+  }
+  const label = `${conflict.publisher} models API ${conflict.id}`
+  if (conflict.field === 'missing') return `${label}: ${conflict.page.state} on the deprecations page but not returned by the API; page kept`
+  if (conflict.field === 'uncovered') {
+    return `${label}: ${conflict.lifecycle} (deprecated_at ${apiDateLabel(conflict.deprecated)}, retires_at ${apiDateLabel(conflict.retires)}) but not on the deprecations page; API dates not applied`
+  }
+  let detail
+  if (conflict.field === 'lifecycle') detail = `lifecycle ${conflict.lifecycle} on the API, ${conflict.page.state} on the deprecations page`
+  else if (conflict.field === 'deprecated') detail = `deprecated_at ${apiDateLabel(conflict.deprecated)} on the API, deprecated ${conflict.page.announced ?? 'not set'} on the deprecations page`
+  else {
+    const page = conflict.page.shutdown === undefined ? 'not set' : `${conflict.page.shutdown}${conflict.page.date_precision ? ` (${conflict.page.date_precision})` : ''}`
+    detail = `retires_at ${apiDateLabel(conflict.retires)} on the API, retirement ${page} on the deprecations page`
+  }
+  return `${label}: ${detail}; page kept`
 }
 
 function clone(value) {
@@ -2183,15 +2630,28 @@ function fetchBody(url, headers, provider, fetchImpl = globalThis.fetch) {
 /** Load and parse both source classes for one provider. */
 export async function loadProviderSources(config, options = {}) {
   const { fixtures, env = process.env, fetchImpl = globalThis.fetch, notice = console.error } = options
+  const strict = strictCrossChecks(env)
+  let crossCheckFailure
   let currentIds = null
   let endpointAvailable = false
   let currentModels = []
   let deprecatedIds = []
+  let anthropicLifecycle
+  const useAnthropicModels = (rows, redact = message => message) => {
+    const result = anthropicModelsResult(rows)
+    currentIds = result.currentIds
+    anthropicLifecycle = result.models
+    if (result.lifecycleFailure === undefined) return
+    if (strict) throw new Error(redact(result.lifecycleFailure))
+    crossCheckFailure = redact(result.lifecycleFailure)
+  }
 
   if (fixtures) {
     const modelFixture = findFixture(fixtures, config.publisher, 'models')
     const modelBody = fs.readFileSync(modelFixture, 'utf8')
-    if (config.publisher === 'mistral') {
+    if (config.publisher === 'anthropic') {
+      useAnthropicModels(parseAnthropicModelsPage(modelBody).rows)
+    } else if (config.publisher === 'mistral') {
       const parsed = parseMistralModelsResponse(modelBody)
       currentIds = parsed.ids
       currentModels = parsed.models
@@ -2228,6 +2688,15 @@ export async function loadProviderSources(config, options = {}) {
         const parsed = await fetchPaginatedCohereModels(config, headers, fetchImpl)
         currentIds = parsed.ids
         deprecatedIds = parsed.deprecatedIds
+      } else if (config.publisher === 'anthropic') {
+        const redact = message => message.split(key).join('[redacted]')
+        let rows
+        try {
+          rows = await fetchAnthropicModels(config, headers, fetchImpl)
+        } catch (error) {
+          throw new Error(redact(error.message))
+        }
+        useAnthropicModels(rows, redact)
       } else {
         currentIds = await fetchPaginatedModels(config, headers, fetchImpl)
       }
@@ -2245,9 +2714,9 @@ export async function loadProviderSources(config, options = {}) {
     html = await fetchBody(config.deprecationsFetchUrl ?? config.deprecationsUrl, {}, config.publisher, fetchImpl)
   }
 
-  const mistral = config.publisher === 'mistral' ? parseMistralDeprecations(html, config.deprecationsUrl) : undefined
+  const mistral = config.publisher === 'mistral' ? parseMistralDeprecationsMarkdown(html, config.deprecationsUrl, { now: options.now }) : undefined
   const deprecations = config.publisher === 'openai'
-    ? parseOpenAIDeprecations(html, config.deprecationsUrl, { now: options.now })
+    ? parseOpenAIDeprecationsMarkdown(html, config.deprecationsUrl, { now: options.now })
     : config.publisher === 'google'
       ? parseGoogleDeprecations(html, config.deprecationsUrl)
       : config.publisher === 'anthropic'
@@ -2255,7 +2724,7 @@ export async function loadProviderSources(config, options = {}) {
         : config.publisher === 'mistral'
           ? mistral.records
           : config.publisher === 'cohere'
-            ? parseCohereDeprecations(html, config.deprecationsUrl)
+            ? parseCohereDeprecationsMarkdown(html, config.deprecationsUrl)
             : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
   const skipped = mistral?.skipped ?? []
   for (const row of skipped) {
@@ -2267,5 +2736,16 @@ export async function loadProviderSources(config, options = {}) {
     notice(`notice: ${config.publisher} models endpoint flags ${id} as deprecated without a dated announcement`)
   }
   if (config.publisher === 'anthropic') currentModels = await loadAnthropicModelPages(config, { fixtures, fetchImpl })
-  return { currentIds, currentModels, endpointAvailable, deprecations, skipped, undatedDeprecatedIds }
+  const sourceConflicts = []
+  if (crossCheckFailure) {
+    notice(`warning: anthropic models API cross-check failed: ${crossCheckFailure}`)
+    sourceConflicts.push({ via: 'models-api', publisher: config.publisher, reason: 'cross-check-failed', message: crossCheckFailure })
+  }
+  if (anthropicLifecycle) {
+    const { counts, conflicts } = compareAnthropicLifecycle(deprecations, anthropicLifecycle)
+    for (const conflict of conflicts) notice(`notice: ${providerSourceConflictSummary(conflict)}`)
+    notice(`notice: anthropic models API lifecycle: ${counts.active} active, ${counts.deprecated} deprecated, ${counts.retired} retired; ${conflicts.length} conflicts with the deprecations page`)
+    sourceConflicts.push(...conflicts)
+  }
+  return { currentIds, currentModels, endpointAvailable, deprecations, skipped, undatedDeprecatedIds, sourceConflicts }
 }

@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseCliArgs } from '../lib/cli.mjs'
+import { strictCrossChecks } from './cross-checks.mjs'
 import { compareFeeds, renderSemanticDiff } from './diff.mjs'
 import {
   DISTRIBUTORS,
@@ -128,6 +129,7 @@ export async function generateProviderFeed(providerName, options = {}) {
     unconfirmedIds: merged.unconfirmedIds,
     skipped: sources.skipped,
     undatedDeprecatedIds: sources.undatedDeprecatedIds,
+    sourceConflicts: sources.sourceConflicts ?? [],
   }
 }
 
@@ -181,6 +183,7 @@ export function sourceFailureError(failures) {
 }
 
 export async function run(options) {
+  strictCrossChecks(process.env)
   const generated = []
   const generatedTimestamp = process.env.MODEL_EOL_GENERATED
   const refreshClock = generatedTimestamp ? new Date(generatedTimestamp) : new Date()
@@ -251,7 +254,7 @@ export async function run(options) {
       unconfirmed: item.unconfirmedIds,
       unconfirmedDistributions,
       noPublisherFeed,
-      sourceConflicts: index === 0 ? distributorState?.sourceConflicts ?? [] : [],
+      sourceConflicts: [...(item.sourceConflicts ?? []), ...(index === 0 ? distributorState?.sourceConflicts ?? [] : [])],
       skippedModelCards: index === 0 ? distributorState?.skippedModelCards ?? [] : [],
       publisher: item.provider.publisher,
       skipped: item.skipped,

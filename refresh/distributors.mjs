@@ -1,16 +1,52 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import {
+  azureModelsApiConflictSummary,
+  azureModelsApiCredentials,
+  azureModelsApiOneDaySummary,
+  azureModelsApiSummary,
+  fetchAzureModelsApi,
+  isAzureModelsApiOneDay,
+  reconcileAzureModelsApi,
+  redactAzureModelsApiMessage,
+} from './azure-models-api.mjs'
+import {
+  bedrockModelsApiConflictSummary,
+  bedrockModelsApiCredentials,
+  bedrockModelsApiSummary,
+  fetchBedrockModelsApi,
+  reconcileBedrockModelsApi,
+  redactBedrockModelsApiMessage,
+} from './bedrock-models-api.mjs'
+import { strictCrossChecks } from './cross-checks.mjs'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
+import {
+  headingHtml,
+  htmlTableLineIndex,
+  isHtmlBody,
+  isSetextUnderline,
+  MARKDOWN_THEMATIC_BREAK,
+  markdownCellHtml,
+  markdownHeading,
+  markdownPage,
+  markdownPipeTables,
+  markdownPipeTableToHtml,
+  stripCommentsKeepingLines,
+  stripFencedCodeBlocks,
+} from './markdown.mjs'
 
 import { assertIsoDate, dateCandidates, dateFromText, MODEL_ID_PATTERN, rowLifecycleLabel, sectionProse, stripComments } from './providers.mjs'
 
 export { MAX_SOURCE_BODY_BYTES as MAX_DISTRIBUTOR_BODY_BYTES } from './fetch.mjs'
 
 export const BEDROCK_LIFECYCLE_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html'
+export const BEDROCK_LIFECYCLE_MARKDOWN_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.md'
 export const BEDROCK_MODEL_CARDS_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html'
+export const BEDROCK_MODEL_CARDS_MARKDOWN_URL = 'https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.md'
 export const MAX_BEDROCK_MODEL_CARDS = 400
 export const VERTEX_MODEL_VERSIONS_URL = 'https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions'
 export const VERTEX_LIFECYCLE_URL = VERTEX_MODEL_VERSIONS_URL
+export const VERTEX_MODEL_VERSIONS_MARKDOWN_URL = `${VERTEX_MODEL_VERSIONS_URL}.md.txt`
 export const AZURE_MODEL_RETIREMENT_SCHEDULE_URL = 'https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule'
 export const AZURE_PUBLISHER_BY_SECTION = new Map([
   ['Azure OpenAI', 'openai'],
@@ -23,20 +59,24 @@ export const DISTRIBUTORS = {
   'aws-bedrock': {
     name: 'aws-bedrock',
     sourceUrl: BEDROCK_LIFECYCLE_URL,
-    fixture: 'bedrock-lifecycle.html',
+    sourceFetchUrl: BEDROCK_LIFECYCLE_MARKDOWN_URL,
+    fixture: 'bedrock-lifecycle.md',
     indexUrl: BEDROCK_MODEL_CARDS_URL,
-    indexFixture: 'bedrock-model-cards.html',
+    indexFetchUrl: BEDROCK_MODEL_CARDS_MARKDOWN_URL,
+    indexFixture: 'bedrock-model-cards.md',
     cardFixtureDir: 'bedrock-model-cards',
   },
   'vertex-ai': {
     name: 'vertex-ai',
     sourceUrl: VERTEX_MODEL_VERSIONS_URL,
-    fixture: 'vertex-model-versions.html',
+    sourceFetchUrl: VERTEX_MODEL_VERSIONS_MARKDOWN_URL,
+    fixture: 'vertex-model-versions.md',
   },
   'azure-ai-foundry': {
     name: 'azure-ai-foundry',
     sourceUrl: AZURE_MODEL_RETIREMENT_SCHEDULE_URL,
-    fixture: 'azure-model-retirement-schedule.html',
+    sourceHeaders: { Accept: 'text/markdown' },
+    fixture: 'azure-model-retirement-schedule.md',
   },
 }
 
@@ -122,37 +162,14 @@ function expandRows(rows) {
   })
 }
 
-function bedrockHeaderIndexes(rows) {
-  for (const [row, candidate] of rows.entries()) {
-    const labels = candidate.cells.map(cell => cell.text.toLowerCase())
-    const model = labels.findIndex(label => /\bmodel\s+(?:id|identifier)\b/i.test(label))
-    const legacy = labels.findIndex(label => /\blegacy\b.*\bdate\b|\bdate\b.*\blegacy\b/i.test(label))
-    const eol = labels.findIndex(label => (
-      /\beol\b.*\bdate\b|\bdate\b.*\beol\b/i.test(label) ||
-      /end\s*[- ]?of\s*[- ]?life.*\bdate\b|\bdate\b.*end\s*[- ]?of\s*[- ]?life/i.test(label) ||
-      /\b(?:retirement|discontinuation)\b.*\bdate\b|\bdate\b.*\b(?:retirement|discontinuation)\b/i.test(label)
-    ))
-    if (model < 0 || legacy < 0 || eol < 0) continue
-    const extendedAccess = labels.findIndex(label => (
-      /\bpublic\s+extended\s+access\b.*\bdate\b|\bdate\b.*\bpublic\s+extended\s+access\b/i.test(label)
-    ))
-    if (extendedAccess < 0) {
-      throw new Error('aws-bedrock lifecycle table is missing the Public extended access start date column')
-    }
-    const status = labels.findIndex(label => /^(?:(?:model|lifecycle)\s+)*status$/i.test(label.trim()))
-    const regions = labels.findIndex(label => /^regions?$/i.test(label.trim()))
-    return { row, model, legacy, eol, extendedAccess, status, regions }
-  }
-  return undefined
-}
-
 function missingDate(text) {
   return !text || /^(?:-+|n\/?a|none|not\s+(?:available|applicable)|no\s+(?:shutdown|retirement)\s+date\s+announced)$/i.test(text)
 }
 
+// The whole value must be one day-precision date, so a qualifier, a second date, or a struck date stops the run.
 function lifecycleDate(cell, field, bedrockId, allowAnnouncement = false) {
   if (!cell || missingDate(cell.text) || (allowAnnouncement && /^to be announced$/i.test(cell.text.trim()))) return undefined
-  const parsed = dateFromText(cell.text)
+  const parsed = BEDROCK_CARD_DAY.test(cell.text.trim()) ? dateFromText(cell.text) : undefined
   if (!parsed) throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has an unrecognised ${field} date: ${cell.text}`)
   return parsed
 }
@@ -223,62 +240,151 @@ function bedrockEndpointIds(text) {
   return [...new Set(parts.map(part => part[1]))]
 }
 
-// A missing or over-spanned provider cell shifts a row; anchor on the model ID and apply its offset to the lifecycle columns.
-function bedrockModelCell(row, expectedIndex, headerLength) {
-  const expected = row.cells[expectedIndex]
-  let filled = row.cells.length
-  while (filled && !row.cells[filled - 1].text) filled--
-  const direct = expected && (isBedrockModelId(expected.text.trim()) ? [expected.text.trim()] : bedrockEndpointIds(expected.text))
-  if (direct) {
-    // An extra cell means an over-long rowspan pushed this row's dates out of their columns.
-    if (filled > headerLength) throw new Error(`aws-bedrock lifecycle entry ${direct.join(', ')} has more cells than the table header`)
-    return { cell: expected, index: expectedIndex, ids: direct }
-  }
-  // Real IDs are lowercase where display and provider names are not.
-  const candidates = row.cells
-    .map((cell, index) => ({ cell, index, ids: isBedrockModelId(cell.text.trim()) ? [cell.text.trim()] : bedrockEndpointIds(cell.text) }))
-    .filter(candidate => candidate.ids?.every(id => id === id.toLowerCase()))
-  // A shift is real only when the row gained or lost exactly that many cells against the header.
-  if (candidates.length === 1 && row.cells.length - headerLength === candidates[0].index - expectedIndex) return candidates[0]
-  if (candidates.length > 1) {
-    throw new Error(`aws-bedrock lifecycle table contains an ambiguous model row: ${candidates.map(candidate => candidate.cell.text.trim()).join(', ')}`)
-  }
-  const value = expected?.text.trim()
-  throw new Error(`aws-bedrock lifecycle table contains an invalid model id: ${value || '(empty)'}`)
+const markdownText = text => plainText(markdownCellHtml(text))
+const MARKDOWN_INLINE_TAG = /<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?\/?>/gi
+
+function bedrockMarkdownSource(markdown, what) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error(`${what} is empty`)
+  if (isHtmlBody(markdown)) throw new Error(`${what} is HTML, not Markdown`)
+  const source = stripCommentsKeepingLines(markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n'))
+  if (/<!--|--!?>/.test(source)) throw new Error(`${what} has an unbalanced comment marker`)
+  return source
 }
 
-/** Parse AWS Bedrock's model lifecycle table into distributor records. */
-export function parseBedrockLifecycleHtml(html) {
-  if (typeof html !== 'string' || !html.trim()) throw new Error('aws-bedrock lifecycle page is empty')
+function bedrockPipeTables(source, what) {
+  try {
+    return markdownPipeTables(source)
+  } catch (error) {
+    throw new Error(`${what}: ${error.message}`)
+  }
+}
 
-  const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
-  const records = []
-  let recognisedTables = 0
+const BEDROCK_LIFECYCLE_FIELDS = new Map([
+  ['Model name', 'name'],
+  ['Model ID', 'model'],
+  ['Regions', 'regions'],
+  ['Legacy date', 'legacy'],
+  ['EOL date', 'eol'],
+  ['Public extended access start date', 'extendedAccess'],
+])
+const BEDROCK_ENTRY_FIELDS = new Set(['name', 'model'])
+const BEDROCK_REQUIRED_ROW_FIELDS = [['legacy', 'Legacy date'], ['eol', 'EOL date'], ['extendedAccess', 'Public extended access start date']]
+const BEDROCK_STATUS_LABEL = /^(?:(?:model|lifecycle)\s+)*status$/i
+const BEDROCK_LABEL_TEXT = new RegExp(`(?:^|[^a-z])(${[...BEDROCK_LIFECYCLE_FIELDS.keys()].map(label => label.replace(/ /g, '\\s+')).join('|')})\\s*:`, 'i')
+// Bold, underscore, and HTML emphasis all read as the same label, so emphasis markers and tags are dropped.
+const bedrockLooseText = text => markdownText(text.split(MARKDOWN_INLINE_TAG).join(' ')).replace(/[*_`~\\]/g, '')
 
-  for (const table of tables) {
-    const rows = expandRows(tableRows(table[1]))
-    const headers = bedrockHeaderIndexes(rows)
-    if (!headers) continue
-    recognisedTables++
+// A regional line holds several "**Label:** value" segments separated by " / ".
+function bedrockLabelledSegments(content, line) {
+  const segments = []
+  for (const part of content.trim().split(/\s+\/\s+(?=\*\*)/)) {
+    const match = part.match(/^\*\*([^*]+?):\*\*(.*)$/)
+    if (!match) {
+      if (!segments.length) return undefined
+      throw new Error(`aws-bedrock lifecycle page line ${line}: unrecognised segment: ${part}`)
+    }
+    const label = match[1].trim()
+    const key = BEDROCK_LIFECYCLE_FIELDS.get(label) ?? (BEDROCK_STATUS_LABEL.test(label) ? 'status' : undefined)
+    if (!key) throw new Error(`aws-bedrock lifecycle page line ${line}: unrecognised label: ${label}`)
+    const nestedLabel = bedrockLooseText(match[2]).match(BEDROCK_LABEL_TEXT)
+    if (nestedLabel) throw new Error(`aws-bedrock lifecycle page line ${line}: the ${label} value holds another label: ${nestedLabel[1]}`)
+    segments.push({ label, key, value: markdownText(match[2]) })
+  }
+  return segments
+}
 
-    let tableRecords = 0
-    for (const row of rows.slice(headers.row + 1)) {
-      const hasContent = row.cells.some(cell => cell.text)
-      if (!hasContent) continue
-      const model = bedrockModelCell(row, headers.model, rows[headers.row].cells.length)
-      const bedrockId = model.ids.join(', ')
-      const offset = model.index - headers.model
-      const legacyCell = row.cells[headers.legacy + offset]
-      const eolCell = row.cells[headers.eol + offset]
-      const extendedAccessCell = row.cells[headers.extendedAccess + offset]
-      const statusCell = headers.status >= 0 ? row.cells[headers.status + offset] : undefined
-      if (!legacyCell || !eolCell || !extendedAccessCell || (headers.status >= 0 && !statusCell)) {
-        throw new Error(`aws-bedrock lifecycle entry ${bedrockId} is missing lifecycle columns`)
+const indentWidth = text => [...text].reduce((width, character) => character === '\t' ? width + 4 - (width % 4) : width + 1, 0)
+
+function bedrockLifecycleEntries(source) {
+  const entries = []
+  let entry
+  for (const [index, line] of source.split('\n').entries()) {
+    const number = index + 1
+    const top = line.match(/^[-*+]([ \t]+)(.*)$/)
+    const nested = line.match(/^([ \t]+)[-*+][ \t]+(.*)$/)
+    const segments = nested && bedrockLabelledSegments(nested[2], number)
+    if (top) {
+      const provider = top[2].trim().match(/^\*\*([^*]+)\*\*$/)
+      entry = provider ? { provider: markdownText(provider[1]), line: number, items: [], content: 1 + indentWidth(top[1]) } : undefined
+      if (entry) entries.push(entry)
+    } else if (segments) {
+      if (!entry) throw new Error(`aws-bedrock lifecycle page line ${number}: labelled item outside a model entry: ${line.trim()}`)
+      // A field belongs to the entry only one list level down; a deeper item is a note on the item above it.
+      const indent = indentWidth(nested[1])
+      entry.indent ??= indent
+      if (indent !== entry.indent || indent < entry.content || indent >= entry.content + 4) {
+        throw new Error(`aws-bedrock lifecycle page line ${number}: labelled item at a different list depth in the ${entry.provider} entry: ${line.trim()}`)
       }
+      entry.items.push({ line: number, segments })
+    } else if (entry && line.trim()) {
+      throw new Error(`aws-bedrock lifecycle page line ${number}: unrecognised line in the ${entry.provider} entry: ${line.trim()}`)
+    } else {
+      entry = undefined
+    }
+  }
+  return entries
+}
 
-      const legacy = lifecycleDate(legacyCell, 'legacy', bedrockId)
-      const eol = lifecycleDate(eolCell, 'EOL', bedrockId)
-      const extendedAccess = lifecycleDate(extendedAccessCell, 'public extended access', bedrockId, true)
+// Entry-level fields apply to every regional line; a label may appear once per line it applies to.
+function bedrockEntryRows(entry) {
+  if (!entry.items.length) throw new Error(`aws-bedrock lifecycle page line ${entry.line}: the ${entry.provider} entry has no labelled fields`)
+  const fields = new Map()
+  const regional = []
+  for (const item of entry.items) {
+    const target = item.segments.length > 1 ? new Map() : fields
+    for (const segment of item.segments) {
+      if (target !== fields && BEDROCK_ENTRY_FIELDS.has(segment.key)) {
+        throw new Error(`aws-bedrock lifecycle page line ${item.line}: ${segment.label} inside a regional line`)
+      }
+      if (target.has(segment.key)) throw new Error(`aws-bedrock lifecycle page line ${item.line}: duplicate ${segment.label}`)
+      target.set(segment.key, segment)
+    }
+    if (target !== fields) regional.push({ line: item.line, fields: target })
+  }
+  for (const row of regional) {
+    const shared = [...row.fields.values()].find(segment => fields.has(segment.key))
+    if (shared) throw new Error(`aws-bedrock lifecycle page line ${row.line}: duplicate ${shared.label}`)
+  }
+  return { fields, rows: regional.length ? regional.map(row => new Map([...fields, ...row.fields])) : [fields] }
+}
+
+/** Parse the Markdown copy of AWS Bedrock's legacy lifecycle page: one labelled list per model under a bold provider item. */
+export function parseBedrockLifecycleMarkdown(markdown) {
+  return parseBedrockLifecycleMarkdownRows(markdown).records
+}
+
+/** The merged records and, for the models API cross-check, every regional row with its own dates. */
+export function parseBedrockLifecycleMarkdownRows(markdown) {
+  let source = bedrockMarkdownSource(markdown, 'aws-bedrock lifecycle page')
+  for (const table of bedrockPipeTables(source, 'aws-bedrock lifecycle page')) {
+    if (table.header.some(cell => /\bmodel\s+(?:id|identifier)\b|\blegacy\b|\beol\b/i.test(markdownText(cell)))) {
+      throw new Error(`aws-bedrock lifecycle page line ${table.line}: lifecycle table where labelled lists are expected`)
+    }
+  }
+  source = stripFencedCodeBlocks(source)
+  if (/<table\b/i.test(source)) throw new Error('aws-bedrock lifecycle page has a raw HTML table, which the Markdown reader does not parse')
+  const entries = bedrockLifecycleEntries(source)
+  if (!entries.length) throw new Error('aws-bedrock lifecycle page has no model entries')
+
+  const consumed = new Map()
+  const records = []
+  const regionalRows = []
+  for (const entry of entries) {
+    for (const segment of entry.items.flatMap(item => item.segments)) consumed.set(segment.label, (consumed.get(segment.label) ?? 0) + 1)
+    const { fields, rows } = bedrockEntryRows(entry)
+    const model = fields.get('model')
+    if (!model) throw new Error(`aws-bedrock lifecycle page line ${entry.line}: the ${entry.provider} entry has no Model ID`)
+    const ids = isBedrockModelId(model.value) ? [model.value] : bedrockEndpointIds(model.value)
+    if (!ids) throw new Error(`aws-bedrock lifecycle page has an invalid model id: ${model.value || '(empty)'}`)
+    const bedrockId = ids.join(', ')
+    const mantleIds = new Set(ids.length > 1 ? model.value.split(',').map(part => part.trim().match(/^(\S+) \(bedrock-mantle\)$/)?.[1]).filter(Boolean) : [])
+    for (const row of rows) {
+      const missing = BEDROCK_REQUIRED_ROW_FIELDS.find(([key]) => !row.has(key))
+      if (missing) throw new Error(`aws-bedrock lifecycle entry ${bedrockId} is missing its ${missing[1]}`)
+      const cell = key => row.has(key) ? { text: row.get(key).value } : undefined
+      const legacy = lifecycleDate(cell('legacy'), 'legacy', bedrockId)
+      const eol = lifecycleDate(cell('eol'), 'EOL', bedrockId)
+      const extendedAccess = lifecycleDate(cell('extendedAccess'), 'public extended access', bedrockId, true)
       if (legacy && eol && eol < legacy) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has EOL before legacy date`)
       }
@@ -288,31 +394,41 @@ export function parseBedrockLifecycleHtml(html) {
       if (extendedAccess && eol && extendedAccess > eol) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has public extended access after EOL date`)
       }
-      // The table schedules Extended Access, so preserve that signal without comparing against the runner clock.
-      const status = statusCell
-        ? bedrockLifecycleStatus(statusCell, bedrockId)
+      // The page schedules Extended Access, so preserve that signal without comparing against the runner clock.
+      const status = row.has('status')
+        ? bedrockLifecycleStatus(cell('status'), bedrockId)
         : extendedAccess
           ? 'extended-access'
           : 'legacy'
       if (status === 'extended-access' && !extendedAccess) {
         throw new Error(`aws-bedrock lifecycle entry ${bedrockId} reports extended access without a start date`)
       }
-      const regionsCell = headers.regions >= 0 ? row.cells[headers.regions + offset] : undefined
-      const regionCodes = regionsCell?.text.split(',').map(region => region.trim()).filter(Boolean)
+      const regionCodes = cell('regions')?.text.split(',').map(region => region.trim()).filter(Boolean)
       const regions = regionCodes?.every(region => /^[a-z]{2}(?:-gov)?-[a-z]+-\d+$/.test(region)) ? regionCodes : undefined
-      for (const id of model.ids) {
+      for (const id of ids) {
         const record = { bedrockId: id, status }
         if (legacy !== undefined) record.legacy = legacy
         if (eol !== undefined) record.eol = eol
         if (regions?.length) bedrockRecordRegions.set(record, regions)
         records.push(record)
+        const regional = { ...record, regions: regions ?? [] }
+        if (cell('regions') !== undefined) regional.regionsText = cell('regions').text
+        if (extendedAccess !== undefined) regional.extendedAccess = extendedAccess
+        if (mantleIds.has(id)) regional.endpoint = 'bedrock-mantle'
+        regionalRows.push(regional)
       }
-      tableRecords++
     }
-    if (!tableRecords) throw new Error('aws-bedrock lifecycle table has no model entries')
   }
 
-  if (!recognisedTables) throw new Error('aws-bedrock lifecycle page has no recognised lifecycle table')
+  for (const label of BEDROCK_LIFECYCLE_FIELDS.keys()) {
+    const count = [...source.matchAll(new RegExp(`\\*\\*\\s*${label}\\s*(?::\\s*\\*\\*|\\*\\*\\s*:)`, 'gi'))].length
+    if (count !== (consumed.get(label) ?? 0)) throw new Error(`aws-bedrock lifecycle page has the label ${label} outside a model entry`)
+  }
+  const entryLines = new Set(entries.flatMap(entry => entry.items.map(item => item.line)))
+  for (const [index, line] of source.split('\n').entries()) {
+    const label = !entryLines.has(index + 1) && bedrockLooseText(line).match(BEDROCK_LABEL_TEXT)
+    if (label) throw new Error(`aws-bedrock lifecycle page line ${index + 1}: the label ${label[1]} outside a model entry`)
+  }
 
   const unique = new Map()
   for (const record of records) {
@@ -325,41 +441,42 @@ export function parseBedrockLifecycleHtml(html) {
       unique.set(record.bedrockId, merged)
     }
   }
-  return [...unique.values()]
+  return { records: [...unique.values()], rows: regionalRows }
 }
 
-export const parseAwsBedrockLifecycle = parseBedrockLifecycleHtml
-export const parseAWSBedrockLifecycle = parseBedrockLifecycleHtml
+/** The Markdown copy of a Bedrock user guide page sits next to the human page. */
+export const bedrockMarkdownUrl = url => url.replace(/\.html$/, '.md')
 
-export function parseBedrockModelCardsIndexHtml(html) {
+/** Card links from the Markdown index, as the human card URLs that records cite. */
+export function parseBedrockModelCardsIndexMarkdown(markdown) {
+  const where = `aws-bedrock index ${BEDROCK_MODEL_CARDS_URL}`
+  const source = stripFencedCodeBlocks(bedrockMarkdownSource(markdown, where))
+  const targets = [
+    ...[...source.matchAll(/\]\(\s*<?([^)\s>]*)>?(?:\s+[^)]*)?\)/g)].map(match => match[1]),
+    ...[...source.matchAll(/^ {0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?/gm)].map(match => match[1]),
+    ...[...source.matchAll(/\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi)].map(match => match[1] ?? match[2] ?? match[3]),
+  ]
   const urls = new Set()
   const directory = new URL('.', BEDROCK_MODEL_CARDS_URL).href
-  for (const anchor of stripComments(html).matchAll(/<a\b[^>]*>/gi)) {
-    const attribute = anchor[0].match(/\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i)
-    const href = attribute?.[1] ?? attribute?.[2] ?? attribute?.[3]
+  for (const href of targets) {
     if (!href) continue
-    const decoded = decodeEntities(href)
+    const decoded = decodeEntities(href).replace(/\\([!-/:-@[-`{-~])/g, '$1')
     let url
     try {
       url = new URL(decoded, BEDROCK_MODEL_CARDS_URL)
     } catch {
-      if (/model-card-/i.test(decoded.split(/[?#]/)[0])) {
-        throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} has invalid model card href: ${href}`)
-      }
+      if (/model-card-/i.test(decoded.split(/[?#]/)[0])) throw new Error(`${where} has invalid model card href: ${href}`)
       continue
     }
     url.search = ''
     url.hash = ''
     if (!/model-card-/i.test(url.pathname)) continue
-    if (url.protocol !== 'https:' || new URL('.', url).href !== directory || !/^model-card-[a-z0-9_.-]+\.html$/i.test(path.posix.basename(url.pathname))) {
-      throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} has invalid model card href: ${href}`)
-    }
-    urls.add(url.href)
-    if (urls.size > MAX_BEDROCK_MODEL_CARDS) {
-      throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} exceeds ${MAX_BEDROCK_MODEL_CARDS} model cards`)
-    }
+    const slug = path.posix.basename(url.pathname).match(/^(model-card-[a-z0-9_.-]+)\.(?:md|html)$/i)
+    if (url.protocol !== 'https:' || new URL('.', url).href !== directory || !slug) throw new Error(`${where} has invalid model card href: ${href}`)
+    urls.add(new URL(`${slug[1]}.html`, directory).href)
+    if (urls.size > MAX_BEDROCK_MODEL_CARDS) throw new Error(`${where} exceeds ${MAX_BEDROCK_MODEL_CARDS} model cards`)
   }
-  if (!urls.size) throw new Error(`aws-bedrock index ${BEDROCK_MODEL_CARDS_URL} has no model card links`)
+  if (!urls.size) throw new Error(`${where} has no model card links`)
   return [...urls]
 }
 
@@ -382,14 +499,20 @@ const BEDROCK_CARD_MONTH_ONLY = new RegExp(`^${BEDROCK_CARD_MONTH} (?:19|20)\\d{
 const BEDROCK_CARD_NO_EOL = /^(?:N\/A|Not announced\.?)$/
 const BEDROCK_CARD_ORDINAL_DAY = new RegExp(`^(\\d{1,2})(?:st|nd|rd|th)? (${BEDROCK_CARD_MONTH}) ((?:19|20)\\d{2})$`, 'i')
 
-function bedrockCardFields(html) {
+// Inline HTML tags are transparent to field text, as they are on the HTML page.
+const bedrockCardText = text => markdownText(text.split(MARKDOWN_INLINE_TAG).join(' '))
+
+function bedrockCardFields(lines, pageText) {
   const fields = new Map()
-  for (const paragraph of html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)) {
-    const text = plainText(paragraph[1])
+  for (const line of lines) {
+    const content = line.replace(/^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+/, '').trim()
+    if (!content) continue
+    const text = bedrockCardText(content)
     const label = BEDROCK_CARD_LABELS.find(candidate => text.startsWith(`${candidate}:`))
     if (!label) {
-      const boldLabel = paragraph[1].match(/^\s*<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/i)
-      const renamedLabel = boldLabel && /^Model lifecycle\b/i.test(plainText(boldLabel[2])) && !/^Model lifecycle polic/i.test(plainText(boldLabel[2]))
+      const bold = content.match(/^(\*\*|__)(.+?)\1/) ?? content.match(/^\s*<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/i)
+      const boldText = bold && bedrockCardText(bold[2])
+      const renamedLabel = boldText && /^Model lifecycle\b/i.test(boldText) && !/^Model lifecycle polic/i.test(boldText)
       if (renamedLabel || /^Model lifecycle\W*(?:Active|Legacy|EOL)\b/i.test(text) || /^Model lifecycle\b(?!\s+polic)[^:.]{0,30}:/i.test(text)) throw new Error(`unrecognised Model lifecycle field: ${text}`)
       continue
     }
@@ -398,32 +521,22 @@ function bedrockCardFields(html) {
     if (!value) throw new Error(`empty ${label} field`)
     fields.set(label, value)
   }
-  const text = plainText(html)
   for (const label of BEDROCK_CARD_LABELS) {
-    const count = [...text.matchAll(BEDROCK_CARD_LABEL_COUNT.get(label) ?? new RegExp(`\\b${label}\\b`, 'gi'))].length
-    if (count !== Number(fields.has(label))) throw new Error(`unaccounted ${label} field outside its paragraph`)
+    const count = [...pageText.matchAll(BEDROCK_CARD_LABEL_COUNT.get(label) ?? new RegExp(`\\b${label}\\b`, 'gi'))].length
+    if (count !== Number(fields.has(label))) throw new Error(`unaccounted ${label} field outside its field line`)
   }
   return fields
 }
 
 const BEDROCK_LIFECYCLE_WORD = /(?<![a-z0-9_])(?:legacy|eol|e\.o\.l|retired|end[\s-]+of[\s-]+(?:life(?:cycle)?|support))(?![a-z0-9_])/i
+const MARKDOWN_IMAGE = /!\[[^\]]*\]\([^()\s]*(?:\s+"[^"]*")?\)/g
 
-function tagAttributes(tag) {
-  const values = new Map()
-  for (const match of tag.matchAll(/([^\s"'=<>\/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
-    values.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? '')
-  }
-  return values
-}
-
+// Image alt text, raw tags and their attributes, and words split by markup all count as cell text.
 function bedrockLifecycleCell(cell) {
   const words = text => text.split(/\s+/).filter(token => token && !(isBedrockModelId(token) && /^[a-z0-9_-]{2,}\./i.test(token)) && !/^https?:\/\//i.test(token)).join(' ')
-  const labels = [`<td ${cell.attrs}>`, ...[...stripComments(cell.html).matchAll(/<[a-z](?:"[^"]*"|'[^']*'|[^"'>])*>/gi)].map(match => match[0])].flatMap(tag => {
-    const attributes = tagAttributes(tag.replace(/^<[a-z0-9]+/i, '').replace(/\/?>$/, ''))
-    return ['alt', 'title', 'aria-label'].flatMap(name => attributes.has(name) ? [decodeEntities(attributes.get(name))] : [])
-  })
-  const joined = stripComments(cell.html).split(/<[^>]*>/).map(decodeEntities).join('')
-  return [cell.text, joined, ...labels].some(text => BEDROCK_LIFECYCLE_WORD.test(words(text)))
+  const visible = bedrockCardText(cell.replace(MARKDOWN_IMAGE, ' '))
+  const texts = [visible, markdownText(cell), markdownText(cell.replace(/<br\s*\/?>/gi, ' ').split(MARKDOWN_INLINE_TAG).join(''))]
+  return { visible, lifecycle: texts.some(text => BEDROCK_LIFECYCLE_WORD.test(words(text))) }
 }
 
 function bedrockCardDate(value, label, allowMonth = false) {
@@ -432,27 +545,28 @@ function bedrockCardDate(value, label, allowMonth = false) {
   return dateFromText(value)
 }
 
-export function parseBedrockModelCardHtml(html, source) {
+/** Parse the Markdown copy of one Bedrock model card; records and skips cite source, the human card URL. */
+export function parseBedrockModelCardMarkdown(markdown, source) {
   try {
-    if (typeof html !== 'string' || !html.trim()) throw new Error('empty page')
-    html = stripComments(html)
-    if (/<!--|--!?>/.test(html)) throw new Error('unbalanced comment marker')
-    const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)].map(table => expandRows(tableRows(table[1])))
-    const idTables = tables.filter(rows => rows[0]?.cells.some(cell => cell.text === 'Model ID'))
+    const page = bedrockMarkdownSource(markdown, 'page')
+    const unfenced = stripFencedCodeBlocks(page)
+    if (/<table\b/i.test(unfenced)) throw new Error('raw HTML table, which the Markdown reader does not parse')
+    const tables = bedrockPipeTables(page, 'page').map(table => [table.header, ...table.rows])
+    const idTables = tables.filter(rows => rows[0].some(cell => bedrockCardText(cell) === 'Model ID'))
     if (!idTables.length) throw new Error('no Model ID table')
     if (idTables.length > 1) throw new Error('more than one Model ID table')
     const rows = idTables[0]
-    const columns = rows[0].cells.flatMap((cell, index) => cell.text === 'Model ID' ? [index] : [])
+    const columns = rows[0].flatMap((cell, index) => bedrockCardText(cell) === 'Model ID' ? [index] : [])
     if (columns.length !== 1) throw new Error('ambiguous Model ID columns')
     if (rows.length < 2) throw new Error('Model ID table has no entries')
     const ids = new Set()
     for (const [offset, row] of rows.slice(1).entries()) {
-      const id = row.cells[columns[0]]?.text ?? ''
+      const id = bedrockCardText(row[columns[0]] ?? '')
       if (/^n\/a$/i.test(id)) continue
       if (!isBedrockModelId(id)) throw new Error(`invalid Model ID in row ${offset + 2}: ${id || '(empty)'}`)
       ids.add(id)
     }
-    const fields = bedrockCardFields(html)
+    const fields = bedrockCardFields(unfenced.split('\n'), page.split('\n').map(bedrockCardText).join(' '))
     const lifecycle = fields.get('Model lifecycle')
     const lifecycleMatch = lifecycle === undefined ? undefined : lifecycle.match(BEDROCK_CARD_LIFECYCLE)
     const regionalMatch = lifecycle?.match(BEDROCK_CARD_REGIONAL_LIFECYCLE)
@@ -462,10 +576,11 @@ export function parseBedrockModelCardHtml(html, source) {
     const lifecycleLegacy = Boolean(regionalMatch || lifecycleMatch?.[1] || lifecycleEol)
     const skip = reason => ({ records: [], skipped: [{ source, ids: [...ids], reason }] })
     const regionDates = []
-    for (const cell of tables.flatMap(rows => rows.flatMap(row => row.cells))) {
-      if (!bedrockLifecycleCell(cell)) continue
-      const match = cell.text.match(/^(?:Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)|EOL: (\d{4}-\d{2}-\d{2}))$/)
-      if (!match) throw new Error(`unrecognised region EOL: ${cell.text}`)
+    for (const cell of tables.flat(2)) {
+      const { visible, lifecycle: mentionsLifecycle } = bedrockLifecycleCell(cell)
+      if (!mentionsLifecycle) continue
+      const match = visible.match(/^(?:Legacy \(EOL: (\d{4}-\d{2}-\d{2})\)|EOL: (\d{4}-\d{2}-\d{2}))$/)
+      if (!match) throw new Error(`unrecognised region EOL: ${visible}`)
       regionDates.push(assertIsoDate(match[1] ?? match[2], 'region EOL'))
     }
     if (!ids.size) return skip('no model ids')
@@ -561,8 +676,68 @@ function vertexDate(cell, modelId) {
 
 const VERTEX_PRECISION_PATTERN = /earliest\s+possible|retirement\s+timelines?\s+may\s+be\s+extended|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i
 
-function vertexDatePrecision(sectionText, text) {
-  return VERTEX_PRECISION_PATTERN.test(`${sectionText} ${text}`) ? 'earliest' : undefined
+const VERTEX_FIXED_DATE_PATTERN = /\bfixed\s+(?:retirement\s+)?dates?\b/i
+const VERTEX_NEGATION = /\b(?:no|not|never|without|nor)\b|n't\b/i
+
+function vertexStatesFixedDates(text) {
+  for (const match of text.matchAll(new RegExp(VERTEX_FIXED_DATE_PATTERN.source, 'gi'))) {
+    if (!VERTEX_NEGATION.test(text.slice(Math.max(0, match.index - 40), match.index))) return true
+  }
+  return false
+}
+
+function blankOutermostTables(html) {
+  let out = ''
+  let cursor = 0
+  let depth = 0
+  let start = 0
+  for (const tag of html.matchAll(/<(\/?)table\b[^>]*>/gi)) {
+    if (!tag[1]) {
+      if (!depth++) start = tag.index
+    } else if (depth && !--depth) {
+      out += html.slice(cursor, start) + ' '.repeat(tag.index + tag[0].length - start)
+      cursor = tag.index + tag[0].length
+    }
+  }
+  if (depth) return out + html.slice(cursor, start) + ' '.repeat(html.length - start)
+  return out + html.slice(cursor)
+}
+
+/** For a table offset, its enclosing sections nearest first with the prose each owns, up to an archive heading or else the page intro. */
+function vertexSectionChains(html) {
+  const blank = match => ' '.repeat(match.length)
+  const outside = blankOutermostTables(String(html).replace(/<!--[\s\S]*?--!?>/g, blank).replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, blank))
+  const headings = [...outside.matchAll(/<h([1-6])\b([^>]*)>([\s\S]*?)<\/h\1>/gi)]
+    .map(match => ({ start: match.index, end: match.index + match[0].length, level: Number(match[1]), attrs: match[2], text: plainText(match[3]) }))
+  const own = headings.map((heading, index) => plainText(outside.slice(heading.end, headings[index + 1]?.start ?? outside.length)))
+  const intro = { heading: '(page intro)', own: plainText(outside.slice(0, headings[0]?.start ?? outside.length)), intro: true }
+  const archive = heading => /\bid\s*=\s*["']retired-models["']/i.test(heading.attrs) ||
+    /^(?:retired models|the following table lists the retired models\b.*)$/i.test(heading.text)
+  return tableStart => {
+    const chain = []
+    let level = 7
+    for (let index = headings.findLastIndex(heading => heading.end <= tableStart); index >= 0; index--) {
+      if (headings[index].level >= level) continue
+      level = headings[index].level
+      chain.push({ heading: headings[index].text, own: own[index] })
+      if (archive(headings[index])) return chain
+    }
+    return [...chain, intro]
+  }
+}
+
+// The nearest section that speaks about its dates decides: "we post a fixed date" is exact even under an earliest-date parent.
+function vertexDatePrecision(chain, text) {
+  if (VERTEX_PRECISION_PATTERN.test(text)) return 'earliest'
+  for (const section of chain) {
+    const qualified = VERTEX_PRECISION_PATTERN.test(section.own)
+    if (section.intro) return qualified ? 'earliest' : undefined
+    const fixed = vertexStatesFixedDates(section.own)
+    if (qualified && fixed) throw new Error(`vertex-ai section "${section.heading}" states both fixed and earliest-possible retirement dates`)
+    if (fixed) return undefined
+    if (qualified) return 'earliest'
+  }
+  return undefined
 }
 
 /** Parse Vertex model versions and lifecycle tables. */
@@ -571,6 +746,7 @@ export function parseVertexModelVersionsHtml(html) {
 
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
   const governingProse = sectionProse(html, VERTEX_PRECISION_PATTERN)
+  const sectionChain = vertexSectionChains(html)
   const records = []
   const archived = new WeakSet()
   let recognisedTables = 0
@@ -580,6 +756,7 @@ export function parseVertexModelVersionsHtml(html) {
     if (!headers) continue
     recognisedTables++
     const section = governingProse(table.index)
+    const chain = sectionChain(table.index)
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       if (!modelCell || !modelCell.text) continue
@@ -591,7 +768,7 @@ export function parseVertexModelVersionsHtml(html) {
       const record = { vertexId: modelId }
       if (shutdown) {
         record.shutdown = shutdown
-        const precision = vertexDatePrecision(section.text, retirementCell.text)
+        const precision = vertexDatePrecision(chain, retirementCell.text)
         if (precision) record.date_precision = precision
       }
       if (section.archived) archived.add(record)
@@ -624,6 +801,53 @@ export function parseVertexModelVersionsHtml(html) {
 export const parseVertexLifecycleHtml = parseVertexModelVersionsHtml
 export const parseVertexModelLifecycle = parseVertexModelVersionsHtml
 export const parseVertexModelVersions = parseVertexModelVersionsHtml
+
+// Google's Markdown generator backslash-escapes punctuation even inside code spans, where CommonMark keeps it literal.
+// A raw tag the cell renderer keeps as escaped text (one with attributes, or not a bare phrasing tag) could hide wording such as "no earlier".
+function refuseEscapedTags(html, label, source) {
+  if (/&lt;\/?[a-z][a-z0-9-]*(?:\s[^]*?)?&gt;/i.test(html.replace(/<code>[\s\S]*?<\/code>/g, ''))) throw new Error(`${label} page has inline HTML the Markdown reader cannot read: ${source.trim()}`)
+  return html
+}
+
+const vertexCellHtml = text => refuseEscapedTags(markdownCellHtml(text), 'vertex-ai lifecycle', text).replace(/<code>([\s\S]*?)<\/code>/g, (_, code) => `<code>${code.replace(/\\([!-/:-@[-`{-~])/g, '$1')}</code>`)
+
+/** markdownPage of a page that is neither an HTML document nor carries a raw HTML table. */
+function markdownPageLines(markdown, label) {
+  if (typeof markdown !== 'string') throw new Error(`${label} page must be a string`)
+  if (/^\s*<(?:!doctype|html)\b/i.test(markdown.replace(/^\uFEFF/, ''))) throw new Error(`${label} source is HTML, not Markdown`)
+  const page = markdownPage(markdown)
+  if (htmlTableLineIndex(page.lines) >= 0) throw new Error(`${label} page has a raw HTML table, which the Markdown reader does not parse`)
+  return page
+}
+
+/** Render the Vertex Markdown copy as the headings, prose, and tables that parseVertexModelVersionsHtml reads. */
+export function vertexMarkdownToHtml(markdown) {
+  const { tableAt, lines } = markdownPageLines(markdown, 'vertex-ai lifecycle')
+  const html = []
+  let paragraph = false
+  for (let index = 0; index < lines.length; index++) {
+    const table = tableAt.get(index)
+    const line = lines[index]
+    if (table) {
+      html.push(markdownPipeTableToHtml(table, { cellHtml: vertexCellHtml }))
+      index += table.rows.length + 1
+    } else if (paragraph && isSetextUnderline(line)) {
+      throw new Error(`vertex-ai lifecycle page line ${index + 1}: setext heading; section headings must use #`)
+    } else if (line.trim()) {
+      const heading = markdownHeading(line)
+      html.push(heading ? headingHtml(heading, vertexCellHtml(heading.text)) : `<p>${vertexCellHtml(line)}</p>`)
+      paragraph = !heading
+      continue
+    }
+    paragraph = false
+  }
+  return html.join('\n')
+}
+
+/** Parse the Markdown copy of the Vertex model versions page with the same rules as the HTML page. */
+export function parseVertexModelVersionsMarkdown(markdown) {
+  return parseVertexModelVersionsHtml(vertexMarkdownToHtml(markdown))
+}
 
 const AZURE_LIFECYCLE_STATUSES = new Map([
   ['GA', 'active'],
@@ -767,20 +991,51 @@ function azureCheckOtherDates(dates, date, where, now) {
   }
 }
 
+/** For a table offset, the prose of its own section before it and the intro of each enclosing section below the page title. */
+function azureSectionPrologues(html) {
+  const blank = match => ' '.repeat(match.length)
+  const outside = blankOutermostTables(String(html).replace(/<!--[\s\S]*?--!?>/g, blank))
+  const headings = [...outside.matchAll(/<h([1-6])\b[^>]*>[\s\S]*?<\/h\1>/gi)]
+    .map(match => ({ start: match.index, end: match.index + match[0].length, level: Number(match[1]) }))
+  return tableStart => {
+    const nearest = headings.findLastIndex(heading => heading.end <= tableStart)
+    if (nearest < 0) return azureProseVariants(outside.slice(0, tableStart))
+    const parts = [outside.slice(headings[nearest].end, tableStart)]
+    let level = headings[nearest].level
+    for (let index = nearest - 1; index >= 0 && level > 2; index--) {
+      if (headings[index].level >= level) continue
+      level = headings[index].level
+      if (level > 1) parts.push(outside.slice(headings[index].end, headings[index + 1].start))
+    }
+    return azureProseVariants(parts.join(' '))
+  }
+}
+
 function azureRetirementDate(cell, label, region, now) {
   const marked = cell.html.match(/^\s*(\d{4}-\d{2}-\d{2})\s*<sup>(\d+)<\/sup>\s*$/i)
-  if (!marked) return cell.text === '-' ? undefined : azureIsoDate(cell.text, `${label} retirement`)
+  const prefix = `azure-ai-foundry lifecycle entry ${label} retirement`
+  const proseCheck = () => {
+    const cites = marked ? `cites footnote ${marked[2]}` : 'is dated'
+    const before = azurePrecisionPhrase(region().before)
+    if (before) throw new Error(`${prefix} ${cites}, and the section before the table makes dates approximate ("${before}")`)
+    const after = azurePrecisionPhrase(region().variants)
+    if (after) throw new Error(`${prefix} ${cites}, and the notes after the table make dates approximate ("${after}")`)
+  }
+  if (!marked) {
+    if (cell.text === '-') return undefined
+    const date = azureIsoDate(cell.text, `${label} retirement`)
+    proseCheck()
+    return date
+  }
   const date = azureIsoDate(marked[1], `${label} retirement`)
   const number = marked[2]
-  const prefix = `azure-ai-foundry lifecycle entry ${label} retirement`
   const where = `${prefix} footnote ${number}`
   const footnote = region().footnotes.get(number)
   if (footnote === undefined) throw new Error(`${prefix} cites footnote ${number}, which the table does not define`)
   if (footnote === null) throw new Error(`${prefix} cites footnote ${number}, which the table defines more than once`)
   const phrase = azurePrecisionPhrase(footnote.span)
   if (phrase) throw new Error(`${where} makes the date approximate ("${phrase}"): ${footnote.span[0]}`)
-  const notePhrase = azurePrecisionPhrase(region().variants)
-  if (notePhrase) throw new Error(`${prefix} cites footnote ${number}, and the notes after the table make dates approximate ("${notePhrase}")`)
+  proseCheck()
   if (!azureDateScan(footnote.own, where).has(date)) throw new Error(`${where} does not state the retirement date ${date}`)
   azureCheckOtherDates(azureDateScan(footnote.span, where), date, where, now)
   const notes = `${prefix} cites footnote ${number}, and the notes before the first footnote`
@@ -798,6 +1053,8 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
   const unique = new Map()
   const conflicts = []
   const modelRowCounts = new Map()
+  const pageRows = []
+  const prologues = azureSectionPrologues(html)
   const blocks = html.matchAll(/<(h[123]|table)\b[^>]*>([\s\S]*?)<\/\1>/gi)
   for (const block of blocks) {
     const tag = block[1].toLowerCase()
@@ -815,7 +1072,7 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
     recognisedTables++
     let tableRecords = 0
     let tableRegion
-    const region = () => (tableRegion ??= azureFootnoteRegion(html, block.index + block[0].length))
+    const region = () => (tableRegion ??= { ...azureFootnoteRegion(html, block.index + block[0].length), before: prologues(block.index) })
     for (const row of rows.slice(headers.row + 1)) {
       if (!row.cells.some(cell => cell.text)) continue
       const [modelCell, versionCell, lifecycleCell, retirementCell] = headers.indexes.map(index => row.cells[index])
@@ -848,6 +1105,7 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
       if (publisher) record.publisher = publisher
       if (!validId) record.reason = 'invalid model id'
       if (shutdown !== undefined) record.shutdown = shutdown
+      pageRows.push(record)
       const key = JSON.stringify(publisher ? [section, azureId] : [group, section, azureId, version])
       const previous = unique.get(key)
       if (!previous) unique.set(key, record)
@@ -869,10 +1127,76 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
   for (const record of unique.values()) {
     if (record.publisher === 'openai') record.modelRowCount = modelRowCounts.get(record.modelId.trim().toLowerCase())
   }
-  return { records: [...unique.values()], conflicts }
+  return { records: [...unique.values()], conflicts, rows: pageRows }
+}
+
+const MARKDOWN_LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/
+const AZURE_RESERVED_CHARACTERS = /[\uE000\uE001]/
+
+// Learn writes footnote markers as ^N^; outside code spans they become the <sup>N</sup> of the HTML page.
+function azureInlineHtml(text) {
+  return refuseEscapedTags(markdownCellHtml(text.replace(/(?<!\\)\^(\d+)\^/g, '\uE000$1\uE001')), 'azure-ai-foundry lifecycle', text).replace(
+    /<code>[\s\S]*?<\/code>|\uE000(\d+)\uE001/g,
+    (match, number) => number === undefined ? match.replace(/\uE000(\d+)\uE001/g, '^$1^') : `<sup>${number}</sup>`,
+  )
+}
+
+/** Render the Azure retirement schedule's Markdown as the headings, paragraphs, and tables that parseAzureModelRetirementScheduleHtml reads. */
+export function azureMarkdownToHtml(markdown) {
+  const label = 'azure-ai-foundry lifecycle'
+  if (typeof markdown === 'string' && AZURE_RESERVED_CHARACTERS.test(markdown)) {
+    throw new Error(`${label} page contains U+E000 or U+E001, which the Markdown reader reserves for footnote markers`)
+  }
+  const { tableAt, lines } = markdownPageLines(markdown, label)
+  const html = []
+  let block
+  const flush = () => {
+    if (block) html.push(`<${block.tag}>${azureInlineHtml(block.lines.join('\n'))}</${block.tag}>`)
+    block = undefined
+  }
+  for (let index = 0; index < lines.length; index++) {
+    const table = tableAt.get(index)
+    const line = lines[index]
+    if (table) {
+      flush()
+      html.push(markdownPipeTableToHtml(table, { cellHtml: azureInlineHtml }))
+      index += table.rows.length + 1
+      continue
+    }
+    if (!line.trim()) {
+      flush()
+      continue
+    }
+    if (block?.tag === 'p' && isSetextUnderline(line)) {
+      throw new Error(`${label} page line ${index + 1}: setext heading; section headings must use #`)
+    }
+    const heading = markdownHeading(line)
+    const item = line.match(MARKDOWN_LIST_ITEM)
+    if (heading) {
+      flush()
+      html.push(headingHtml(heading, azureInlineHtml(heading.text)))
+    } else if (MARKDOWN_THEMATIC_BREAK.test(line)) {
+      flush()
+    } else if (item) {
+      flush()
+      block = { tag: 'li', lines: [line.slice(item[0].length).trim()] }
+    } else if (block) {
+      block.lines.push(line.trim())
+    } else {
+      block = { tag: 'p', lines: [line.trim()] }
+    }
+  }
+  flush()
+  return html.join('\n')
+}
+
+/** Parse the Markdown copy of the Azure retirement schedule with the same rules as the HTML page. */
+export function parseAzureModelRetirementScheduleMarkdown(markdown, options = {}) {
+  return parseAzureModelRetirementScheduleHtml(azureMarkdownToHtml(markdown), options)
 }
 
 export function sourceConflictSummary(conflict) {
+  if (conflict.source === 'models-api') return conflict.via === 'aws-bedrock' ? bedrockModelsApiConflictSummary(conflict) : azureModelsApiConflictSummary(conflict)
   if (conflict.via === 'aws-bedrock') {
     return `${conflict.via} ${conflict.id}: kept ${conflict.kept.eol ?? conflict.kept.shutdown} (${conflict.kept.source}); discarded ${conflict.discarded.shutdown} (${conflict.discarded.source}); legacy table wins`
   }
@@ -1203,7 +1527,8 @@ export function findDistributorFixture(dir, distributor = 'aws-bedrock') {
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
     throw new Error(`fixtures directory does not exist: ${dir}`)
   }
-  const candidates = [config.fixture, `${distributor}.html`, `${distributor}-lifecycle.html`]
+  const extension = path.extname(config.fixture)
+  const candidates = [config.fixture, `${distributor}${extension}`, `${distributor}-lifecycle${extension}`]
   for (const filename of candidates) {
     const candidate = path.join(root, filename)
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate
@@ -1219,21 +1544,53 @@ function readBedrockCardFixture(dir, filename, url) {
   }
 }
 
+async function fetchBedrockCard(url, config, options) {
+  try {
+    return await fetchBody(bedrockMarkdownUrl(url), config.name, options.fetchImpl)
+  } catch (error) {
+    throw new Error(`aws-bedrock model card ${url}: ${error.message}`)
+  }
+}
+
 async function loadBedrockCards(config, options) {
   const index = options.fixtures
     ? readBedrockCardFixture(options.fixtures, config.indexFixture, config.indexUrl)
-    : await fetchBody(config.indexUrl, config.name, options.fetchImpl)
+    : await fetchBody(config.indexFetchUrl, config.name, options.fetchImpl)
   const records = []
   const skipped = []
-  for (const url of parseBedrockModelCardsIndexHtml(index)) {
-    const html = options.fixtures
-      ? readBedrockCardFixture(options.fixtures, path.join(config.cardFixtureDir, path.basename(new URL(url).pathname)), url)
-      : await fetchBody(url, config.name, options.fetchImpl)
-    const parsed = parseBedrockModelCardHtml(html, url)
+  for (const url of parseBedrockModelCardsIndexMarkdown(index)) {
+    const markdown = options.fixtures
+      ? readBedrockCardFixture(options.fixtures, path.join(config.cardFixtureDir, path.basename(new URL(bedrockMarkdownUrl(url)).pathname)), url)
+      : await fetchBedrockCard(url, config, options)
+    const parsed = parseBedrockModelCardMarkdown(markdown, url)
     records.push(...parsed.records)
     skipped.push(...parsed.skipped)
   }
   return { records, skipped }
+}
+
+/** Run one models API cross-check of a parsed page; it may add conflicts but never changes the page records. */
+async function modelsApiCrossCheck(parsed, options, { via, label, unset, credentials: read, redact, run }) {
+  const notice = options.notice ?? console.error
+  const env = options.env ?? process.env
+  const strict = strictCrossChecks(env)
+  let credentials
+  try {
+    credentials = options.fixtures ? undefined : read(env)
+    if (options.fixtures) notice(`notice: ${label} not read in a fixture run`)
+    else if (!credentials) notice(`notice: ${label} skipped: ${unset}`)
+    else {
+      const checked = await run(credentials)
+      return { parsed: { ...parsed, records: checked.records, conflicts: [...parsed.conflicts ?? [], ...checked.conflicts] }, summary: checked.summary }
+    }
+  } catch (error) {
+    if (strict) throw error
+    // The API only cross-checks the page and never changes feed data, so by default its failure is reported, not fatal.
+    const message = redact(error.message, credentials).replace(/\s+/g, ' ')
+    notice(`warning: ${label} cross-check failed: ${message}`)
+    return { parsed: { ...parsed, conflicts: [...parsed.conflicts ?? [], { via, source: 'models-api', reason: 'cross-check-failed', message }] } }
+  }
+  return { parsed }
 }
 
 export async function loadDistributorSource(distributor = 'aws-bedrock', options = {}) {
@@ -1246,21 +1603,50 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
     html = fs.readFileSync(fixturePath, 'utf8')
     ;(options.notice ?? console.error)(`notice: ${distributor} lifecycle fixture: ${path.relative(process.cwd(), fixturePath)}`)
   } else {
-    html = await fetchBody(config.sourceUrl, distributor, options.fetchImpl)
+    html = await fetchBody(config.sourceFetchUrl ?? config.sourceUrl, distributor, options.fetchImpl, { headers: { ...config.sourceHeaders } })
   }
+  const notice = options.notice ?? console.error
   let parsed = distributor === 'azure-ai-foundry'
-    ? parseAzureModelRetirementScheduleHtml(html, { now: options.now ?? new Date() })
-    : { records: distributor === 'aws-bedrock' ? parseBedrockLifecycleHtml(html) : parseVertexModelVersionsHtml(html) }
+    ? parseAzureModelRetirementScheduleMarkdown(html, { now: options.now ?? new Date() })
+    : distributor === 'aws-bedrock' ? parseBedrockLifecycleMarkdownRows(html) : { records: parseVertexModelVersionsMarkdown(html) }
   if (distributor === 'aws-bedrock') {
     const cards = await loadBedrockCards(config, options)
-    parsed = { ...mergeBedrockSources(parsed.records, cards.records), skipped: cards.skipped }
+    parsed = { ...mergeBedrockSources(parsed.records, cards.records), rows: parsed.rows, skipped: cards.skipped }
   }
-  for (const conflict of parsed.conflicts ?? []) {
-    ;(options.notice ?? console.error)(`notice: ${sourceConflictSummary(conflict)}`)
+  let apiSummary
+  if (distributor === 'azure-ai-foundry') {
+    ;({ parsed, summary: apiSummary } = await modelsApiCrossCheck(parsed, options, {
+      via: distributor,
+      label: 'azure models API',
+      unset: 'AZURE_MANAGEMENT_TOKEN and AZURE_SUBSCRIPTION_ID are not set',
+      credentials: azureModelsApiCredentials,
+      redact: redactAzureModelsApiMessage,
+      run: async credentials => {
+        const api = await fetchAzureModelsApi(credentials, { fetchImpl: options.fetchImpl, locations: options.azureLocations })
+        const reconciled = reconcileAzureModelsApi(parsed.records, api.entries, { rows: parsed.rows })
+        return { records: reconciled.records, conflicts: reconciled.conflicts, summary: azureModelsApiSummary(api, reconciled.conflicts) }
+      },
+    }))
   }
-  for (const card of parsed.skipped ?? []) {
-    ;(options.notice ?? console.error)(`notice: ${skippedModelCardSummary(card)}`)
+  if (distributor === 'aws-bedrock') {
+    ;({ parsed, summary: apiSummary } = await modelsApiCrossCheck(parsed, options, {
+      via: distributor,
+      label: 'bedrock models API',
+      unset: 'AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not set',
+      credentials: bedrockModelsApiCredentials,
+      redact: redactBedrockModelsApiMessage,
+      run: async credentials => {
+        const api = await fetchBedrockModelsApi(credentials, { fetchImpl: options.fetchImpl, regions: options.bedrockRegions })
+        const reconciled = reconcileBedrockModelsApi(parsed.records, api.entries, { rows: parsed.rows, regions: api.regions, now: options.now })
+        return { records: reconciled.records, conflicts: reconciled.conflicts, summary: bedrockModelsApiSummary(api, reconciled.conflicts) }
+      },
+    }))
   }
+  const conflicts = parsed.conflicts ?? []
+  for (const conflict of conflicts) if (!isAzureModelsApiOneDay(conflict)) notice(`notice: ${sourceConflictSummary(conflict)}`)
+  if (conflicts.some(isAzureModelsApiOneDay)) notice(`notice: ${azureModelsApiOneDaySummary(conflicts)}`)
+  if (apiSummary) notice(`notice: ${apiSummary}`)
+  for (const card of parsed.skipped ?? []) notice(`notice: ${skippedModelCardSummary(card)}`)
   return {
     ...config,
     fixturePath,

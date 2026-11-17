@@ -5,7 +5,14 @@
 #
 # Optional secrets: OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY / COHERE_API_KEY enable
 # the models endpoints so current-model entries (and policy-floor horizons)
-# populate.
+# populate. AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID sign in to
+# Azure through OIDC on main for the Azure models API cross-check; a failed
+# login or a failed cross-check is a warning, because the cross-check never
+# changes feed data, and other refs skip the cross-check with a notice. The
+# model-apis environment's AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY read the
+# Bedrock ListFoundationModels cross-check on main the same way. A failed
+# models endpoint listing, Anthropic's included, fails the run; only a bad
+# Anthropic lifecycle field is a warning.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
 # fine-grained PAT as MODEL_EOL_BOT_TOKEN if feed PRs should run checks.
 # Failures open or update one durable issue; the next successful check closes it.
@@ -27,6 +34,12 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'model-apis' || '' }}
+    permissions:
+      contents: write
+      id-token: write
+      issues: write
+      pull-requests: write
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -35,8 +48,19 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
-      - name: Check live sources for changes
-        id: check
+      # The Entra federated credential trusts only main, so other refs skip the Azure models API with a notice.
+      - name: Sign in to Azure for the models API
+        id: azure-login
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Check provider sources for changes
+        id: provider-check
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -46,10 +70,64 @@ jobs:
         run: |
           set +e
           node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
-          providers=$?
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
-          distributors=$?
-          set -e
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      # Its own step, so the Azure token and the AWS key are in no other step's environment.
+      - name: Check distributor sources for changes
+        id: distributor-check
+        env:
+          AZURE_LOGIN: ${{ steps.azure-login.outcome }}
+          AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          # Exports the Bedrock key; with neither secret set it exports nothing, so the refresh skips the cross-check.
+          bedrock_api_env() {
+            if [ -z "$BEDROCK_ACCESS_KEY_ID" ] && [ -z "$BEDROCK_SECRET_ACCESS_KEY" ]; then
+              if [ "$GITHUB_REF" = refs/heads/main ]; then
+                echo "::warning::No AWS key in the model-apis environment; the distributor check runs without the Bedrock models API cross-check."
+              else
+                echo "::notice::The AWS key is available only on main; the distributor check skips the Bedrock models API on $GITHUB_REF."
+              fi
+              return 0
+            fi
+            export AWS_ACCESS_KEY_ID="$BEDROCK_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$BEDROCK_SECRET_ACCESS_KEY"
+          }
+          # Exports the models API credentials; without a token it exports nothing, so the refresh skips the cross-check after a warning.
+          azure_api_env() {
+            if [ "$AZURE_LOGIN" = skipped ]; then
+              echo "::notice::Azure login runs only on main; the distributor check skips the Azure models API on $GITHUB_REF."
+              return 0
+            fi
+            local token=''
+            if [ "$AZURE_LOGIN" = success ]; then
+              token=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv) || token=''
+            fi
+            if [ -z "$token" ]; then
+              echo "::warning::No Azure management token (azure/login outcome: $AZURE_LOGIN); the distributor check runs without the Azure models API cross-check."
+              return 0
+            fi
+            echo "::add-mask::$token"
+            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
+            export AZURE_MANAGEMENT_TOKEN="$token"
+          }
+          set +e
+          (
+            azure_api_env
+            bedrock_api_env
+            node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check > distributor-diff.md 2> distributor-err.txt
+          )
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether the feeds changed
+        id: check
+        env:
+          PROVIDERS: ${{ steps.provider-check.outputs.code }}
+          DISTRIBUTORS: ${{ steps.distributor-check.outputs.code }}
+        run: |
+          # A check that recorded no exit code counts as failed.
+          providers=${PROVIDERS:-1}
+          distributors=${DISTRIBUTORS:-1}
           cat provider-err.txt distributor-err.txt >&2 || true
           if [ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]; then
             echo "provider refresh failed with exit code $providers - no feed written" >&2
@@ -68,7 +146,7 @@ jobs:
           echo "providers=$providers" >> "$GITHUB_OUTPUT"
           echo "distributors=$distributors" >> "$GITHUB_OUTPUT"
 
-      - name: Regenerate feeds and README freshness
+      - name: Regenerate provider feeds
         if: steps.check.outputs.changed == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -76,9 +154,66 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+        run: node refresh/refresh.mjs
+
+      # Its own step, so the Azure token and the AWS key are in no other step's environment.
+      - name: Regenerate distributor feeds
+        if: steps.check.outputs.changed == 'true'
+        env:
+          AZURE_LOGIN: ${{ steps.azure-login.outcome }}
+          AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          node refresh/refresh.mjs
-          node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
+          # Exports the Bedrock key; with neither secret set it exports nothing, so the refresh skips the cross-check.
+          bedrock_api_env() {
+            if [ -z "$BEDROCK_ACCESS_KEY_ID" ] && [ -z "$BEDROCK_SECRET_ACCESS_KEY" ]; then
+              if [ "$GITHUB_REF" = refs/heads/main ]; then
+                echo "::warning::No AWS key in the model-apis environment; the distributor refresh runs without the Bedrock models API cross-check."
+              else
+                echo "::notice::The AWS key is available only on main; the distributor refresh skips the Bedrock models API on $GITHUB_REF."
+              fi
+              return 0
+            fi
+            export AWS_ACCESS_KEY_ID="$BEDROCK_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$BEDROCK_SECRET_ACCESS_KEY"
+          }
+          # Exports the models API credentials; without a token it exports nothing, so the refresh skips the cross-check after a warning.
+          azure_api_env() {
+            if [ "$AZURE_LOGIN" = skipped ]; then
+              echo "::notice::Azure login runs only on main; the distributor refresh skips the Azure models API on $GITHUB_REF."
+              return 0
+            fi
+            local token=''
+            if [ "$AZURE_LOGIN" = success ]; then
+              token=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv) || token=''
+            fi
+            if [ -z "$token" ]; then
+              echo "::warning::No Azure management token (azure/login outcome: $AZURE_LOGIN); the distributor refresh runs without the Azure models API cross-check."
+              return 0
+            fi
+            echo "::add-mask::$token"
+            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
+            export AZURE_MANAGEMENT_TOKEN="$token"
+          }
+          (
+            azure_api_env
+            bedrock_api_env
+            node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
+          )
+          az logout > /dev/null 2>&1 || true
+
+      # The az session in ~/.azure outlives its step, and nothing after the last distributor refresh needs it.
+      - name: Sign out of Azure
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          az logout > /dev/null 2>&1 || true
+          rm -rf "${AZURE_CONFIG_DIR:-$HOME/.azure}" || true
+
+      - name: Update README freshness and run the tests
+        if: steps.check.outputs.changed == 'true'
+        run: |
           node scripts/update-readme-freshness.mjs
           npm test
 

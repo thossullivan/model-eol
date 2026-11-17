@@ -20,6 +20,11 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'model-apis' || '' }}
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -30,15 +35,27 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
-      - name: Run the refresh parsers against live sources
-        id: refresh
-        timeout-minutes: 40
+      # The Entra federated credential trusts only main, so other refs skip the Azure models API with a notice.
+      - name: Sign in to Azure for the models API
+        id: azure-login
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run the provider refresh parser against live sources
+        id: provider-check
+        timeout-minutes: 20
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          MODEL_EOL_CROSS_CHECKS: strict
         run: |
           # Runs one check, retrying once after a pause when it exits other than 0 or 3; the files keep the last attempt.
           check_once_more() {
@@ -57,17 +74,100 @@ jobs:
           }
           set +e
           check_once_more provider node refresh/refresh.mjs --check
-          providers=$?
-          check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check
-          distributors=$?
-          set -e
-          echo "provider check exited $providers" >&2
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      # Its own step, so the Azure token and the AWS key are in no other step's environment.
+      - name: Run the distributor refresh parsers against live sources
+        id: distributor-check
+        if: success() || failure()
+        timeout-minutes: 20
+        env:
+          MODEL_EOL_CROSS_CHECKS: strict
+          AZURE_LOGIN: ${{ steps.azure-login.outcome }}
+          AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          # Exports the Bedrock key; on main a missing key exports a placeholder id alone so the strict check fails, never skips.
+          bedrock_api_env() {
+            if [ -z "$BEDROCK_ACCESS_KEY_ID" ] && [ -z "$BEDROCK_SECRET_ACCESS_KEY" ]; then
+              if [ "$GITHUB_REF" = refs/heads/main ]; then
+                echo "::error::No AWS key in the model-apis environment; the Bedrock models API check fails."
+                export AWS_ACCESS_KEY_ID=secret-AWS_ACCESS_KEY_ID-is-empty
+              else
+                echo "::notice::The AWS key is available only on main; the distributor check skips the Bedrock models API on $GITHUB_REF."
+              fi
+              return 0
+            fi
+            export AWS_ACCESS_KEY_ID="$BEDROCK_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$BEDROCK_SECRET_ACCESS_KEY"
+          }
+          # Exports the models API credentials; without a token the subscription alone makes the Azure source fail, never skip.
+          azure_api_env() {
+            if [ "$AZURE_LOGIN" = skipped ]; then
+              echo "::notice::Azure login runs only on main; the distributor check skips the Azure models API on $GITHUB_REF."
+              return 0
+            fi
+            local token=''
+            if [ "$AZURE_LOGIN" = success ]; then
+              token=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv) || token=''
+            fi
+            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
+            if [ -n "$token" ]; then
+              echo "::add-mask::$token"
+              export AZURE_MANAGEMENT_TOKEN="$token"
+            else
+              echo "::error::No Azure management token (azure/login outcome: $AZURE_LOGIN); the Azure models API check fails."
+            fi
+          }
+          # Runs one check, retrying once after a pause when it exits other than 0 or 3; the files keep the last attempt.
+          check_once_more() {
+            local name=$1 code
+            shift
+            "$@" > "$name-diff.md" 2> "$name-err.txt"
+            code=$?
+            if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then
+              echo "$name check exited $code; retrying once in 60 seconds. First attempt stderr:" >&2
+              cat "$name-err.txt" >&2 || true
+              sleep 60
+              "$@" > "$name-diff.md" 2> "$name-err.txt"
+              code=$?
+            fi
+            return "$code"
+          }
+          set +e
+          (
+            azure_api_env
+            bedrock_api_env
+            check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check
+          )
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      # The az session in ~/.azure outlives its step, and nothing after the last distributor refresh needs it.
+      - name: Sign out of Azure
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          az logout > /dev/null 2>&1 || true
+          rm -rf "${AZURE_CONFIG_DIR:-$HOME/.azure}" || true
+
+      - name: Summarise the refresh checks
+        id: refresh
+        if: success() || failure()
+        env:
+          PROVIDERS: ${{ steps.provider-check.outputs.code }}
+          DISTRIBUTORS: ${{ steps.distributor-check.outputs.code }}
+        run: |
+          # An empty code means the check timed out or never ran, which the report shows as not run.
+          providers=${PROVIDERS:-}
+          distributors=${DISTRIBUTORS:-}
+          echo "provider check exited ${providers:-nothing}" >&2
           cat provider-err.txt >&2 || true
-          echo "distributor check exited $distributors" >&2
+          echo "distributor check exited ${distributors:-nothing}" >&2
           cat distributor-err.txt >&2 || true
           healthy=true
-          if [ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]; then healthy=false; fi
-          if [ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]; then healthy=false; fi
+          case "$providers" in 0|3) ;; *) healthy=false ;; esac
+          case "$distributors" in 0|3) ;; *) healthy=false ;; esac
           {
             echo "providers=$providers"
             echo "distributors=$distributors"

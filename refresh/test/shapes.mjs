@@ -7,28 +7,39 @@ import path from 'node:path'
 import strictAssert from 'node:assert/strict'
 import {
   SNAPSHOT_FILE,
+  collectShapes,
   compareShapes,
+  extractShapes,
   htmlTableShapes,
+  labelledListShapes,
   markdocTableShapes,
   normalizeHeaderText,
+  pipeTableShapes,
   readSnapshot,
   renderShapeDiff,
   shapeSources,
   snapshotDocument,
+  sourceFormat,
 } from '../shapes.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const shapesCli = path.join(root, 'refresh', 'shapes.mjs')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-shapes-test-'))
 let failures = 0
+const pending = []
 
 const test = (name, check) => {
-  try {
-    check()
-    console.log(`ok: ${name}`)
-  } catch (error) {
+  const pass = () => console.log(`ok: ${name}`)
+  const fail = error => {
     console.error(`FAIL: ${name}: ${error.message}`)
     failures++
+  }
+  try {
+    const result = check()
+    if (result instanceof Promise) pending.push(result.then(pass, fail))
+    else pass()
+  } catch (error) {
+    fail(error)
   }
 }
 
@@ -116,6 +127,82 @@ test('Markdoc header rows are read with emphasis, links, and escapes removed, an
   strictAssert.throws(() => markdocTableShapes('## A\n{% table id="x" %}\n'), /malformed table tag/)
 })
 
+test('pipe table header rows are normalized like the other formats and carry their width', () => {
+  const markdown = [
+    '# Deprecations',
+    '## Upcoming',
+    '| **Shutdown date** | [Affected `model`](/m) | Retirement date<sup>1</sup> | Notice^2^ date[^3] | A \\| B |',
+    '| --- | --- | --- | --- | --- |',
+    '| x | y | z | w | v |',
+    '## Past',
+    'Shutdown date | Affected model | Retirement date | Notice date | A/B',
+    ':-- | :-: | --: | --- | ---',
+    '```',
+    '| Fenced | Example |',
+    '| --- | --- |',
+    '```',
+  ].join('\n')
+  strictAssert.deepEqual(pipeTableShapes(markdown), ['shutdown date | affected model | retirement date | notice date | a / b [5 cols]', 'shutdown date | affected model | retirement date | notice date | a/b [5 cols]'])
+  strictAssert.throws(() => pipeTableShapes('| A | B |\n| --- |\n'), /line 2: table delimiter row has 1 cells/)
+})
+
+test('a source body is classified from its content, and a Markdown body pools Markdoc, pipe, and raw HTML tables', () => {
+  strictAssert.equal(sourceFormat('\ufeff\n<!-- note --><!DOCTYPE html><table></table>'), 'html')
+  strictAssert.equal(sourceFormat(htmlTable(['Model'])), 'html')
+  strictAssert.equal(sourceFormat('---\ntitle: x\n---\n| A |\n| - |\n'), 'markdown')
+  strictAssert.equal(sourceFormat('# Models\n\n<table></table>'), 'markdown')
+  strictAssert.deepEqual(extractShapes(`<p>| A | B |</p>\n<p>| --- | --- |</p>${htmlTable(['Model'])}`), ['model [2 cols]'])
+  const markdown = `## Models\n${markdocTable(['Model', 'Date'], [['\`m\`', 'd']])}\n\n| Agent | Date |\n| --- | --- |\n| a | d |\n\n${htmlTable(['Raw', 'Html'])}\n\n\`\`\`\n<table><tr><th>Fenced</th></tr>\n\`\`\`\n`
+  strictAssert.deepEqual(extractShapes(markdown), ['agent | date [2 cols]', 'model | date [2 cols]', 'raw | html [2 cols]'])
+  strictAssert.throws(() => extractShapes('# Models\n\nNo tables, only | a pipe.\n'), /no tables found/)
+  strictAssert.throws(() => extractShapes('<p>no tables</p>'), /no tables found/)
+})
+
+test('labelled lists record the distinct labels of each nested run, with regional lines as one item', () => {
+  const entry = (provider, lines) => `- **${provider}**\n${lines.map(line => `  - ${line}`).join('\n')}\n`
+  const markdown = [
+    '# Model lifecycle',
+    entry('AI21 Labs', ['**Model name:** Jamba', '**Model ID:** ai21.jamba-v1:0', '**Regions:** us-east-1', '**Legacy date:** May 26, 2026']),
+    entry('Anthropic', ['**Model name:** Claude', '**Model ID:** anthropic.claude-v1:0', '**Regions:** us-east-1 / **Legacy date:** October 10, 2026', '**Regions:** ca-central-1 / **Legacy date:** October 15, 2026']),
+    entry('Meta', ['**Model Name:**\u00a0Llama', '**Model ID:** `meta.llama-v1:0`', '**Regions:** us-east-1', '**Legacy date:** May 1, 2026']),
+    '+ **Model launch date:** top-level labels are not a nested list',
+    '- **Note**\n  - plain nested items are not labelled',
+    '```\n- **Fenced**\n  - **Fenced label:** x\n```',
+    '<!--\n- **Hidden**\n  - **Hidden label:** x\n-->',
+  ].join('\n\n')
+  strictAssert.deepEqual(labelledListShapes(markdown), [
+    'labelled list: model name | model id | regions / legacy date',
+    'labelled list: model name | model id | regions | legacy date',
+  ])
+  strictAssert.deepEqual(labelledListShapes(entry('X', ['**Model ID:** x.y-v1:0', '**EOL date:** a', '**Legacy date:** b'])), ['labelled list: model id | eol date | legacy date'])
+  strictAssert.deepEqual(labelledListShapes('# None\n\n- plain\n  - nested\n'), [])
+})
+
+test('a Markdown body with only labelled lists has a shape, and one with neither tables nor labelled lists still fails', () => {
+  const markdown = '# Model lifecycle\n\n- **Example**\n  - **Model ID:** example.model-v1:0\n  - **EOL date:** September 1, 2026\n'
+  strictAssert.deepEqual(extractShapes(markdown), ['labelled list: model id | eol date'])
+  strictAssert.deepEqual(extractShapes(`${markdown}\n| Region | Note |\n| --- | --- |\n| a | b |\n`), ['labelled list: model id | eol date', 'region | note [2 cols]'])
+  strictAssert.throws(() => extractShapes('# Model lifecycle\n\n- **Example**\n- Model ID: example.model-v1:0\n'), /no tables found/)
+  strictAssert.deepEqual(extractShapes(`<html><body>${htmlTable(['Model'])}<ul><li><b>Model ID:</b> x</li></ul></body></html>`), ['model [2 cols]'])
+})
+
+test('a source can set request headers for its page fetch', async () => {
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push([url, init.headers])
+    return new Response('| Model | Date |\n| --- | --- |\n| m | d |\n', { status: 200 })
+  }
+  const sources = [
+    { name: 'plain', kind: 'distributor', url: 'https://plain.test/', headers: {} },
+    { name: 'markdown', kind: 'distributor', url: 'https://markdown.test/', headers: { accept: 'text/markdown' } },
+  ]
+  const { shapes, failures } = await collectShapes(sources, { fetchImpl })
+  strictAssert.deepEqual(failures, [])
+  strictAssert.deepEqual(shapes.markdown, { url: 'https://markdown.test/', tables: ['model | date [2 cols]'] })
+  strictAssert.deepEqual(seen, [['https://plain.test/', { 'accept-language': 'en' }], ['https://markdown.test/', { 'accept-language': 'en', accept: 'text/markdown' }]])
+  strictAssert.ok(shapeSources().every(source => source.headers && typeof source.headers === 'object'))
+})
+
 test('snapshot comparison reports added and removed shapes, new and removed sources, and moved URLs', () => {
   const before = snapshotDocument({ a: { url: 'https://a.test/', tables: ['x | y'] }, gone: { url: 'https://gone.test/', tables: ['z'] } })
   const after = snapshotDocument({ a: { url: 'https://a.test/moved', tables: ['x | y | notice date'] }, fresh: { url: 'https://fresh.test/', tables: ['q'] } })
@@ -148,9 +235,9 @@ const fixtureFiles = {
   'google-deprecations.md': `## Models\n${markdocTable(['Model', 'Release date', 'Shutdown date', 'Recommended replacement'], [['`gemini-a`', 'a', 'b', '']])}\n`,
   'mistral-deprecations.html': htmlTable(['Model', 'Version', 'API', 'Deprecation', 'Alternative']),
   'cohere-deprecations.html': `<h3>2026-09-01</h3>${htmlTable(cohereHeaders)}<h3>2026-10-01</h3>${htmlTable(cohereHeaders)}`,
-  'bedrock-lifecycle.html': htmlTable(['Model ID', 'Legacy date', 'EOL date']),
-  'vertex-model-versions.html': htmlTable(['Model ID', 'Release date', 'Retirement date']),
-  'azure-model-retirement-schedule.html': htmlTable(['Model', 'Version', 'Retirement date']),
+  'bedrock-lifecycle.md': '# Model lifecycle\n\n- **Example**\n  - **Model ID:** example.model-v1:0\n  - **Legacy date:** March 1, 2026\n  - **EOL date:** September 1, 2026\n',
+  'vertex-model-versions.md': '## Models\n\n| Model ID | Release date | Retirement date |\n|---|---|---|\n| `gemini-a` | a | b |\n',
+  'azure-model-retirement-schedule.md': '### Azure OpenAI\n\n| Model | Version | Retirement date |\n| --- | --- | --- |\n| gpt-a | 1 | 2027-01-01^1^ |\n',
 }
 const writeFixtures = (overrides = {}) => {
   fs.rmSync(fixtureDir, { recursive: true, force: true })
@@ -176,6 +263,19 @@ test('a snapshot written from the sources makes --check exit 0', () => {
   strictAssert.match(result.out, /All 8 source pages match/)
 })
 
+test('a source whose fixture switches from HTML to a pipe table with the same header still matches', () => {
+  writeFixtures({
+    'anthropic-deprecations.html': null,
+    'anthropic-deprecations.md': '---\ntitle: Model deprecations\n---\n\n## History\n\n| Retirement date | Deprecated model | Recommended replacement |\n|---|---|---|\n| 2026-01-01 | `m` | `n` |\n',
+  })
+  const result = run(['--check', '--fixtures', fixtureDir, '--snapshot', snapshotFile])
+  strictAssert.equal(result.code, 0, result.err)
+  writeFixtures({ 'anthropic-deprecations.html': null, 'anthropic-deprecations.md': '## History\n\n| Retirement date | Deprecated model |\n|---|---|\n| 2026-01-01 |\n' })
+  const misaligned = run(['--check', '--fixtures', fixtureDir, '--snapshot', snapshotFile])
+  strictAssert.equal(misaligned.code, 1)
+  strictAssert.match(misaligned.err, /source shape check failed for anthropic \(https:[^)]+\): line 5: table row has 1 cells; the header has 2/)
+})
+
 test('a new column makes --check exit 3 with a diff naming the source and both shapes', () => {
   writeFixtures({ 'cohere-deprecations.html': `<h3>2026-09-01</h3>${htmlTable(cohereHeaders)}<h3>2026-11-01</h3>${htmlTable([...cohereHeaders, 'Notice\u200b Date'])}` })
   const result = run(['--check', '--fixtures', fixtureDir, '--snapshot', snapshotFile])
@@ -194,7 +294,7 @@ test('a new column makes --check exit 3 with a diff naming the source and both s
 test('failing sources make --check exit 1 and every failing source is named', () => {
   writeFixtures({
     'mistral-deprecations.html': '<p>No tables here.</p>',
-    'vertex-model-versions.html': null,
+    'vertex-model-versions.md': null,
     'google-deprecations.md': '## Models\n{% table %}\n  * Model\n',
     'cohere-deprecations.html': htmlTable([...cohereHeaders, 'Notice Date']),
   })
@@ -225,11 +325,11 @@ test('the daily source-check workflow runs both refresh checks and the structure
   strictAssert.ok(workflow.includes('contents: read') && workflow.includes('issues: write') && !/contents: write|pull-requests: write/.test(workflow), 'read-only contents')
   strictAssert.ok(!/git (push|commit)|gh pr /.test(workflow) && workflow.includes('persist-credentials: false'), 'writes nothing to the repository')
   strictAssert.ok(workflow.includes('check_once_more provider node refresh/refresh.mjs --check\n') && workflow.includes('check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check\n'), 'both refresh checks')
-  strictAssert.ok(workflow.match(/sleep 60/g)?.length === 2 && workflow.match(/node refresh\/shapes\.mjs --check > shapes-diff\.md 2> shapes-err\.txt/g)?.length === 2, 'an unhealthy check is retried once')
-  strictAssert.ok(/^    timeout-minutes: 60$/m.test(workflow) && /^        timeout-minutes: 40$/m.test(workflow) && /^        timeout-minutes: 10$/m.test(workflow) && !workflow.includes('always()') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 2, 'a cancelled run reports nothing')
+  strictAssert.ok(workflow.match(/sleep 60/g)?.length === 3 && workflow.match(/node refresh\/shapes\.mjs --check > shapes-diff\.md 2> shapes-err\.txt/g)?.length === 2, 'an unhealthy check is retried once')
+  strictAssert.ok(/^    timeout-minutes: 60$/m.test(workflow) && workflow.match(/^        timeout-minutes: 20$/gm)?.length === 2 && /^        timeout-minutes: 10$/m.test(workflow) && workflow.match(/always\(\)/g)?.length === 1 && workflow.includes('      - name: Sign out of Azure\n        if: always()\n') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 4 && workflow.includes('        id: distributor-check\n        if: success() || failure()\n') && workflow.includes('        id: refresh\n        if: success() || failure()\n'), 'a cancelled run reports nothing; only the Azure sign-out always runs, and a timed-out provider check still lets the distributor check run and be summarised')
   strictAssert.ok(workflow.includes("case \"$1\" in 0|3) echo ok ;;") && workflow.includes("s/(HTTP [0-9]{3}).*/\\1/"), 'failure state ignores healthy exit-code flips and HTTP response bodies')
   strictAssert.ok(workflow.includes('if [ "${REFRESH_HEALTHY:-}" != true ]; then') && workflow.includes('the weekly feed refresh is not affected'), 'a structure-check-only failure does not claim the weekly refresh will fail')
-  strictAssert.ok(workflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && workflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]'), 'refresh exit 0 and 3 are healthy')
+  strictAssert.ok(workflow.includes('case "$providers" in 0|3) ;; *) healthy=false ;; esac') && workflow.includes('case "$distributors" in 0|3) ;; *) healthy=false ;; esac'), 'refresh exit 0 and 3 are healthy, and a check that recorded no exit code is not')
   strictAssert.ok(workflow.includes('node refresh/shapes.mjs --check >') && workflow.includes('case "$SHAPES" in 0|3)'), 'structure check, exit 3 is not a failure')
   for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'MISTRAL_API_KEY', 'COHERE_API_KEY']) strictAssert.ok(workflow.includes(`${key}: \${{ secrets.${key} }}`), key)
   strictAssert.ok(workflow.includes('failed_title="Source check failed"') && workflow.includes('shapes_title="Source page structure changed"'), 'both issue titles')
@@ -237,11 +337,146 @@ test('the daily source-check workflow runs both refresh checks and the structure
   strictAssert.ok(workflow.includes('node refresh/shapes.mjs --write') && workflow.includes('already reports this state'), 'issue tells how to update the snapshot and avoids repeat comments')
 })
 
+const workflowFile = name => fs.readFileSync(path.join(root, '.github', 'workflows', name), 'utf8')
+const workflowSteps = workflow => workflow.split(/\n(?= {6}- (?:name|uses):)/).slice(1).map(text => ({ name: text.match(/^ {6}- (?:name|uses): (.*)/)[1], text: `${text}\n` }))
+const azureHelper = workflow => {
+  const start = workflow.indexOf('          azure_api_env() {\n')
+  const end = workflow.indexOf('\n          }\n', start)
+  strictAssert.ok(start >= 0 && end > start, 'workflow defines azure_api_env')
+  return workflow.slice(start, end + 12).split('\n').map(line => line.slice(10)).join('\n')
+}
+
+for (const name of ['source-check.yml', 'feed-refresh.yml']) {
+  test(`${name} signs in to Azure on main only and gives the models API token only to the distributor refresh`, () => {
+    const workflow = workflowFile(name)
+    strictAssert.ok(/^ {4}permissions:\n(?: {6}\S.*\n)*? {6}id-token: write\n/m.test(workflow), 'OIDC token permission on the job')
+    strictAssert.equal(workflow.match(/id-token: write/g)?.length, 1, 'no workflow-level OIDC token permission')
+    strictAssert.ok(workflow.includes("    environment: ${{ github.ref == 'refs/heads/main' && 'model-apis' || '' }}\n"), 'the job runs in the model-apis environment on main only')
+    const login = workflow.match(/ {6}- name: Sign in to Azure for the models API\n((?: {8}.*\n)+)/)?.[1] ?? ''
+    for (const line of ["id: azure-login", "if: github.ref == 'refs/heads/main'", 'continue-on-error: true', 'uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0', 'client-id: ${{ secrets.AZURE_CLIENT_ID }}', 'tenant-id: ${{ secrets.AZURE_TENANT_ID }}', 'subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}']) {
+      strictAssert.ok(login.includes(`        ${line}\n`), line)
+    }
+    strictAssert.equal(workflow.match(/uses: azure\/login@/g)?.length, 1)
+    const distributorRuns = workflow.match(/node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry/g)?.length
+    const scoped = workflow.match(/\(\n +azure_api_env\n +bedrock_api_env\n +(?:check_once_more distributor )?node refresh\/refresh\.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry[^\n]*\n +\)\n/g)?.length
+    strictAssert.ok(distributorRuns > 0 && scoped === distributorRuns, 'every distributor refresh, and nothing else, runs in a subshell that exports the token')
+    strictAssert.equal(workflow.match(/^ {10}AZURE_LOGIN: \$\{\{ steps\.azure-login\.outcome \}\}\n {10}AZURE_SUBSCRIPTION: \$\{\{ secrets\.AZURE_SUBSCRIPTION_ID \}\}\n/gm)?.length, distributorRuns)
+    strictAssert.ok(!/AZURE_MANAGEMENT_TOKEN[^\n]*GITHUB_ENV|GITHUB_ENV[^\n]*AZURE_MANAGEMENT_TOKEN|AZURE_MANAGEMENT_TOKEN: \$\{\{/.test(workflow), 'the token never reaches GITHUB_ENV or a step env')
+    const helper = azureHelper(workflow)
+    strictAssert.ok(helper.indexOf('echo "::add-mask::$token"') < helper.indexOf('export AZURE_MANAGEMENT_TOKEN="$token"'), 'the token is masked before it is exported')
+    strictAssert.ok(helper.includes('az account get-access-token --resource https://management.azure.com --query accessToken -o tsv'))
+    strictAssert.ok(!/uses: [^\n@]+@(?![0-9a-f]{40}\b)/.test(workflow.match(/uses: azure\/login@[^\n]*/)[0]), 'azure/login is pinned to a commit')
+    const signOut = workflow.match(/ {6}- name: Sign out of Azure\n((?: {8}.*\n)+)/)?.[1] ?? ''
+    for (const line of ['if: always()', 'continue-on-error: true', 'az logout > /dev/null 2>&1 || true', 'rm -rf "${AZURE_CONFIG_DIR:-$HOME/.azure}" || true']) strictAssert.ok(signOut.includes(line), line)
+    const lastDistributor = workflow.lastIndexOf('node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry')
+    const signOutAt = workflow.indexOf('      - name: Sign out of Azure\n')
+    strictAssert.ok(lastDistributor < signOutAt && workflow.indexOf('      - name:', lastDistributor) === signOutAt, 'the sign-out is the step right after the last distributor refresh')
+    strictAssert.equal(workflow.includes('MODEL_EOL_CROSS_CHECKS: strict'), name === 'source-check.yml', 'only the daily check makes a broken cross-check fail the run')
+    if (name === 'source-check.yml') strictAssert.equal(workflow.match(/^ {10}MODEL_EOL_CROSS_CHECKS: strict\n/gm)?.length, 2, 'the strict policy is set on both refresh check steps')
+  })
+
+  test(`${name} ${name === 'source-check.yml' ? 'fails' : 'warns about'} the Azure source after a failed login and skips it with a notice off main`, () => {
+    const helper = azureHelper(workflowFile(name))
+    const bin = fs.mkdtempSync(path.join(tempRoot, 'az-'))
+    const az = path.join(bin, 'az')
+    const runHelper = (login, azBody, subscription = 'sub-from-secret') => {
+      fs.writeFileSync(az, `#!/bin/sh\n${azBody}\n`, { mode: 0o755 })
+      const script = `${helper}\nazure_api_env\necho "subscription=\${AZURE_SUBSCRIPTION_ID-unset} token=\${AZURE_MANAGEMENT_TOKEN-unset}"\n`
+      const env = { PATH: `${bin}:${process.env.PATH}`, AZURE_LOGIN: login, AZURE_SUBSCRIPTION: subscription, GITHUB_REF: 'refs/heads/topic' }
+      const result = spawnSync('bash', ['-c', script], { env, encoding: 'utf8' })
+      strictAssert.equal(result.status, 0, result.stderr)
+      return result.stdout
+    }
+    const ok = runHelper('success', 'echo fake-token')
+    strictAssert.ok(ok.indexOf('::add-mask::fake-token') >= 0 && ok.indexOf('::add-mask::fake-token') < ok.indexOf('token=fake-token'), ok)
+    strictAssert.match(ok, /subscription=sub-from-secret token=fake-token\n$/)
+    for (const [login, azBody, subscription] of [['failure', 'exit 1'], ['success', 'exit 1'], ['success', 'echo ""'], ['failure', 'exit 1', '']]) {
+      const out = runHelper(login, azBody, subscription)
+      if (name === 'source-check.yml') {
+        strictAssert.match(out, /::error::No Azure management token/, `${login} ${azBody}`)
+        strictAssert.match(out, /subscription=\S+ token=unset\n$/, 'the subscription alone makes the strict check fail as half-configured')
+      } else {
+        strictAssert.match(out, /::warning::No Azure management token .* runs without the Azure models API cross-check\.\n/, `${login} ${azBody}`)
+        strictAssert.match(out, /subscription=unset token=unset\n$/, 'the feed refresh exports nothing and skips the cross-check')
+      }
+    }
+    const skipped = runHelper('skipped', 'echo should-not-run')
+    strictAssert.match(skipped, /::notice::Azure login runs only on main; .* on refs\/heads\/topic\.\nsubscription=unset token=unset\n$/)
+  })
+
+  test(`${name} runs each distributor refresh in its own step, the only step that carries the AWS key or the Azure token`, () => {
+    const workflow = workflowFile(name)
+    const steps = workflowSteps(workflow)
+    const distributor = steps.filter(step => step.text.includes('node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry'))
+    const keyed = steps.filter(step => /secrets\.AWS_|BEDROCK_|AZURE_SUBSCRIPTION:|azure_api_env|bedrock_api_env|get-access-token/.test(step.text))
+    strictAssert.equal(distributor.length, name === 'source-check.yml' ? 1 : 2)
+    strictAssert.deepEqual(keyed.map(step => step.name), distributor.map(step => step.name), 'only the distributor steps see a credential for a distributor API')
+    for (const step of distributor) {
+      const env = step.text.match(/\n {8}env:\n((?: {10}\S.*\n)+)/)?.[1].trim().split('\n').map(line => line.trim().split(':')[0]).sort()
+      const expected = ['AZURE_LOGIN', 'AZURE_SUBSCRIPTION', 'BEDROCK_ACCESS_KEY_ID', 'BEDROCK_SECRET_ACCESS_KEY', ...(name === 'source-check.yml' ? ['MODEL_EOL_CROSS_CHECKS'] : [])].sort()
+      strictAssert.deepEqual(env, expected, step.name)
+      strictAssert.ok(step.text.includes('          BEDROCK_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}\n          BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}\n'), step.name)
+      strictAssert.equal(step.text.match(/node refresh\/refresh\.mjs/g)?.length, 1, `${step.name} runs no other refresh`)
+      strictAssert.ok(!/npm test|update-readme-freshness|gh |git /.test(step.text), `${step.name} runs nothing else`)
+    }
+    strictAssert.equal(workflow.match(/secrets\.AWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)/g)?.length, 2 * distributor.length, 'the AWS secrets reach no other step')
+    strictAssert.ok(!/AWS_[A-Z_]+: \$\{\{|GITHUB_ENV[^\n]*AWS_|AWS_[^\n]*GITHUB_ENV|AWS_SESSION_TOKEN|configure-aws-credentials|unset BEDROCK/.test(workflow), 'the key never reaches a step env under its AWS name or GITHUB_ENV')
+    for (const step of steps.filter(step => /node refresh\/refresh\.mjs(?! --distributor)|npm test/.test(step.text))) {
+      strictAssert.ok(!distributor.includes(step), `${step.name} is not a distributor step`)
+    }
+  })
+
+  test(`${name} ${name === 'source-check.yml' ? 'fails' : 'warns about'} the Bedrock source without a key on main and skips it with a notice off main`, () => {
+    const workflow = workflowFile(name)
+    const start = workflow.indexOf('          bedrock_api_env() {\n')
+    const end = workflow.indexOf('\n          }\n', start)
+    strictAssert.ok(start >= 0 && end > start, 'workflow defines bedrock_api_env')
+    const helper = workflow.slice(start, end + 12).split('\n').map(line => line.slice(10)).join('\n')
+    const show = `sh -c 'echo "id=\${AWS_ACCESS_KEY_ID-unset} secret=\${AWS_SECRET_ACCESS_KEY-unset}"'`
+    const runHelper = (ref, keyId, secret) => {
+      const env = { PATH: process.env.PATH, GITHUB_REF: ref, BEDROCK_ACCESS_KEY_ID: keyId, BEDROCK_SECRET_ACCESS_KEY: secret }
+      const result = spawnSync('bash', ['-c', `${helper}\nbedrock_api_env\n${show}\n`], { env, encoding: 'utf8' })
+      strictAssert.equal(result.status, 0, result.stderr)
+      return result.stdout
+    }
+    strictAssert.equal(runHelper('refs/heads/main', 'AKIAEXAMPLEKEY12345', 'example-secret'), 'id=AKIAEXAMPLEKEY12345 secret=example-secret\n')
+    strictAssert.equal(runHelper('refs/heads/main', 'AKIAEXAMPLEKEY12345', ''), 'id=AKIAEXAMPLEKEY12345 secret=\n', 'one secret alone is passed on, so the refresh reports it as half-configured')
+    const missing = runHelper('refs/heads/main', '', '')
+    if (name === 'source-check.yml') {
+      strictAssert.equal(missing, '::error::No AWS key in the model-apis environment; the Bedrock models API check fails.\nid=secret-AWS_ACCESS_KEY_ID-is-empty secret=unset\n')
+    } else {
+      strictAssert.match(missing, /^::warning::No AWS key in the model-apis environment; .* runs without the Bedrock models API cross-check\.\nid=unset secret=unset\n$/)
+    }
+    strictAssert.match(runHelper('refs/heads/topic', '', ''), /^::notice::The AWS key is available only on main; .* skips the Bedrock models API on refs\/heads\/topic\.\nid=unset secret=unset\n$/)
+  })
+}
+
+test('the step that reads the split check exit codes treats a missing code as a failure', () => {
+  const runStep = (workflow, stepName, env) => {
+    const step = workflowSteps(workflowFile(workflow)).find(candidate => candidate.name === stepName)
+    const script = step.text.split('        run: |\n')[1].split('\n').map(line => line.slice(10)).join('\n')
+    const dir = fs.mkdtempSync(path.join(tempRoot, 'step-'))
+    for (const file of ['provider-err.txt', 'distributor-err.txt']) fs.writeFileSync(path.join(dir, file), '')
+    const output = path.join(dir, 'output')
+    const result = spawnSync('bash', ['-e', '-c', script], { cwd: dir, env: { PATH: process.env.PATH, GITHUB_OUTPUT: output, ...env }, encoding: 'utf8' })
+    return { status: result.status, output: fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '' }
+  }
+  const decide = (providers, distributors) => runStep('feed-refresh.yml', 'Decide whether the feeds changed', { PROVIDERS: providers, DISTRIBUTORS: distributors })
+  strictAssert.match(decide('0', '3').output, /^changed=true\n/)
+  strictAssert.match(decide('0', '0').output, /^changed=false\n/)
+  for (const [providers, distributors] of [['', '0'], ['0', ''], ['1', '0'], ['0', '2']]) strictAssert.equal(decide(providers, distributors).status, 1, `${providers}/${distributors}`)
+  const summarise = (providers, distributors) => runStep('source-check.yml', 'Summarise the refresh checks', { PROVIDERS: providers, DISTRIBUTORS: distributors }).output
+  strictAssert.equal(summarise('3', '0'), 'providers=3\ndistributors=0\nhealthy=true\n')
+  strictAssert.equal(summarise('', '0'), 'providers=\ndistributors=0\nhealthy=false\n')
+  strictAssert.equal(summarise('0', '1'), 'providers=0\ndistributors=1\nhealthy=false\n')
+})
+
 test('the public contract does not react to the source check', () => {
   const publicWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'public-contract.yml'), 'utf8')
   strictAssert.ok(publicWorkflow.includes('workflows: [feed-refresh]') && !publicWorkflow.includes('source-check'))
 })
 
+await Promise.all(pending)
 fs.rmSync(tempRoot, { recursive: true, force: true })
 if (failures) {
   console.error(`\n${failures} failure(s)`)

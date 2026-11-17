@@ -9,7 +9,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import strictAssert from 'node:assert/strict'
 import {
+  BEDROCK_LIFECYCLE_MARKDOWN_URL,
   BEDROCK_LIFECYCLE_URL,
+  BEDROCK_MODEL_CARDS_MARKDOWN_URL,
   BEDROCK_MODEL_CARDS_URL,
   MAX_BEDROCK_MODEL_CARDS,
   MAX_DISTRIBUTOR_BODY_BYTES,
@@ -23,9 +25,10 @@ import {
   mergeVertexDistributions,
   normalizeBedrockId,
   normalizeVertexId,
-  parseBedrockLifecycleHtml,
-  parseBedrockModelCardHtml,
-  parseBedrockModelCardsIndexHtml,
+  bedrockMarkdownUrl,
+  parseBedrockLifecycleMarkdown,
+  parseBedrockModelCardMarkdown,
+  parseBedrockModelCardsIndexMarkdown,
   parseAzureModelRetirementScheduleHtml,
   parseVertexModelVersionsHtml,
 } from '../distributors.mjs'
@@ -39,6 +42,12 @@ import {
   loadProviderSources,
   mergeFeed,
   parseAnthropicDeprecations,
+  parseAnthropicDeprecationsHtml,
+  anthropicMarkdownToHtml,
+  anthropicModelsListUrl,
+  compareAnthropicLifecycle,
+  parseAnthropicModelsLifecyclePage,
+  providerSourceConflictSummary,
   parseAnthropicModels,
   dateFromText,
   parseGoogleDeprecations,
@@ -46,16 +55,19 @@ import {
   googleMarkdownToHtml,
   findFixture,
   parseGoogleModels,
-  parseMistralDeprecations,
+  parseMistralDeprecationsMarkdown,
+  cohereMarkdownToHtml,
   parseCohereDeprecations,
+  parseCohereDeprecationsMarkdown,
   parseCohereModelsResponse,
   parseModelsResponse,
   parseOpenAIDeprecations,
+  parseOpenAIDeprecationsMarkdown,
   parseOpenAIModels,
   stripComments,
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
-import { SOURCE_FETCH_DEADLINE_MS, fetchBoundedBody } from '../fetch.mjs'
+import { MAX_REDIRECTS, SOURCE_FETCH_DEADLINE_MS, credentialHeaderNames, fetchBoundedBody } from '../fetch.mjs'
 import { parseRefreshArgs, sourceFailureError, usage, validateGeneratedFeeds } from '../refresh.mjs'
 import { validateFeed } from '../../lib/validate-feed.mjs'
 import { lifecycleFor } from '../../lib/feeds.mjs'
@@ -198,17 +210,18 @@ for (const via of ['publisher', 'publisher-fallback']) {
 const unknownFlag = run(['--dyas', '90'])
 assert(unknownFlag.code === 2 && unknownFlag.err.includes('--dyas') && unknownFlag.err.includes('--help'), 'unknown refresh flags exit 2 with the bad flag and help hint')
 
-const openaiHtml = fs.readFileSync(path.join(fixtures, 'openai-deprecations.html'), 'utf8')
-const anthropicHtml = fs.readFileSync(path.join(fixtures, 'anthropic-deprecations.html'), 'utf8')
-const bedrockHtml = fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')
+const openaiHtml = fs.readFileSync(path.join(fixtures, 'openai-deprecations-headings.html'), 'utf8')
+const anthropicMarkdown = fs.readFileSync(path.join(fixtures, 'anthropic-deprecations.md'), 'utf8')
+const bedrockMarkdown = fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.md'), 'utf8')
 const googleMarkdown = fs.readFileSync(path.join(fixtures, 'google-deprecations.md'), 'utf8')
 const vertexHtml = fs.readFileSync(path.join(fixtures, 'vertex-model-versions.html'), 'utf8')
-const endpointLookalikeHtml = fs.readFileSync(path.join(fixtures, 'anthropic-endpoint-lookalike.html'), 'utf8')
-const statusExtraColumnHtml = '<table><tr><th>Recommended replacement</th><th>Current state</th><th>API model name</th><th>Tentative retirement date</th><th>Deprecated</th></tr><tr><td><code>claude-next</code></td><td>Active</td><td><code>claude-extra-column</code></td><td>Not sooner than September 1, 2027</td><td>N/A</td></tr></table>'
-const statusRenamedColumnHtml = '<table><tr><th>API model name</th><th>Lifecycle state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-renamed-column</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>'
+const endpointLookalikeMarkdown = fs.readFileSync(path.join(fixtures, 'anthropic-endpoint-lookalike.md'), 'utf8')
+const mdTable = (header, rows) => `\n${[header, header.map(() => '---'), ...rows].map(cells => `| ${cells.join(' | ')} |`).join('\n')}\n\n`
+const statusExtraColumnMarkdown = mdTable(['Recommended replacement', 'Current state', 'API model name', 'Tentative retirement date', 'Deprecated'], [['`claude-next`', 'Active', 'claude-extra-column', 'Not sooner than September 1, 2027', 'N/A']])
+const statusRenamedColumnMarkdown = mdTable(['API model name', 'Lifecycle state', 'Deprecated', 'Tentative retirement date'], [['claude-renamed-column', 'Active', 'N/A', 'Not sooner than September 1, 2027']])
 const openaiEntries = parseOpenAIDeprecations(openaiHtml)
-const anthropicEntries = parseAnthropicDeprecations(anthropicHtml)
-const bedrockEntries = parseBedrockLifecycleHtml(bedrockHtml)
+const anthropicEntries = parseAnthropicDeprecations(anthropicMarkdown)
+const bedrockEntries = parseBedrockLifecycleMarkdown(bedrockMarkdown)
 const bedrockById = new Map(bedrockEntries.map(entry => [entry.bedrockId, entry]))
 const googleEntries = parseGoogleDeprecations(googleMarkdown)
 const vertexEntries = parseVertexModelVersionsHtml(vertexHtml)
@@ -289,7 +302,7 @@ const anthropicPageDates = mergeFeed({ ...anthropicFeed, models: [] }, { depreca
 assert(anthropicPageDates.announced === '2025-01-01' && anthropicPageDates.shutdown === '2026-01-01', 'Anthropic model-page lifecycle rows cannot override deprecation dates')
 const missingAnthropicPageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-missing-anthropic-page-'))
 try {
-  for (const name of ['anthropic-models.json', 'anthropic-deprecations.html', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(missingAnthropicPageDir, name))
+  for (const name of ['anthropic-models.json', 'anthropic-deprecations.md', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(missingAnthropicPageDir, name))
   await strictAssert.rejects(loadProviderSources(PROVIDERS.anthropic, { fixtures: missingAnthropicPageDir, notice: () => {} }), error => error.message.includes(anthropicModelUrls[0]) && error.message.includes('missing or unreadable fixture'))
   const missingPageOut = path.join(missingAnthropicPageDir, 'out')
   const missingPageRun = run(['--provider', 'anthropic', '--fixtures', missingAnthropicPageDir, '--out', missingPageOut])
@@ -298,7 +311,8 @@ try {
   fs.rmSync(missingAnthropicPageDir, { recursive: true, force: true })
 }
 
-const cohereHtml = fs.readFileSync(path.join(fixtures, 'cohere-deprecations.html'), 'utf8')
+const cohereHtml = fs.readFileSync(path.join(fixtures, 'cohere-deprecations-page.html'), 'utf8')
+const cohereMarkdown = fs.readFileSync(path.join(fixtures, 'cohere-deprecations.md'), 'utf8')
 const cohereModels = fs.readFileSync(path.join(fixtures, 'cohere-models.json'), 'utf8')
 const cohereParsed = parseCohereDeprecations(cohereHtml)
 const cohereByDate = date => cohereParsed.filter(record => record.announced === date)
@@ -360,6 +374,78 @@ assert(JSON.stringify(parseCohereDeprecations(coherePlainModels)) === JSON.strin
 const cohereDuplicateRow = '<tr><td>2025-04-30</td><td><code>rerank-english-v2.0</code></td><td>$1.00 / 1K searches</td><td><code>rerank-v3.5</code></td></tr>'
 assert(parseCohereDeprecations(cohereHtml.replace(cohereDuplicateRow, cohereDuplicateRow.repeat(2))).length === 12, 'Cohere collapses identical duplicate rows')
 assert(cohereRefusal(cohereHtml.replace(cohereDuplicateRow, cohereDuplicateRow + cohereDuplicateRow.replace('2025-04-30', '2025-05-01'))).includes('conflicting rows for rerank-english-v2.0'), 'Cohere refuses conflicting duplicate lifecycle rows')
+const cohereMdParsed = parseCohereDeprecationsMarkdown(cohereMarkdown)
+const cohereMdRefusal = (markdown, source) => {
+  try {
+    parseCohereDeprecationsMarkdown(markdown, source)
+    return ''
+  } catch (error) {
+    return error.message
+  }
+}
+const cohereMdSections = cohereMarkdown.split(/^(?=#{1,3} )/m)
+const cohereMdSection = date => cohereMdSections.find(section => section.startsWith(`### ${date}:`))
+const cohereMdPage = section => `## Deprecation History\n\n${section}\n## Other content\n`
+assert(JSON.stringify(cohereMdParsed) === JSON.stringify(cohereParsed), 'Cohere Markdown yields exactly the records of the recorded HTML page')
+assert(cohereMdParsed.every(record => record.source === PROVIDERS.cohere.deprecationsUrl), 'Cohere Markdown records cite the human page')
+for (const date of ['2025-03-08', '2025-01-31']) {
+  assert(cohereMdSection(date) && parseCohereDeprecationsMarkdown(cohereMdPage(cohereMdSection(date))).length === 0, `Cohere Markdown skips the prose-only section without error: ${date}`)
+}
+assert(parseCohereDeprecationsMarkdown(`${cohereMarkdown}\n\n### 2099-01-01: Outside history\n\n* \`ignored-model\`\n`).length === 12, 'Cohere Markdown scopes parsing to Deprecation History')
+assert(cohereMdRefusal('').includes('page is empty') && cohereMdRefusal(cohereMarkdown, 'not-a-url').includes('source is not a URL') && cohereMdRefusal('### 2026-01-01: Unknown\n\n* `m`\n').includes('no Deprecation History'), 'Cohere Markdown refuses missing source structure and invalid source URLs')
+for (const date of ['2026-02-30', '2026-4-04', 'April 4, 2026']) {
+  const reason = cohereMdRefusal(cohereMarkdown.replace('### 2026-04-04: Embed', `### ${date}: Embed`))
+  assert(reason.includes(`${date}: Embed`) && /date|YYYY-MM-DD/.test(reason), `Cohere Markdown requires a strict real ISO heading date: ${date}`)
+}
+for (const date of ['April 31st, 2026', 'April 4th, 2026 or May 1st, 2026', 'March 1st, 2026']) {
+  const reason = cohereMdRefusal(cohereMarkdown.replace('Effective April 4th, 2026,', `Effective ${date},`))
+  assert(reason.includes('2026-04-04: Embed') && /date|before announcement/.test(reason), `Cohere Markdown refuses invalid or ambiguous retirement dates: ${date}`)
+}
+const cohereMdUnknown = cohereMarkdown.replace('the following models will be retired:', 'these models have changed status:')
+assert(cohereMdRefusal(cohereMdUnknown).includes('2026-04-04: Embed v2.0, Aya Expanse 8B') && cohereMdRefusal(cohereMdUnknown).includes('unrecognised section shape'), 'Cohere Markdown refuses a mutated unknown shape and names its heading')
+assert(cohereMdRefusal(cohereMarkdown.replace('Deprecated Models:', 'Affected Models:')).includes('2025-09-15: Various older command'), 'Cohere Markdown refuses an unknown model-list label instead of dropping records')
+assert(cohereMdRefusal(cohereMarkdown.replace('the following models will be retired:\n', 'the following models will be retired:\n\nUnexpected paragraph\n')).includes('immediately following'), 'Cohere Markdown refuses a displaced retirement list')
+assert(cohereMdRefusal(cohereMarkdown.replace('* `embed-english-light-v2.0`', '  * `embed-english-light-v2.0`')).includes('flat model list'), 'Cohere Markdown refuses a nested retirement list')
+assert(cohereMdRefusal(cohereMarkdown.replace('* `embed-english-v2.0`', '* `embed-english-v2.0` `extra-model`')).includes('one exact model id'), 'Cohere Markdown refuses ambiguous retirement list items')
+for (const id of ['bad/id', 'bad id']) {
+  const reason = cohereMdRefusal(cohereMarkdown.replace('`embed-english-v2.0`', `\`${id}\``))
+  assert(reason.includes('2026-04-04: Embed') && reason.includes(id) && /endpoint-or-product-row|invalid-model-id/.test(reason), `Cohere Markdown refuses invalid model ids within model lists: ${id}`)
+}
+assert(cohereMdRefusal(cohereMarkdown.replace('`command-r7b-12-2024`', '`bad/id`')).includes('endpoint-or-product-row'), 'Cohere Markdown validates task alternative ids')
+assert(cohereMdRefusal(cohereMarkdown.replace('Chat tasks alternatives:', 'Chat alternatives:')).includes('2026-04-04: Embed'), 'Cohere Markdown refuses renamed task groups instead of silently dropping their alternatives')
+assert(cohereMdRefusal(cohereMarkdown.replace('  * `command-r7b-12-2024`', ' * `command-r7b-12-2024`')).includes('ambiguous list item indentation'), 'Cohere Markdown refuses a list item indented between two list levels')
+const cohereMdPlainModels = cohereMarkdown.replace('* `command-light`', '* command-light').replace('* `command`\n', '* command\n').replace('* `summarize`', '* summarize')
+assert(JSON.stringify(parseCohereDeprecationsMarkdown(cohereMdPlainModels)) === JSON.stringify(cohereParsed), 'Cohere Markdown accepts plain exact ids under Deprecated Models')
+const cohereMdTableRow = cohereMarkdown.split('\n').find(line => line.includes('`rerank-english-v2.0`'))
+assert(parseCohereDeprecationsMarkdown(cohereMarkdown.replace(cohereMdTableRow, `${cohereMdTableRow}\n${cohereMdTableRow}`)).length === 12, 'Cohere Markdown collapses identical duplicate table rows')
+assert(cohereMdRefusal(cohereMarkdown.replace(cohereMdTableRow, `${cohereMdTableRow}\n${cohereMdTableRow.replace('2025-04-30', '2025-05-01')}`)).includes('conflicting rows for rerank-english-v2.0'), 'Cohere Markdown refuses conflicting duplicate table rows')
+assert(cohereMdRefusal(cohereMarkdown.replace(cohereMdTableRow, `${cohereMdTableRow} extra |`)).includes('table row has 5 cells; the header has 4'), 'Cohere Markdown refuses a misaligned table row with its line number')
+assert(cohereMdRefusal(cohereMarkdown.replace('| Shutdown Date |', '| Service Shutdown Date |')).includes('header: Service Shutdown Date'), 'Cohere Markdown refuses an unknown table header by its exact label')
+for (const [label, markdown, pattern] of [
+  ['an HTML body', cohereHtml, /^cohere deprecations page is HTML, not Markdown$/],
+  ['an HTML table', `${cohereMarkdown}\n<table><tr><td>x</td></tr></table>\n`, /line \d+: HTML table in the Markdown source$/],
+  ['a raw HTML block', cohereMarkdown.replace('Deprecated Models:\n', 'Deprecated Models:\n\n<div>\n'), /line \d+: raw HTML block/],
+  ['a setext heading', cohereMarkdown.replace('### 2024-12-02: Rerank v2.0\n', '2024-12-02: Rerank v2.0\n---\n'), /line \d+: setext heading/],
+  ['an indented code block', cohereMarkdown.replace('Deprecated Models:\n', 'Deprecated Models:\n\n    * `hidden-model`\n'), /line \d+: indented code block/],
+  ['tab indentation', cohereMarkdown.replace('  * `embed-v4.0`', '\t* `embed-v4.0`'), /line \d+: tab indentation/],
+  ['a heading inside a list item', cohereMarkdown.replace('  * `embed-v4.0`', '  * `embed-v4.0`\n    ### 2026-05-01: Hidden'), /line \d+: unsupported block inside a list item/],
+  ['a table inside a list item', cohereMarkdown.replace('* `command`\n', `* \`command\`\n  ${cohereMdTableRow.replace(/[^|]+/g, ' x ')}\n  | --- | --- | --- | --- |\n`), /line \d+: table inside a list item/],
+]) {
+  assert(pattern.test(cohereMdRefusal(markdown)), `Cohere Markdown refuses ${label}: ${cohereMdRefusal(markdown)}`)
+}
+assert(/^<p>Effective April 4th, 2026, the following models will be retired:<\/p>\n<ul><li>\n<code>embed-english-v2\.0<\/code>/m.test(cohereMarkdownToHtml(cohereMarkdown)), 'Cohere Markdown renders a paragraph followed directly by its flat list')
+assert(cohereMarkdownToHtml(cohereMarkdown).includes('<li>\nEmbedding tasks alternatives:\n<ul><li>\n<code>embed-english-v3.0</code>'), 'Cohere Markdown nests task alternative lists inside their group item')
+assert(findFixture(fixtures, 'cohere', 'deprecations').endsWith('cohere-deprecations.md'), 'the Cohere deprecations fixture is the Markdown page')
+{
+  const requested = []
+  const sources = await loadProviderSources(PROVIDERS.cohere, { env: {}, notice: () => {}, fetchImpl: async url => { requested.push(url); return new Response(cohereMarkdown) } })
+  assert(
+    PROVIDERS.cohere.deprecationsFetchUrl === `${PROVIDERS.cohere.deprecationsUrl}.md`
+      && JSON.stringify(requested) === JSON.stringify([PROVIDERS.cohere.deprecationsFetchUrl])
+      && JSON.stringify(sources.deprecations) === JSON.stringify(cohereParsed),
+    'Cohere deprecations are fetched from the Markdown copy and cite the human page',
+  )
+}
 assert(parseRefreshArgs(['--provider', 'cohere']).providers.join() === 'cohere' && parseRefreshArgs([]).providers.includes('cohere') && usage().includes('mistral|cohere|all'), 'refresh selects Cohere explicitly and through all, and documents its usage')
 const cohereNotices = []
 const cohereSources = await loadProviderSources(PROVIDERS.cohere, { fixtures, notice: message => cohereNotices.push(message) })
@@ -382,70 +468,107 @@ for (const body of ['{', {}, { data: [] }, { models: [null] }, { models: [{ name
   assert(reason.includes('cohere models response'), `Cohere refuses malformed endpoint data: ${JSON.stringify(body)}`)
 }
 
-const mistralHtml = fs.readFileSync(path.join(fixtures, 'mistral-deprecations.html'), 'utf8')
+const mistralMarkdown = fs.readFileSync(path.join(fixtures, 'mistral-deprecations.md'), 'utf8')
 const mistralModels = fs.readFileSync(path.join(fixtures, 'mistral-models.json'), 'utf8')
-const mistralParsed = parseMistralDeprecations(mistralHtml)
-const mistralTables = [...mistralHtml.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
-const mistralRows = [...mistralTables[1][1].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi)].map(match => match[0])
-const mistralMediumRow = mistralRows.find(row => row.includes('mistral-medium-2508'))
+const mistralNow = new Date('2026-11-17T12:00:00Z')
+const mistralParse = (markdown, source, now = mistralNow) => parseMistralDeprecationsMarkdown(markdown, source, { now })
+const mistralParsed = mistralParse(mistralMarkdown)
+const mistralLines = mistralMarkdown.split('\n')
+const mistralLifecycleHeader = mistralLines.find(line => line.startsWith('| Model | API name | Status | Context | Summary | Deprecation |'))
+const mistralOverviewHeader = mistralLines.find(line => line === '| Model | API name | Status | Context | Summary |')
+const mistralRows = mistralLines.slice(mistralLines.indexOf(mistralLifecycleHeader) + 2).filter(line => line.startsWith('| ['))
+const mistralMediumRow = mistralRows.find(row => row.includes('| `mistral-medium-2508` |'))
 const mistralMedium = mistralParsed.records.find(record => record.id === 'mistral-medium-2508')
 const mistralExpectedSkipped = [
-  { model: 'Mathstral 7B', version: '0.1' },
+  { model: 'Mathstral 7B', version: '' },
   { model: 'Mistral Next', version: '' },
-  { model: 'Mistral 7B', version: '0.1' },
+  { model: 'Mistral 7B', version: '' },
 ]
-const mistralMutatedRow = (cellIndex, value) => {
-  let index = 0
-  return mistralMediumRow.replace(/(<td\b[^>]*>)[\s\S]*?(<\/td>)/gi, (cell, open, close) => index++ === cellIndex ? `${open}${value}${close}` : cell)
-}
-const mistralRefusal = (html, source) => {
+const mistralMutatedRow = (cellIndex, value, row = mistralMediumRow) => row.split('|').map((cell, index) => index === cellIndex + 1 ? ` ${value} ` : cell).join('|')
+const mistralWithRow = (cellIndex, value) => mistralMarkdown.replace(mistralMediumRow, mistralMutatedRow(cellIndex, value))
+const mistralRefusal = (markdown, source, now) => {
   try {
-    parseMistralDeprecations(html, source)
+    mistralParse(markdown, source, now)
     return ''
   } catch (error) {
     return error.message
   }
 }
-assert(mistralTables.length === 2 && mistralRows.length === 45 && mistralParsed.records.length === 40, 'Mistral parses 45 source rows into 40 unique API records')
-assert(JSON.stringify(mistralParsed.skipped) === JSON.stringify(mistralExpectedSkipped), 'Mistral reports exactly the three rows without API ids, including model names and versions')
-assert(mistralMedium?.announced === '2026-05-22' && mistralMedium?.shutdown === '2026-08-31' && mistralMedium?.replacement_note === 'Mistral lists Mistral Medium 3.5 as the alternative', 'Mistral Medium dates and alternative come from their exact cells')
-assert(mistralParsed.records.some(record => record.id === 'labs-leanstral-2603'), 'Mistral pairs the separate header table without losing the first body row')
-assert(mistralParsed.records.every(record => record.source === PROVIDERS.mistral.deprecationsUrl && !Object.hasOwn(record, 'date_precision') && !Object.hasOwn(record, 'replacement') && !Object.hasOwn(record, 'replacement_options')), 'Mistral emits exact dates and product alternatives only as notes')
-assert(mistralRefusal(mistralTables[0][0]).includes('dangling header'), 'Mistral refuses a header-only table without a following body table')
-assert(mistralRefusal(mistralTables[1][0]).includes('no recognised model tables'), 'Mistral refuses data tables without recognised headers')
-const mistralCombinedTable = mistralTables[0][0].replace('</table>', `${mistralTables[1][1]}</table>`)
-assert(JSON.stringify(parseMistralDeprecations(mistralCombinedTable)) === JSON.stringify(mistralParsed), 'Mistral also recognises headers and data within one table')
-assert(mistralRefusal('').includes('page is empty') && mistralRefusal(mistralHtml, 'not-a-url').includes('source is not a URL'), 'Mistral validates the page and source URL')
-for (const dates of [
-  '5/22/2026', '', '-', '5/22/2026 8/31/2026 extra',
-  '5/22/2026 8/31/2026 9/1/2026', '2026-05-22 2026-08-31',
-  '05/022/2026 08/31/2026', '5/22/26 8/31/26',
-  '0/22/2026 8/31/2026', '13/22/2026 8/31/2026',
-  '5/0/2026 8/31/2026', '2/29/2026 8/31/2026',
-  '5/22/2026 4/31/2026', '8/31/2026 5/22/2026',
+assert(mistralRows.length === 16 && mistralParsed.records.length === 11, 'Mistral Markdown parses 16 lifecycle rows into 11 unique API records')
+assert(JSON.stringify(mistralParsed.skipped) === JSON.stringify(mistralExpectedSkipped), 'Mistral Markdown reports exactly the three rows without API ids by model name')
+assert(mistralMedium?.announced === '2026-05-22' && mistralMedium?.shutdown === '2026-08-31' && mistralMedium?.replacement_note === 'Mistral lists Mistral Medium 3.5 as the alternative', 'Mistral Markdown takes dates and the replacement link text from their exact cells')
+const mistralWritten = mistralParsed.records.find(record => record.id === 'magistral-small-2509')
+assert(mistralWritten?.announced === '2026-04-30' && mistralWritten?.shutdown === '2026-07-31', 'Mistral Markdown reads written dates such as April 30, 2026')
+assert(!Object.hasOwn(mistralParsed.records.find(record => record.id === 'labs-leanstral-1-5') ?? { replacement_note: 1 }, 'replacement_note'), 'Mistral Markdown adds no note for an empty Replacement cell')
+assert(mistralParsed.records.every(record => record.source === PROVIDERS.mistral.deprecationsUrl && !Object.hasOwn(record, 'date_precision') && !Object.hasOwn(record, 'replacement') && !Object.hasOwn(record, 'replacement_options')), 'Mistral emits exact dates and product alternatives only as notes, citing the human page')
+assert(!mistralParsed.records.some(record => ['mistral-large-4', 'mistral-ocr-4-1'].includes(record.id)), 'Mistral overview rows never become lifecycle records')
+assert(mistralRefusal('').includes('page is empty') && mistralRefusal(mistralMarkdown, 'not-a-url').includes('source is not a URL'), 'Mistral validates the page and source URL')
+assert(mistralRefusal(mistralMarkdown, undefined, new Date('invalid')).includes('refresh clock is not a valid date'), 'Mistral refuses an invalid refresh clock')
+assert(mistralRefusal(`<!doctype html><html><body>${mistralMarkdown}</body></html>`) === 'mistral deprecations page is HTML, not Markdown', 'Mistral refuses an HTML body served in place of the Markdown copy')
+assert(mistralRefusal(`${mistralMarkdown}\n\n<table><tr><th>Model</th></tr></table>\n`).includes('HTML table'), 'Mistral refuses an HTML table inside the Markdown')
+const mistralOverviewOnly = mistralLines.slice(0, mistralLines.indexOf('## Deprecated and retired models')).join('\n')
+assert(mistralRefusal(mistralOverviewOnly).includes('no recognised model tables with data rows'), 'Mistral refuses a page with no lifecycle table')
+assert(mistralRefusal(`${mistralOverviewOnly}\n${mistralLifecycleHeader}\n${'| --- '.repeat(8)}|\n`).includes('no recognised model tables with data rows'), 'Mistral refuses a lifecycle table without rows')
+assert(mistralRefusal(mistralMarkdown.replace(/\n(\| Model \| API name \| Status \| Context \| Summary \| Deprecation)/, '\n```\n$1').replace(/\n(\| \[Mistral 7B\]\(\/models\/mistral-7b-0-1\)[^\n]*)/, '\n$1\n```')).includes('no recognised model tables'), 'Mistral ignores a lifecycle table inside fenced code')
+for (const header of [
+  mistralLifecycleHeader.replace('| Replacement |', '| Alternative |'),
+  mistralLifecycleHeader.replace('| Deprecation | Retirement |', '| Retirement | Deprecation |'),
+  mistralLifecycleHeader.replace('| API name |', '| API |'),
+  '| Model | Version | API | Deprecation Retirement | Alternative | Notes | Extra | More |',
 ]) {
-  const reason = mistralRefusal(mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, dates)))
-  assert(reason.includes('mistral-medium-2508') && /date|announcement/.test(reason), `Mistral refuses invalid date content and names the row: ${dates || '(empty)'}`)
+  assert(mistralRefusal(mistralMarkdown.replace(mistralLifecycleHeader, header)).includes('unrecognised or ambiguous header'), `Mistral refuses an unknown lifecycle header: ${header}`)
 }
-const mistralLeapHtml = mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, '02/29/2024 02/29/2024'))
-assert(parseMistralDeprecations(mistralLeapHtml).records.find(record => record.id === 'mistral-medium-2508')?.shutdown === '2024-02-29', 'Mistral accepts real leap days, padded dates, and same-day retirement')
-const mistralInvalidId = mistralRefusal(mistralHtml.replace(mistralMediumRow, mistralMutatedRow(2, 'invalid/api id')))
+assert(mistralRefusal(mistralMarkdown.replace(mistralLifecycleHeader, mistralLifecycleHeader.replace('| Replacement |', '| Replacement | Notes |'))).includes('the header has 9'), 'Mistral refuses an added lifecycle column whose rows do not match it')
+assert(mistralRefusal(mistralMarkdown.replace(mistralOverviewHeader, '| Model | API name | Status | Context | Retirement |')).includes('unrecognised or ambiguous header'), 'Mistral refuses an overview table that gains a lifecycle label')
+assert(mistralRefusal(mistralMarkdown.replace(mistralMediumRow, mistralMediumRow.replace('| Deprecated |', '|'))).includes('the header has 8'), 'Mistral refuses a row with a missing cell instead of shifting its dates')
+for (const status of ['Legacy', 'Active', 'GA', '']) {
+  const reason = mistralRefusal(mistralWithRow(2, status))
+  assert(reason.includes('mistral-medium-2508') && reason.includes('unrecognised status'), `Mistral refuses lifecycle status ${status || '(empty)'} and names the row`)
+}
+assert(mistralParse(mistralWithRow(2, 'Retired')).records.find(record => record.id === 'mistral-medium-2508')?.shutdown === '2026-08-31', 'Mistral accepts a Retired row whose retirement date has passed')
+assert(mistralRefusal(mistralWithRow(2, 'Retired'), undefined, new Date('2026-08-30T23:00:00Z')).includes('is Retired but its retirement date 2026-08-31 is after 2026-08-30'), 'Mistral refuses a Retired row whose retirement date is still ahead')
+const mistralOverviewRow = mistralLines.find(line => line.includes('| `mistral-large-4` |'))
+for (const status of ['Deprecated', 'Retired']) {
+  assert(mistralRefusal(mistralMarkdown.replace(mistralOverviewRow, mistralOverviewRow.replace('| GA |', `| ${status} |`))).includes(`overview lists mistral-large-4 as ${status}`), `Mistral refuses an overview row marked ${status}, which has no dates`)
+}
+for (const [cell, value] of [
+  [5, ''], [6, ''], [5, '-'], [5, '5/22/2026'], [5, '2026-5-22'], [5, '2026-02-30'], [6, '2026-08-31 2026-09-01'],
+  [5, 'May 22, 2026 (tentative)'], [6, 'Smarch 31, 2026'], [6, 'September 31, 2026'], [5, '22 May 2026'], [6, '2026-05-21'],
+]) {
+  const reason = mistralRefusal(mistralWithRow(cell, value))
+  assert(reason.includes('mistral-medium-2508') && /date|announcement/.test(reason), `Mistral refuses ${cell === 5 ? 'deprecation' : 'retirement'} cell ${value || '(empty)'} and names the row`)
+}
+const mistralLeap = mistralMarkdown.replace(mistralMediumRow, mistralMutatedRow(6, 'February 29, 2024', mistralMutatedRow(5, '2024-02-29')))
+assert(mistralParse(mistralLeap).records.find(record => record.id === 'mistral-medium-2508')?.shutdown === '2024-02-29', 'Mistral accepts real leap days, mixed date styles, and same-day retirement')
+const mistralInvalidId = mistralRefusal(mistralWithRow(1, '`invalid/api id`'))
 assert(mistralInvalidId.includes('invalid-model-id') && mistralInvalidId.includes('invalid/api id'), 'Mistral refuses an invalid API id and names the row')
 for (const id of ['voxtral-mini-2507', 'open-mistral-7b']) {
-  assert(mistralRows.filter(row => row.includes(`>${id}<`)).length === 2 && mistralParsed.records.filter(record => record.id === id).length === 1, `Mistral collapses identical source rows for ${id}`)
+  assert(mistralRows.filter(row => row.includes(`| \`${id}\` |`)).length === 2 && mistralParsed.records.filter(record => record.id === id).length === 1, `Mistral collapses identical source rows for ${id}`)
 }
-for (const [cell, value] of [[3, '5/21/2026 8/31/2026'], [3, '5/22/2026 9/1/2026'], [4, 'Another alternative']]) {
-  const duplicateHtml = mistralHtml.replace(mistralMediumRow, `${mistralMediumRow}${mistralMutatedRow(cell, value)}`)
-  assert(mistralRefusal(duplicateHtml).includes('conflicting rows for mistral-medium-2508'), `Mistral refuses duplicate ids with conflicting dates or alternatives: ${value}`)
+for (const [cell, value] of [[5, '2026-05-21'], [6, '2026-09-01'], [7, '[Another alternative](/models/another)']]) {
+  const duplicate = mistralMarkdown.replace(mistralMediumRow, `${mistralMediumRow}\n${mistralMutatedRow(cell, value)}`)
+  assert(mistralRefusal(duplicate).includes('conflicting rows for mistral-medium-2508'), `Mistral refuses duplicate ids with conflicting dates or alternatives: ${value}`)
 }
 assert(parseRefreshArgs(['--provider', 'mistral']).providers.join() === 'mistral' && parseRefreshArgs([]).providers.includes('mistral') && usage().includes('google|mistral|cohere|all'), 'refresh selects Mistral explicitly and through all, and documents it in usage')
+assert(findFixture(fixtures, 'mistral', 'deprecations').endsWith('mistral-deprecations.md'), 'the Mistral deprecations fixture is the Markdown page')
 const mistralNotices = []
 const mistralSources = await loadProviderSources(PROVIDERS.mistral, { fixtures, notice: message => mistralNotices.push(message) })
-assert(mistralNotices.filter(message => message.startsWith('notice: mistral skipped ')).length === 3 && mistralExpectedSkipped.every(row => mistralNotices.some(message => message.includes(row.model) && message.includes(row.version || 'not listed'))), 'Mistral emits one named notice for each skipped row')
+assert(mistralNotices.filter(message => message.startsWith('notice: mistral skipped ')).length === 3 && mistralExpectedSkipped.every(row => mistralNotices.some(message => message.includes(row.model) && message.includes('version not listed'))), 'Mistral emits one named notice for each skipped row')
+{
+  const requested = []
+  const sources = await loadProviderSources(PROVIDERS.mistral, { env: {}, notice: () => {}, now: mistralNow, fetchImpl: async url => { requested.push(url); return new Response(mistralMarkdown) } })
+  assert(
+    PROVIDERS.mistral.deprecationsFetchUrl === `${PROVIDERS.mistral.deprecationsUrl}.md`
+      && JSON.stringify(requested) === JSON.stringify([PROVIDERS.mistral.deprecationsFetchUrl])
+      && JSON.stringify(sources.deprecations) === JSON.stringify(mistralParsed.records)
+      && sources.deprecations.every(record => record.source === PROVIDERS.mistral.deprecationsUrl),
+    'Mistral deprecations are fetched from the Markdown copy and cite the human page',
+  )
+}
 assert(parseModelsResponse(mistralModels, 'mistral').length === 3 && !parseModelsResponse(mistralModels, 'mistral').includes('mistral-medium-latest'), 'the generic models parser returns canonical ids without flattening endpoint aliases')
 const mistralSeed = { spec: 'model-eol/0.1', publisher: 'mistral', generated: '2026-09-08T00:00:00Z', source: PROVIDERS.mistral.deprecationsUrl, models: [] }
 const mistralMerged = mergeFeed(mistralSeed, { ...mistralSources, provider: PROVIDERS.mistral })
-assert(mistralSeed.models.length === 0 && mistralMerged.feed.models.length === 40 && mistralMerged.unconfirmedIds.length === 0 && validateFeed(mistralMerged.feed).length === 0, 'Mistral generates a valid feed from an empty committed seed')
+assert(mistralSeed.models.length === 0 && mistralMerged.feed.models.length === 11 && mistralMerged.unconfirmedIds.length === 0 && validateFeed(mistralMerged.feed).length === 0, 'Mistral generates a valid feed from an empty committed seed')
 assert(mistralMerged.feed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest') && !mistralMerged.feed.models.some(model => model.id === 'mistral-medium-latest'), 'Mistral attaches endpoint aliases to the dated canonical record')
 const mistralAliasSeed = { ...mistralSeed, models: [{ id: 'mistral-medium-latest' }, { id: 'mistral-medium-2508' }] }
 let mistralCanonicalAliasReason = ''
@@ -588,78 +711,53 @@ reviewTest('Review F10: A shutdown section without replacement guidance clears e
   strictAssert.equal(model.shutdown, '2026-10-01')
   strictAssert.ok(!['replacement', 'replacement_options', 'replacement_note'].some(field => Object.hasOwn(model, field)))
 })
-const mistralSampleTable = '<table><tr><td>Sample</td><td>1</td><td>sample-model</td><td>5/22/2026 8/31/2026</td><td>Sample 2</td></tr></table>'
-const mistralConfirmingTable = '<table><tr><td>Sample</td><td>1</td><td>sample-model</td><td>5/22/2026 8/31/2026</td><td>Sample 2</td></tr><tr><td>Mistral Medium 3.1</td><td>25.08</td><td>mistral-medium-2508</td><td>5/22/2026 8/31/2026</td><td>Mistral Medium 3.5</td></tr></table>'
-for (let level = 1; level <= 6; level++) {
-  reviewTest(`Review F8: Mistral refuses header pairing across h${level}`, () => {
-    const page = `${mistralTables[0][0]}<h${level}>Unrelated</h${level}>${mistralSampleTable}${mistralTables[1][0]}`
-    strictAssert.match(mistralRefusal(page), /dangling header/i)
-  })
-}
-reviewTest('Review F8: Mistral refuses a dangling trailing header after valid records', () => {
-  strictAssert.match(mistralRefusal(mistralHtml + mistralTables[0][0]), /dangling header/i)
+const mistralTable = (rows, header = mistralLifecycleHeader) => `${header}\n${'| --- '.repeat(header.split('|').length - 2)}|\n${rows.join('\n')}\n`
+const mistralSampleRow = '| [Sample](/models/sample) | `sample-model` | Deprecated | 32k | A sample model. | 2026-05-22 | 2026-08-31 | [Sample 2](/models/sample-2) |'
+const mistralConfirmingRow = '| [Mistral Medium 3.1](/models/mistral-medium-3-1-25-08) | `mistral-medium-2508` | Deprecated | 128k | A sample model. | 2026-05-22 | 2026-08-31 | [Mistral Medium 3.5](/models/mistral-medium-3-5-26-04) |'
+reviewTest('Markdown source: Mistral refuses a lifecycle row cut off from its table by a blank line', () => {
+  strictAssert.match(mistralRefusal(mistralMarkdown.replace(`\n${mistralMediumRow}`, `\n\n${mistralMediumRow}`)), /table row outside a table/)
 })
-reviewTest('Review F8: Mistral consumes a pending header only once', () => {
-  strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + mistralSampleTable), mistralParsed)
+reviewTest('Markdown source: Mistral reads a second lifecycle table and merges identical rows across tables', () => {
+  strictAssert.deepEqual(mistralParse(`${mistralMarkdown}\n\n## More\n\n${mistralTable([mistralSampleRow, mistralMediumRow])}`).records, [...mistralParsed.records, { id: 'sample-model', announced: '2026-05-22', shutdown: '2026-08-31', source: PROVIDERS.mistral.deprecationsUrl, replacement_note: 'Mistral lists Sample 2 as the alternative' }])
 })
-reviewTest('Review F8: Mistral requires the immediately next table to contain body rows', () => {
-  for (const table of ['<table></table>', mistralTables[0][0], '<table><tr><th>Feature</th><th>Supported</th></tr><tr><td>A</td><td>Yes</td></tr></table>']) {
-    strictAssert.match(mistralRefusal(mistralTables[0][0] + table + mistralTables[1][0]), /dangling header/i)
-  }
-})
-const mistralRetirementGuide = '<table><tr><td>Mistral X</td><td>1</td><td>mistral-x</td><td>1/1/2026 12/1/2026</td><td>See retirement guide</td></tr></table>'
-reviewTest('Third pass F4: Mistral preserves retirement guidance in a body table under a pending header', () => {
-  const parsed = parseMistralDeprecations(mistralTables[0][0] + mistralRetirementGuide)
-  strictAssert.deepEqual(parsed, {
+const mistralRetirementGuide = '| Mistral X | `mistral-x` | Deprecated | 32k | A sample model. | 2026-01-01 | 2026-12-01 | See retirement guide |'
+reviewTest('Third pass F4: Mistral preserves plain retirement guidance as a note', () => {
+  strictAssert.deepEqual(mistralParse(mistralTable([mistralRetirementGuide])), {
     records: [{ id: 'mistral-x', announced: '2026-01-01', shutdown: '2026-12-01', source: PROVIDERS.mistral.deprecationsUrl, replacement_note: 'Mistral lists See retirement guide as the alternative' }],
     skipped: [],
   })
-  strictAssert.deepEqual(parseMistralDeprecations(mistralTables[0][0].replace('</table>', mistralRetirementGuide.slice(7))), parsed)
 })
-for (const firstRow of ['<tr><th>Feature</th><th>Supported</th></tr>', '<tr><td>Feature</td><td>Supported</td></tr>']) {
-  reviewTest(`Third pass F4: Mistral ignores lifecycle words in unrelated body rows after ${firstRow}`, () => {
-    const unrelated = mistralRetirementGuide.replace('<table>', `<table>${firstRow}`)
-    strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + unrelated), mistralParsed)
-  })
-}
-const mistralDriftedTable = `<table><tr><th>Model</th><th>Version</th><th>API</th><th>Deprecation date / Retirement date</th><th>Alternative</th></tr>${mistralSampleTable.slice(7, -8)}</table>`
-for (const kind of ['mixed', 'td']) {
-  for (const dateLabel of ['Deprecation Retirement', 'Deprecation date / Retirement date']) {
-    reviewTest(`Second pass F6: Mistral rejects a second lifecycle header using ${kind} cells and ${dateLabel}`, () => {
-      let table = mistralDriftedTable.replace('Deprecation date / Retirement date', dateLabel).replace('<th>API</th>', '<td>API</td>')
-      if (kind === 'td') table = table.replace(/<th>/g, '<td>').replace(/<\/th>/g, '</td>')
-      const reason = mistralRefusal(mistralHtml + table)
-      strictAssert.match(reason, /header/)
-      strictAssert.ok(reason.includes(`Model | Version | API | ${dateLabel} | Alternative`))
-    })
-  }
-}
-reviewTest('Review F9: Mistral refuses drifted lifecycle headers alongside valid tables', () => {
-  const reason = mistralRefusal(mistralHtml + mistralDriftedTable)
-  strictAssert.match(reason, /header/i)
-  strictAssert.ok(reason.includes('Deprecation date / Retirement date'))
+reviewTest('Third pass F4: Mistral ignores lifecycle words in the rows of an unrelated table', () => {
+  const unrelated = mistralTable(['| Mistral X | See retirement guide |'], '| Feature | Supported |')
+  strictAssert.deepEqual(mistralParse(`${mistralMarkdown}\n\n${unrelated}`), mistralParsed)
+})
+reviewTest('Review F9: Mistral refuses a drifted lifecycle header alongside valid tables and names it', () => {
+  const drifted = mistralLifecycleHeader.replace('| Deprecation | Retirement |', '| Deprecation date | Retirement date |')
+  const reason = mistralRefusal(`${mistralMarkdown}\n\n${mistralTable([mistralSampleRow], drifted)}`)
+  strictAssert.match(reason, /unrecognised or ambiguous header/)
+  strictAssert.ok(reason.includes('Deprecation date | Retirement date'))
 })
 reviewTest('Review F9: Mistral requires the exact lifecycle header set', () => {
   for (const labels of [
-    ['Model*', 'Version', 'API', 'Deprecation Retirement', 'Alternative'],
-    ['Model', 'Version'],
+    ['Model', 'API name'],
     ['Retirement date'],
-    ['Model', 'Version', 'API', 'Deprecation Retirement', 'Alternative', 'Feature'],
-    ['Model', 'Version', 'API', 'Deprecation Retirement', 'Alternative', 'Model'],
+    ['Model', 'Version', 'API', 'Deprecation Retirement', 'Alternative'],
+    ['Model', 'API name', 'Status', 'Context', 'Summary', 'Deprecation', 'Retirement', 'Replacement', 'Feature'],
+    ['Model', 'API name', 'Status', 'Context', 'Summary', 'Deprecation', 'Retirement', 'Replacement', 'Model'],
   ]) {
-    const table = `<table><tr>${labels.map(label => `<th>${label}</th>`).join('')}</tr></table>`
-    strictAssert.match(mistralRefusal(mistralHtml + table), /header/i)
+    const header = `| ${labels.join(' | ')} |`
+    strictAssert.match(mistralRefusal(`${mistralMarkdown}\n\n${mistralTable([`|${' x |'.repeat(labels.length)}`], header)}`), /header/i, header)
   }
 })
 reviewTest('Review F9: Mistral skips unrelated headers', () => {
-  strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + '<table><tr><th>Feature</th><th>Supported</th></tr><tr><td>A</td><td>Yes</td></tr></table>'), mistralParsed)
+  strictAssert.deepEqual(mistralParse(`${mistralMarkdown}\n\n${mistralTable(['| A | Yes |'], '| Feature | Supported |')}`), mistralParsed)
 })
 for (const canonical of ['mistral-medium-2608', 'mistral-medium-2508']) {
   const sources = await loadProviderSources(PROVIDERS.mistral, {
     env: { MISTRAL_API_KEY: 'fixture-key' }, notice: () => {},
     fetchImpl: async url => ({ ok: true, text: async () => url === PROVIDERS.mistral.modelsUrl
       ? JSON.stringify({ object: 'list', data: [{ id: canonical, aliases: ['mistral-medium-latest'] }] })
-      : mistralTables[0][0] + (canonical === 'mistral-medium-2508' ? mistralConfirmingTable : mistralSampleTable) }),
+      : mistralTable(canonical === 'mistral-medium-2508' ? [mistralSampleRow, mistralConfirmingRow] : [mistralSampleRow]) }),
   })
   for (const fields of [
     {},
@@ -696,20 +794,22 @@ for (const canonical of ['mistral-medium-2608', 'mistral-medium-2508']) {
   })
 }
 const openaiById = new Map(openaiEntries.map(entry => [entry.id, entry]))
+const anthropicStatusColumns = ['API model name', 'Current state', 'Deprecated', 'Tentative retirement date']
+const anthropicAnnouncementColumns = ['Retirement date', 'Deprecated model', 'Recommended replacement']
 const anthropicStatusHeader = '<tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>'
-const anthropicStatusTable = (id, state, deprecated, retirement) => `<table>${anthropicStatusHeader}<tr><td><code>${id}</code></td><td>${state}</td><td>${deprecated}</td><td>${retirement}</td></tr></table>`
-const anthropicAnnouncementTable = (id, announced, shutdown, aliases = []) => `<h2>${announced}: Model retirement</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>${shutdown}</td><td>${[id, ...aliases].map(token => `<code>${token}</code>`).join(' / ')}</td><td><code>claude-next</code></td></tr></table>`
+const anthropicStatusTable = (id, state, deprecated, retirement) => mdTable(anthropicStatusColumns, [[id, state, deprecated, retirement]])
+const anthropicAnnouncementTable = (id, announced, shutdown, aliases = []) => `\n### ${announced}: Model retirement\n${mdTable(anthropicAnnouncementColumns, [[shutdown, [id, ...aliases].map(token => `\`${token}\``).join(' / '), '`claude-next`']])}`
 
 let endpointLookalikeReason = ''
 try {
-  parseAnthropicDeprecations(endpointLookalikeHtml)
+  parseAnthropicDeprecations(endpointLookalikeMarkdown)
 } catch (error) {
   endpointLookalikeReason = error.message
 }
 assert(endpointLookalikeReason.includes('missing required columns') && endpointLookalikeReason.includes('api model name'), 'Anthropic rejects an endpoint lookalike carrying the status retirement header')
 
-const mixedEndpointHtml = `<h2>2026-01-01: Endpoint notice</h2><table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table><h2>2025-01-01: Model notice</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-mixed</code></td><td><code>claude-next</code></td></tr></table>${anthropicStatusTable('claude-mixed', 'Retired', '2025-01-01', '2027-01-01')}`
-const mixedEndpointEntries = parseAnthropicDeprecations(mixedEndpointHtml)
+const mixedEndpointMarkdown = `### 2026-01-01: Endpoint notice\n${mdTable(['Retirement date', 'Deprecated endpoint', 'Recommended replacement'], [['2027-01-01', '`/v1/old`', '`/v1/new`']])}### 2025-01-01: Model notice\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-mixed`', '`claude-next`']])}${anthropicStatusTable('claude-mixed', 'Retired', '2025-01-01', '2027-01-01')}`
+const mixedEndpointEntries = parseAnthropicDeprecations(mixedEndpointMarkdown)
 assert(mixedEndpointEntries.length === 1 && mixedEndpointEntries[0].id === 'claude-mixed', 'generic deprecation parser skips endpoint tables while retaining model tables')
 
 const googleEndpointOnlyHtml = '<table><tr><th>Retirement date</th><th>Deprecated endpoint</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>/v1/old</code></td><td><code>/v1/new</code></td></tr></table>'
@@ -751,21 +851,26 @@ try {
 }
 assert(googleInvalidRowReason.includes('refused row') && googleInvalidRowReason.includes('endpoint-or-product-row'), 'Google model rows enforce the model identifier grammar')
 
-const anthropicApiModelHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>API model name</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-api-model</code></td><td><code>claude-next</code></td></tr></table>${anthropicStatusTable('claude-api-model', 'Retired', '2026-01-01', '2027-01-01')}`
-const anthropicApiModel = parseAnthropicDeprecations(anthropicApiModelHtml)
+const anthropicApiModelMarkdown = `## 2026-01-01\n${mdTable(['Retirement date', 'API model name', 'Recommended replacement'], [['2027-01-01', '`claude-api-model`', '`claude-next`']])}${anthropicStatusTable('claude-api-model', 'Retired', '2026-01-01', '2027-01-01')}`
+const anthropicApiModel = parseAnthropicDeprecations(anthropicApiModelMarkdown)
 assert(anthropicApiModel.length === 1 && anthropicApiModel[0].id === 'claude-api-model' && anthropicApiModel[0].replacement === 'claude-next', 'Anthropic announcement tables keep their recommended replacement column')
 
-const ambiguousAnnouncementHtml = '<h1>Model deprecations</h1><h2>Announcement context</h2><p>Notified 2025-01-01; retirement 2026-01-01.</p><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-ambiguous</code></td><td><code>claude-next</code></td></tr></table>'
+const ambiguousAnnouncementMarkdown = `# Model deprecations\n\n## Announcement context\n\nNotified 2025-01-01; retirement 2026-01-01.\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-ambiguous`', '`claude-next`']])}`
 let ambiguousAnnouncementReason = ''
 try {
-  parseAnthropicDeprecations(ambiguousAnnouncementHtml)
+  parseAnthropicDeprecations(ambiguousAnnouncementMarkdown)
 } catch (error) {
   ambiguousAnnouncementReason = error.message
 }
 assert(ambiguousAnnouncementReason.includes('ambiguous-announcement-date'), 'generic deprecation parser rejects ambiguous announcement context')
 
-const anthropicStatusEdgeHtml = '<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-no-tentative-date</code></td><td>Active</td><td>N/A</td><td>N/A</td></tr><tr><td><code>claude-empty-tentative-date</code></td><td>Active</td><td>N/A</td><td></td></tr><tr><td><code>claude-retired-without-announcement</code></td><td>Retired</td><td>June 1, 2026</td><td>August 1, 2026</td></tr><tr><td><code>claude-deprecated-without-retirement</code></td><td>Deprecated</td><td>July 1, 2026</td><td>N/A</td></tr></table>'
-const anthropicStatusEdges = parseAnthropicDeprecations(anthropicStatusEdgeHtml)
+const anthropicStatusEdgeMarkdown = mdTable(anthropicStatusColumns, [
+  ['claude-no-tentative-date', 'Active', 'N/A', 'N/A'],
+  ['claude-empty-tentative-date', 'Active', 'N/A', ''],
+  ['claude-retired-without-announcement', 'Retired', 'June 1, 2026', 'August 1, 2026'],
+  ['claude-deprecated-without-retirement', 'Deprecated', 'July 1, 2026', 'N/A'],
+])
+const anthropicStatusEdges = parseAnthropicDeprecations(anthropicStatusEdgeMarkdown)
 const anthropicNoDates = anthropicStatusEdges.filter(entry => entry.id === 'claude-no-tentative-date' || entry.id === 'claude-empty-tentative-date')
 assert(anthropicNoDates.length === 2 && anthropicNoDates.every(entry => entry.shutdown === undefined && entry.date_precision === undefined), 'Anthropic treats active N/A and empty retirement dates as no date')
 const anthropicRetiredStatus = anthropicStatusEdges.find(entry => entry.id === 'claude-retired-without-announcement')
@@ -773,14 +878,15 @@ assert(anthropicRetiredStatus?.announced === '2026-06-01' && anthropicRetiredSta
 const anthropicDeprecatedStatus = anthropicStatusEdges.find(entry => entry.id === 'claude-deprecated-without-retirement')
 assert(anthropicDeprecatedStatus?.announced === '2026-07-01' && anthropicDeprecatedStatus.shutdown === undefined, 'Anthropic converts a deprecated N/A status row into an announced-only record')
 
-const anthropicStatusError = html => {
+const anthropicStatusError = (markdown, parse = parseAnthropicDeprecations) => {
   try {
-    parseAnthropicDeprecations(html)
+    parse(markdown)
     return ''
   } catch (error) {
     return error.message
   }
 }
+const anthropicHtmlStatusError = html => anthropicStatusError(html, parseAnthropicDeprecationsHtml)
 const activeAnnouncementConflictId = 'claude-active-announcement-conflict'
 const activeAnnouncementConflictReason = anthropicStatusError(`${anthropicAnnouncementTable(activeAnnouncementConflictId, '2026-01-01', '2027-01-01')}${anthropicStatusTable(activeAnnouncementConflictId, 'Active', 'N/A', 'Not sooner than September 1, 2028')}`)
 assert(activeAnnouncementConflictReason.includes(activeAnnouncementConflictId) && activeAnnouncementConflictReason.includes('Active') && activeAnnouncementConflictReason.includes('2027-01-01'), 'Anthropic rejects an active status row that conflicts with an announcement')
@@ -802,31 +908,35 @@ assert(missingStatusShutdownReason.includes(missingStatusShutdownId) && missingS
 const announcedOnlyId = 'claude-announced-only-match'
 const announcedOnlyMatch = parseAnthropicDeprecations(`${anthropicAnnouncementTable(announcedOnlyId, '2026-01-01', 'N/A')}${anthropicStatusTable(announcedOnlyId, 'Deprecated', '2026-01-01', 'N/A')}`)
 assert(announcedOnlyMatch.length === 1 && announcedOnlyMatch[0].announced === '2026-01-01' && announcedOnlyMatch[0].shutdown === undefined, 'Anthropic deduplicates matching announced-only lifecycle rows')
-const extraColumnStatus = parseAnthropicDeprecations(statusExtraColumnHtml)
+const extraColumnStatus = parseAnthropicDeprecations(statusExtraColumnMarkdown)
 assert(extraColumnStatus.length === 1 && extraColumnStatus[0].id === 'claude-extra-column' && extraColumnStatus[0].date_precision === 'tentative' && extraColumnStatus[0].replacement === undefined, 'Anthropic status parsing owns a table with an extra recommended replacement column')
-const footnotedStatusHtml = '<h2>2026-01-01</h2><table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date¹</th><th>Recommended replacement</th></tr><tr><td><code>claude-footnoted-status</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td><td><code>claude-next</code></td></tr></table>'
-const footnotedStatus = parseAnthropicDeprecations(footnotedStatusHtml)
+const footnotedStatusMarkdown = `## 2026-01-01\n${mdTable(['API model name', 'Current state', 'Deprecated', 'Tentative retirement date¹', 'Recommended replacement'], [['claude-footnoted-status', 'Active', 'N/A', 'Not sooner than September 1, 2027', '`claude-next`']])}`
+const footnotedStatus = parseAnthropicDeprecations(footnotedStatusMarkdown)
 assert(footnotedStatus.length === 1 && footnotedStatus[0].date_precision === 'tentative' && footnotedStatus[0].announced === undefined && footnotedStatus[0].replacement === undefined, 'Anthropic parses a footnoted tentative header only as status data')
 const tdHeaderStatusHtml = '<h2>2026-01-01</h2><table><tr><td>API model name</td><td>Current state</td><td>Deprecated</td><td>Tentative retirement *</td><td>Recommended replacement</td></tr><tr><td><code>claude-td-header-status</code></td><td>Active</td><td>N/A</td><td>Not sooner than October 1, 2027</td><td><code>claude-next</code></td></tr></table>'
-const tdHeaderStatus = parseAnthropicDeprecations(tdHeaderStatusHtml)
-assert(tdHeaderStatus.length === 1 && tdHeaderStatus[0].date_precision === 'tentative' && tdHeaderStatus[0].announced === undefined && tdHeaderStatus[0].replacement === undefined, 'Anthropic treats a td-only first row with the status signature as the header')
+const tdHeaderStatus = parseAnthropicDeprecationsHtml(tdHeaderStatusHtml)
+assert(tdHeaderStatus.length === 1 && tdHeaderStatus[0].date_precision === 'tentative' && tdHeaderStatus[0].announced === undefined && tdHeaderStatus[0].replacement === undefined, 'Anthropic HTML core treats a td-only first row with the status signature as the header (a pipe table always has a header row)')
 const leadingTitleStatusHtml = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-leading-title-announcement</code></td><td><code>claude-next</code></td></tr></table><table><tr><th colspan="4">Model status</th></tr><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-leading-title-status</code></td><td>Active</td><td>N/A</td><td>Not sooner than November 1, 2027</td></tr></table>'
-const leadingTitleStatus = parseAnthropicDeprecations(leadingTitleStatusHtml)
+const leadingTitleStatus = parseAnthropicDeprecationsHtml(leadingTitleStatusHtml)
 const leadingTitleAnnouncement = leadingTitleStatus.find(entry => entry.id === 'claude-leading-title-announcement')
 const leadingTitleTentative = leadingTitleStatus.find(entry => entry.id === 'claude-leading-title-status')
-assert(leadingTitleStatus.length === 2 && leadingTitleAnnouncement?.replacement === 'claude-next', 'Anthropic keeps announcements beside a status table with a leading title row')
-assert(leadingTitleTentative?.date_precision === 'tentative' && leadingTitleTentative.announced === undefined && leadingTitleTentative.replacement === undefined, 'Anthropic owns a status table across its leading header block')
-const renamedColumnReason = anthropicStatusError(statusRenamedColumnHtml)
+assert(leadingTitleStatus.length === 2 && leadingTitleAnnouncement?.replacement === 'claude-next', 'Anthropic HTML core keeps announcements beside a status table with a leading title row (a pipe table has no colspan)')
+assert(leadingTitleTentative?.date_precision === 'tentative' && leadingTitleTentative.announced === undefined && leadingTitleTentative.replacement === undefined, 'Anthropic HTML core owns a status table across its leading header block')
+const renamedColumnReason = anthropicStatusError(statusRenamedColumnMarkdown)
 assert(renamedColumnReason.includes('missing required columns') && renamedColumnReason.includes('current state'), 'Anthropic status parsing fails loudly on a renamed required column')
-const multipleStatusDriftReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than September 1, 2027')}<h2>2026-01-01</h2><table><tr><th>API model name</th><th>Lifecycle state</th><th>Deprecated</th><th>Tentative retirement [1]</th><th>Recommended replacement</th></tr><tr><td><code>claude-drifted-status</code></td><td>Active</td><td>N/A</td><td>September 1, 2027</td><td><code>claude-next</code></td></tr></table>`)
+const multipleStatusDriftReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than September 1, 2027')}## 2026-01-01\n${mdTable(['API model name', 'Lifecycle state', 'Deprecated', 'Tentative retirement [1]', 'Recommended replacement'], [['claude-drifted-status', 'Active', 'N/A', 'September 1, 2027', '`claude-next`']])}`)
 assert(multipleStatusDriftReason.includes('missing required columns') && multipleStatusDriftReason.includes('current state'), 'Anthropic never classifies a drifted second status table as an announcement')
-const ambiguousStatusSignatureReason = anthropicStatusError(`<table><tr><th colspan="4">Tentative retirement overview</th></tr>${anthropicStatusHeader}<tr><td><code>claude-ambiguous-status-header</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>`)
-assert(ambiguousStatusSignatureReason.includes('ambiguous signature rows'), 'Anthropic rejects two status signature rows in one leading header block')
-const missingStatusReason = anthropicStatusError('<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th></tr><tr><td>2027-01-01</td><td><code>claude-no-status-table</code></td></tr></table>')
+const ambiguousStatusSignatureReason = anthropicHtmlStatusError(`<table><tr><th colspan="4">Tentative retirement overview</th></tr>${anthropicStatusHeader}<tr><td><code>claude-ambiguous-status-header</code></td><td>Active</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>`)
+assert(ambiguousStatusSignatureReason.includes('ambiguous signature rows'), 'Anthropic HTML core rejects two status signature rows in one leading header block (a pipe table has one header row)')
+const missingStatusReason = anthropicStatusError(`## 2026-01-01\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-no-status-table`', '`claude-next`']])}`)
 assert(missingStatusReason === 'anthropic deprecations page has no model status table', 'Anthropic parsing requires a recognised model status table')
-const headerOnlyStatusReason = anthropicStatusError(`<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-header-only-status</code></td><td><code>claude-next</code></td></tr></table><table>${anthropicStatusHeader}</table>`)
+const missingStatusHtmlReason = anthropicHtmlStatusError('<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th></tr><tr><td>2027-01-01</td><td><code>claude-no-status-table</code></td></tr></table>')
+assert(missingStatusHtmlReason === 'anthropic deprecations page has no model status table', 'Anthropic HTML core skips a two-column history table and still requires a status table')
+const twoColumnHistoryReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'N/A')}## 2026-01-01\n${mdTable(['Retirement date', 'Deprecated model'], [['2027-01-01', '`claude-no-replacement-column`']])}`)
+assert(twoColumnHistoryReason.includes('unrecognised layout: Retirement date | Deprecated model') && twoColumnHistoryReason.includes('under "2026-01-01"'), 'Anthropic Markdown refuses a model table it cannot classify instead of skipping it')
+const headerOnlyStatusReason = anthropicStatusError(`## 2026-01-01\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-header-only-status`', '`claude-next`']])}${mdTable(anthropicStatusColumns, [])}`)
 assert(headerOnlyStatusReason === 'anthropic model status table has no rows', 'Anthropic rejects a header-only status table even when announcements parsed')
-const duplicateStatusHeaderReason = anthropicStatusError('<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Deprecated</th><th>Tentative retirement date</th></tr><tr><td><code>claude-duplicate-header</code></td><td>Active</td><td>N/A</td><td>N/A</td><td>Not sooner than September 1, 2027</td></tr></table>')
+const duplicateStatusHeaderReason = anthropicStatusError(mdTable(['API model name', 'Current state', 'Deprecated', 'Deprecated', 'Tentative retirement date'], [['claude-duplicate-header', 'Active', 'N/A', 'N/A', 'Not sooner than September 1, 2027']]))
 assert(duplicateStatusHeaderReason.includes('duplicate required column') && duplicateStatusHeaderReason.includes('deprecated'), 'Anthropic rejects duplicate required status headers')
 const anthropicDeprecatedExact = parseAnthropicDeprecations(anthropicStatusTable('claude-deprecated-exact', 'Deprecated', 'July 1, 2026', 'October 1, 2026'))[0]
 assert(anthropicDeprecatedExact.announced === '2026-07-01' && anthropicDeprecatedExact.shutdown === '2026-10-01', 'Anthropic parses a deprecated status row with exact lifecycle dates')
@@ -854,11 +964,11 @@ assert(tbaConflictReason.includes(tbaConflictId) && tbaConflictReason.includes('
 const tbaAnnouncementId = 'claude-tba-announcement'
 const tbaAnnouncement = parseAnthropicDeprecations(`${anthropicAnnouncementTable(tbaAnnouncementId, '2026-01-01', 'To be announced')}${anthropicStatusTable(tbaAnnouncementId, 'Deprecated', '2026-01-01', 'To be announced')}`)
 assert(tbaAnnouncement.length === 1 && tbaAnnouncement[0].announced === '2026-01-01' && tbaAnnouncement[0].shutdown === undefined, 'Anthropic converts a To-be-announced announcement row into an announced-only record')
-const populatedRowWithoutIdReason = anthropicStatusError(`<table>${anthropicStatusHeader}<tr><td><code>claude-kept-row</code></td><td>Active</td><td>N/A</td><td>Not sooner than June 9, 2027</td></tr><tr><td></td><td>Active</td><td>N/A</td><td>Not sooner than July 1, 2027</td></tr></table>`)
+const populatedRowWithoutIdReason = anthropicStatusError(mdTable(anthropicStatusColumns, [['claude-kept-row', 'Active', 'N/A', 'Not sooner than June 9, 2027'], ['', 'Active', 'N/A', 'Not sooner than July 1, 2027']]))
 assert(populatedRowWithoutIdReason.includes('populated row without a model id'), 'a populated status row with an empty model cell fails closed')
-const spacerRowRecords = parseAnthropicDeprecations(`<table>${anthropicStatusHeader}<tr><td><code>claude-kept-row</code></td><td>Active</td><td>N/A</td><td>Not sooner than June 9, 2027</td></tr><tr><td></td><td></td><td></td><td></td></tr></table>`)
+const spacerRowRecords = parseAnthropicDeprecations(mdTable(anthropicStatusColumns, [['claude-kept-row', 'Active', 'N/A', 'Not sooner than June 9, 2027'], ['', '', '', '']]))
 assert(spacerRowRecords.length === 1 && spacerRowRecords[0].id === 'claude-kept-row', 'a wholly empty spacer row is still skipped')
-const renamedSignatureReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than June 9, 2027')}<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Retirement date</th></tr><tr><td><code>claude-drifted-status</code></td><td>Active</td><td>N/A</td><td>September 1, 2027</td></tr></table>`)
+const renamedSignatureReason = anthropicStatusError(`${anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'Not sooner than June 9, 2027')}${mdTable(['API model name', 'Current state', 'Deprecated', 'Retirement date'], [['claude-drifted-status', 'Active', 'N/A', 'September 1, 2027']])}`)
 assert(renamedSignatureReason.includes('missing required columns: tentative retirement'), 'a status-shaped table with a renamed tentative column fails closed instead of parsing as an announcement')
 const twoDateCellReason = anthropicStatusError(anthropicStatusTable('claude-two-dates', 'Retired', 'June 1, 2026', '2026-08-01 August 5, 2026'))
 assert(twoDateCellReason.includes('unrecognised retirement date'), 'a status date cell with two date candidates fails closed')
@@ -871,96 +981,423 @@ assert(activeDeprecatedReason.includes('claude-active-deprecated') && activeDepr
 const reversedLifecycleReason = anthropicStatusError(anthropicStatusTable('claude-reversed-lifecycle', 'Retired', 'August 1, 2026', 'June 1, 2026'))
 assert(reversedLifecycleReason.includes('claude-reversed-lifecycle') && reversedLifecycleReason.includes('before'), 'Anthropic rejects retirement before deprecation')
 
+const anthropicStatusOnly = anthropicStatusTable('claude-valid-status', 'Active', 'N/A', 'N/A')
+reviewTest('Anthropic Markdown: front matter, Note and Warning components, lists, links, and the parameter table are read as prose or skipped', () => {
+  const html = anthropicMarkdownToHtml(anthropicMarkdown)
+  strictAssert.ok(!/title: Model deprecations|&lt;Note|&lt;Warning|<Note|<Warning/.test(html))
+  strictAssert.ok(html.includes('<h3>2026-06-05: Claude Opus 4.1 model</h3>') && html.includes('<p>This model was retired August 5, 2026.</p>'))
+  strictAssert.equal((html.match(/<table>/g) ?? []).length, 8)
+  strictAssert.deepEqual(parseAnthropicDeprecations(anthropicMarkdown.replace(/\n/g, '\r\n')), anthropicEntries)
+})
+reviewTest('Anthropic Markdown: the heading date wins over the dates in a Note callout and the prose below it', () => {
+  strictAssert.equal(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805').announced, '2026-06-05')
+  const undated = `### Claude X model\n\n<Note>\n  This model was retired August 5, 2026.\n</Note>\n\nOn June 5, 2026, Anthropic notified developers.\n${mdTable(anthropicAnnouncementColumns, [['August 5, 2026', '`claude-x`', '`claude-next`']])}${anthropicStatusOnly}`
+  strictAssert.throws(() => parseAnthropicDeprecations(undated), /ambiguous-announcement-date/)
+})
+reviewTest('Anthropic Markdown: undocumented components, raw HTML blocks, and HTML tables or headings fail closed', () => {
+  for (const markup of ['<Accordion title="Retired models">', '<div class="history">', '<table><tr><td>x</td></tr></table>', '<h3>2026-01-01: Claude X</h3>', '<Tabs>']) {
+    strictAssert.throws(() => parseAnthropicDeprecations(`## History\n\n${markup}\n${anthropicStatusOnly}`), /unsupported markup under "History"/, markup)
+  }
+  strictAssert.throws(() => parseAnthropicDeprecations(`## History\n\nSee <table> below.\n${anthropicStatusOnly}`), /HTML table or heading under "History"/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`<Note>This was <h3>moved</h3> here</Note>\n${anthropicStatusOnly}`), /HTML table or heading/)
+  strictAssert.deepEqual(parseAnthropicDeprecations(`<Tip title="x">See <https://example.com/a>.</Tip>\n${anthropicStatusOnly}`).map(entry => entry.id), ['claude-valid-status'])
+})
+reviewTest('Anthropic Markdown: a setext heading cannot stand in for a dated section heading', () => {
+  const setext = `2026-01-01: Claude X model\n---\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-x`', '`claude-next`']])}${anthropicStatusOnly}`
+  strictAssert.throws(() => parseAnthropicDeprecations(setext), /setext heading before the first heading: 2026-01-01: Claude X model/)
+  strictAssert.throws(() => parseAnthropicDeprecations(setext.replace('---', '===')), /setext heading/)
+  strictAssert.deepEqual(parseAnthropicDeprecations(`Intro.\n\n---\n${anthropicStatusOnly}`).map(entry => entry.id), ['claude-valid-status'])
+})
+reviewTest('Anthropic Markdown: malformed pipe tables, comments, and fenced code follow the strict reader', () => {
+  strictAssert.throws(() => parseAnthropicDeprecations(`| API model name | Current state | Deprecated | Tentative retirement date |\n| --- | --- | --- | --- |\n| claude-short | Active | N/A |\n`), /line 3: table row has 3 cells; the header has 4/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`${anthropicStatusOnly}\n| claude-orphan | Active | N/A | N/A |\n`), /table row outside a table/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`${anthropicStatusOnly}<!-- unclosed\n`), /unbalanced comment marker/)
+  const hidden = mdTable(anthropicStatusColumns, [['claude-hidden', 'Retired', 'June 1, 2026', 'August 1, 2026']])
+  strictAssert.deepEqual(parseAnthropicDeprecations(`<!--\n${hidden}-->\n\`\`\`\n${hidden}\`\`\`\n${anthropicStatusOnly}`).map(entry => entry.id), ['claude-valid-status'])
+})
+reviewTest('Anthropic Markdown: the API parameter table is skipped, but a renamed table that names models or retirement fails closed', () => {
+  const parameters = columns => `## API parameter deprecations\n${mdTable(columns, [['`temperature`, `top_p`', 'Removed', 'Returns a 400 error.', 'Omit']])}`
+  strictAssert.deepEqual(parseAnthropicDeprecations(`${anthropicStatusOnly}${parameters(['Parameter', 'Status', 'Behavior', 'Recommended replacement'])}`).map(entry => entry.id), ['claude-valid-status'])
+  strictAssert.throws(() => parseAnthropicDeprecations(`${anthropicStatusOnly}${parameters(['Parameter', 'Status', 'Affected models', 'Recommended replacement'])}`), /table under "API parameter deprecations" has an unrecognised layout: Parameter \| Status \| Affected models/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`${anthropicStatusOnly}${parameters(['Parameter', 'Retirement', 'Behavior', 'Recommended replacement'])}`), /unrecognised layout/)
+})
+
+const anthropicApiRow = (id, lifecycle, deprecated_at = null, retires_at = null) => ({ type: 'model', id, display_name: id, created_at: '2025-01-01T00:00:00Z', lifecycle, deprecated_at, retires_at })
+const anthropicApiPage = (rows, extra = {}) => JSON.stringify({ data: rows, first_id: rows[0]?.id ?? null, has_more: false, last_id: rows.at(-1)?.id ?? null, ...extra })
+const anthropicApiAgreeing = [
+  anthropicApiRow('claude-fable-5-1', 'active'),
+  anthropicApiRow('claude-opus-4-6', 'active'),
+  anthropicApiRow('claude-opus-4-1-20250805', 'retired', '2026-06-05T00:00:00Z', '2026-08-05T00:00:00Z'),
+  anthropicApiRow('claude-3-haiku-20240307', 'retired', '2026-02-19T00:00:00Z', '2026-04-20T00:00:00Z'),
+]
+const anthropicApiConflicting = [
+  anthropicApiRow('claude-fable-5-1', 'active'),
+  anthropicApiRow('claude-opus-4-6', 'deprecated', '2026-11-01T00:00:00Z', null),
+  anthropicApiRow('claude-opus-4-1-20250805', 'deprecated', '2026-06-04T20:00:00-04:00', '2026-08-05T00:00:00Z'),
+  anthropicApiRow('claude-sonnet-4-20250514', 'retired', '2026-04-14T00:00:00Z', '2026-06-16T00:00:00Z'),
+  anthropicApiRow('claude-mystery-1', 'deprecated', '2026-10-01T00:00:00Z', null),
+  anthropicApiRow('claude-mystery-0', 'retired', '2025-01-01T00:00:00.123Z', '2025-06-01T00:00:00Z'),
+  anthropicApiRow('claude-new-active', 'active'),
+]
+const anthropicApiLoad = async (pages, { notices = [], requests = [], env = {} } = {}) => loadProviderSources(PROVIDERS.anthropic, {
+  env: { ANTHROPIC_API_KEY: 'fixture-key', ...env },
+  notice: message => notices.push(message),
+  fetchImpl: async (url, options) => {
+    const parsed = new URL(url)
+    requests.push({ url: parsed, options })
+    const text = body => ({ ok: true, status: 200, text: async () => body })
+    if (parsed.hostname === 'api.anthropic.com') return typeof pages === 'function' ? pages() : text(pages[parsed.searchParams.get('after_id') ?? ''])
+    if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return text(anthropicMarkdown)
+    if (url === PROVIDERS.anthropic.aliasesUrl) return text(anthropicIndex)
+    return text(anthropicModelMarkdown(url))
+  },
+})
+const agreeingNotices = []
+const agreeingRequests = []
+const agreeingSources = await anthropicApiLoad({ '': anthropicApiPage(anthropicApiAgreeing) }, { notices: agreeingNotices, requests: agreeingRequests })
+assert(agreeingNotices.at(-1) === 'notice: anthropic models API lifecycle: 2 active, 0 deprecated, 2 retired; 0 conflicts with the deprecations page' && !agreeingSources.sourceConflicts.length, 'Anthropic models API counts each lifecycle stage and finds no conflict when the API agrees with the page')
+assert(JSON.stringify(agreeingSources.deprecations) === JSON.stringify(anthropicEntries) && agreeingSources.currentIds.join() === 'claude-fable-5-1,claude-opus-4-6', 'Anthropic models API leaves page records untouched and keeps retired models out of the current ids')
+const agreeingModelsRequest = agreeingRequests.find(request => request.url.hostname === 'api.anthropic.com')
+assert(agreeingModelsRequest.options.headers['x-api-key'] === 'fixture-key' && agreeingModelsRequest.options.headers['anthropic-version'] === '2023-06-01' && agreeingModelsRequest.options.redirect === 'error', 'Anthropic models API request carries the key and version and refuses redirects')
+
+const conflictNotices = []
+const conflictSources = await anthropicApiLoad({ '': anthropicApiPage(anthropicApiConflicting) }, { notices: conflictNotices })
+const conflictLines = conflictSources.sourceConflicts.map(providerSourceConflictSummary)
+const expectedConflictLines = [
+  'anthropic models API claude-opus-4-6: lifecycle deprecated on the API, active on the deprecations page; page kept',
+  'anthropic models API claude-opus-4-6: deprecated_at 2026-11-01T00:00:00Z on the API, deprecated not set on the deprecations page; page kept',
+  'anthropic models API claude-opus-4-1-20250805: lifecycle deprecated on the API, retired on the deprecations page; page kept',
+  'anthropic models API claude-sonnet-4-20250514: retires_at 2026-06-16T00:00:00Z on the API, retirement 2026-06-15 on the deprecations page; page kept',
+  'anthropic models API claude-mystery-1: deprecated (deprecated_at 2026-10-01T00:00:00Z, retires_at null) but not on the deprecations page; API dates not applied',
+  'anthropic models API claude-mystery-0: retired (deprecated_at 2025-01-01T00:00:00.123Z, retires_at 2025-06-01T00:00:00Z) but not on the deprecations page; API dates not applied',
+]
+reviewTest('Anthropic models API: a state or date disagreement and an API-only deprecated or retired model are reported, not fatal', () => {
+  strictAssert.deepEqual(conflictLines, expectedConflictLines)
+  strictAssert.deepEqual(conflictNotices.slice(-7), [...expectedConflictLines.map(line => `notice: ${line}`), 'notice: anthropic models API lifecycle: 2 active, 3 deprecated, 2 retired; 6 conflicts with the deprecations page'].slice(-7))
+  strictAssert.deepEqual(conflictSources.deprecations, anthropicEntries)
+  strictAssert.deepEqual(conflictSources.currentIds, ['claude-fable-5-1', 'claude-opus-4-6', 'claude-opus-4-1-20250805', 'claude-mystery-1', 'claude-new-active'])
+})
+reviewTest('Anthropic models API: an offset timestamp compares by its UTC calendar date, and a tentative page date never conflicts with a null retires_at', () => {
+  strictAssert.ok(!conflictLines.some(line => line.includes('claude-opus-4-1-20250805: deprecated_at')))
+  strictAssert.ok(!conflictLines.some(line => line.includes('claude-fable-5-1') || line.includes('claude-new-active')))
+  const tentative = compareAnthropicLifecycle(anthropicEntries, [{ id: 'claude-opus-4-6', lifecycle: 'deprecated', deprecated: { date: '2026-11-01', raw: '2026-11-01T00:00:00Z' }, retires: { date: '2027-02-05', raw: '2027-02-05T00:00:00Z' } }])
+  strictAssert.deepEqual(tentative.conflicts.filter(conflict => conflict.field === 'retirement').map(providerSourceConflictSummary), ['anthropic models API claude-opus-4-6: retires_at 2027-02-05T00:00:00Z on the API, retirement 2027-02-05 (tentative) on the deprecations page; page kept'])
+})
+reviewTest('Anthropic models API conflicts render in the semantic diff Source conflicts section without counting as a change', () => {
+  const committed = { ...anthropicFeed, models: [{ id: 'claude-opus-4-6' }] }
+  const options = { sourceConflicts: conflictSources.sourceConflicts }
+  const markdown = renderSemanticDiff(committed, committed, options)
+  strictAssert.ok(!compareFeeds(committed, committed, options).changed)
+  strictAssert.ok(markdown.includes(`## Source conflicts\n\n${expectedConflictLines.map(line => `- ${line}`).join('\n')}\n`))
+  strictAssert.ok(markdown.includes('No semantic changes.'))
+})
+reviewTest('Anthropic models API: an undocumented lifecycle value, date, or missing field stops the run', () => {
+  const row = { ...anthropicApiRow('claude-x', 'deprecated', '2026-06-05T00:00:00Z', '2026-08-05T00:00:00Z') }
+  const page = changes => anthropicApiPage([{ ...row, ...changes }])
+  const without = field => anthropicApiPage([Object.fromEntries(Object.entries(row).filter(([key]) => key !== field))])
+  for (const [body, pattern] of [
+    [page({ lifecycle: 'legacy' }), /entry claude-x has an unrecognised lifecycle: "legacy"/],
+    [page({ lifecycle: 'Deprecated' }), /unrecognised lifecycle: "Deprecated"/],
+    [page({ lifecycle: null }), /unrecognised lifecycle: null/],
+    [without('lifecycle'), /entry claude-x has no lifecycle field/],
+    [without('deprecated_at'), /entry claude-x has no deprecated_at field/],
+    [without('retires_at'), /entry claude-x has no retires_at field/],
+    [page({ retires_at: 'August 5, 2026' }), /unparseable retires_at: "August 5, 2026"/],
+    [page({ deprecated_at: '2026-06-05' }), /unparseable deprecated_at: "2026-06-05"/],
+    [page({ deprecated_at: '2026-02-30T00:00:00Z' }), /unparseable deprecated_at/],
+    [page({ deprecated_at: '2026-06-05T24:00:00Z' }), /unparseable deprecated_at/],
+    [page({ deprecated_at: '2026-06-05T00:00:00' }), /unparseable deprecated_at/],
+    [page({ deprecated_at: 1780617600 }), /unparseable deprecated_at: 1780617600/],
+    [page({ lifecycle: 'active' }), /entry claude-x is active but has deprecated_at/],
+    [page({ lifecycle: 'active', retires_at: null }), /entry claude-x is active but has deprecated_at 2026-06-05T00:00:00Z$/],
+    [page({ deprecated_at: null }), /entry claude-x is deprecated without deprecated_at/],
+    [page({ lifecycle: 'retired', deprecated_at: null, retires_at: null }), /entry claude-x is retired without deprecated_at/],
+    [page({ retires_at: '2026-06-04T00:00:00Z' }), /entry claude-x retires before it was deprecated/],
+    [page({ id: 'claude x' }), /invalid model id: claude x/],
+    [anthropicApiPage([row], { has_more: undefined }), /boolean has_more/],
+    [JSON.stringify([row]), /boolean has_more/],
+  ]) {
+    strictAssert.throws(() => parseAnthropicModelsLifecyclePage(body), pattern, body)
+  }
+  strictAssert.deepEqual(parseAnthropicModelsLifecyclePage(anthropicApiPage([row])).models, [{ id: 'claude-x', lifecycle: 'deprecated', deprecated: { date: '2026-06-05', raw: '2026-06-05T00:00:00Z' }, retires: { date: '2026-08-05', raw: '2026-08-05T00:00:00Z' } }])
+})
+let anthropicApiUnknownReason = ''
+try {
+  await anthropicApiLoad({ '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) }, { env: { MODEL_EOL_CROSS_CHECKS: 'strict' } })
+} catch (error) { anthropicApiUnknownReason = error.message }
+assert(anthropicApiUnknownReason.includes('unrecognised lifecycle: "sunset"'), 'with MODEL_EOL_CROSS_CHECKS=strict an unknown models API lifecycle value fails the Anthropic source load')
+const anthropicApiPagedRequests = []
+const anthropicApiPaged = await anthropicApiLoad({
+  '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }),
+  'claude-fable-5-1': anthropicApiPage([anthropicApiRow('claude-opus-4-1-20250805', 'retired', '2026-06-05T00:00:00Z', '2026-08-05T00:00:00Z')]),
+}, { requests: anthropicApiPagedRequests })
+const pagedModelsUrls = anthropicApiPagedRequests.filter(request => request.url.hostname === 'api.anthropic.com').map(request => request.url)
+assert(pagedModelsUrls.length === 2 && pagedModelsUrls[1].searchParams.get('after_id') === 'claude-fable-5-1' && pagedModelsUrls.every(url => url.searchParams.getAll('lifecycle[]').join() === 'active,deprecated,retired') && anthropicApiPaged.currentIds.join() === 'claude-fable-5-1' && JSON.stringify(anthropicApiPaged.sourceConflicts.map(providerSourceConflictSummary)) === JSON.stringify(['anthropic models API claude-opus-4-6: active on the deprecations page but not returned by the API; page kept']), 'Anthropic models API pages through every lifecycle stage and compares the retired model on page two')
+assert(anthropicModelsListUrl(`${PROVIDERS.anthropic.modelsUrl}?lifecycle=active&limit=5&after_id=x`) === 'https://api.anthropic.com/v1/models?lifecycle%5B%5D=active&lifecycle%5B%5D=deprecated&lifecycle%5B%5D=retired&limit=1000', 'Anthropic models list URL replaces any lifecycle, limit, or cursor with all three stages and the maximum page size')
+
+reviewTest('Anthropic models API: a page model in Active or Deprecated state that the API omits is reported, and a retired one is not', () => {
+  const deprecated = { id: 'claude-page-deprecated', announced: '2026-06-01', shutdown: '2026-09-01', source: PROVIDERS.anthropic.deprecationsUrl }
+  const markdown = `## Model status\n\n| API model name | Current state | Deprecated | Tentative retirement date |\n| :-- | :-- | :-- | :-- |\n| claude-page-active | Active | N/A | N/A |\n| claude-page-deprecated | Deprecated | June 1, 2026 | September 1, 2026 |\n| claude-page-retired | Retired | January 1, 2026 | March 1, 2026 |\n`
+  const records = parseAnthropicDeprecations(markdown)
+  strictAssert.deepEqual(records.find(record => record.id === deprecated.id), deprecated)
+  const { conflicts } = compareAnthropicLifecycle(records, [{ id: 'claude-other', lifecycle: 'active', deprecated: undefined, retires: undefined }])
+  strictAssert.deepEqual(conflicts.map(providerSourceConflictSummary), [
+    'anthropic models API claude-page-active: active on the deprecations page but not returned by the API; page kept',
+    'anthropic models API claude-page-deprecated: deprecated on the deprecations page but not returned by the API; page kept',
+  ])
+  strictAssert.deepEqual(compareAnthropicLifecycle(records, ['claude-page-active', 'claude-page-deprecated'].map(id => ({ id, lifecycle: id.endsWith('active') ? 'active' : 'deprecated', deprecated: id.endsWith('active') ? undefined : { date: '2026-06-01', raw: '2026-06-01T00:00:00Z' }, retires: id.endsWith('active') ? undefined : { date: '2026-09-01', raw: '2026-09-01T00:00:00Z' } }))).conflicts, [])
+})
+reviewTest('Anthropic models API: an active model with a tentative retires_at is accepted and compared with the page\'s tentative date', () => {
+  const row = anthropicApiRow('claude-x', 'active', null, '2027-11-30T00:00:00-08:00')
+  const [model] = parseAnthropicModelsLifecyclePage(anthropicApiPage([row])).models
+  strictAssert.deepEqual(model, { id: 'claude-x', lifecycle: 'active', deprecated: undefined, retires: { date: '2027-11-30', raw: '2027-11-30T00:00:00-08:00' } })
+  const status = date => parseAnthropicDeprecations(`## Model status\n\n| API model name | Current state | Deprecated | Tentative retirement date |\n| :-- | :-- | :-- | :-- |\n| claude-x | Active | N/A | Not sooner than ${date} |\n`)
+  strictAssert.deepEqual(compareAnthropicLifecycle(status('November 30, 2027'), [model]).conflicts, [])
+  strictAssert.deepEqual(compareAnthropicLifecycle(status('November 29, 2027'), [model]).conflicts.map(providerSourceConflictSummary), ['anthropic models API claude-x: retires_at 2027-11-30T00:00:00-08:00 on the API, retirement 2027-11-29 (tentative) on the deprecations page; page kept'])
+  const lateOffset = parseAnthropicModelsLifecyclePage(anthropicApiPage([anthropicApiRow('claude-x', 'active', null, '2027-11-29T20:00:00-08:00')])).models
+  strictAssert.deepEqual(compareAnthropicLifecycle(status('November 30, 2027'), lateOffset).conflicts, [])
+  strictAssert.deepEqual(compareAnthropicLifecycle(status('November 29, 2027'), lateOffset).conflicts.map(providerSourceConflictSummary), ['anthropic models API claude-x: retires_at 2027-11-29T20:00:00-08:00 on the API, retirement 2027-11-29 (tentative) on the deprecations page; page kept'])
+})
+const anthropicApiBare = id => ({ type: 'model', id, display_name: id, created_at: '2025-01-01T00:00:00Z' })
+for (const [label, pages, ids, message] of [
+  ['an unknown lifecycle value', { '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) }, ['claude-x'], 'anthropic models response entry claude-x has an unrecognised lifecycle: "sunset"'],
+  ['lifecycle fields missing from every entry', { '': anthropicApiPage([anthropicApiBare('claude-fable-5-1'), anthropicApiBare('claude-brand-new')]) }, ['claude-fable-5-1', 'claude-brand-new'], 'anthropic models response entry claude-fable-5-1 has no lifecycle field (and 1 more entry)'],
+  ['an unparseable date beside a valid retired row', { '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active'), anthropicApiRow('claude-x', 'deprecated', 'June 5, 2026'), anthropicApiRow('claude-3-haiku-20240307', 'retired', '2026-02-19T00:00:00Z', '2026-04-20T00:00:00Z')]) }, ['claude-fable-5-1', 'claude-x'], 'anthropic models response entry claude-x has an unparseable deprecated_at: "June 5, 2026"'],
+]) {
+  const notices = []
+  const sources = await anthropicApiLoad(pages, { notices })
+  reviewTest(`Anthropic models API: ${label} is a reported cross-check failure that keeps the listed ids and skips only the lifecycle comparison`, () => {
+    const [conflict] = sources.sourceConflicts
+    strictAssert.equal(sources.sourceConflicts.length, 1)
+    strictAssert.deepEqual(Object.keys(conflict).sort(), ['message', 'publisher', 'reason', 'via'])
+    strictAssert.deepEqual([conflict.via, conflict.publisher, conflict.reason, conflict.message], ['models-api', 'anthropic', 'cross-check-failed', message])
+    strictAssert.ok(notices.includes(`warning: anthropic models API cross-check failed: ${message}`), notices.join('\n'))
+    strictAssert.ok(!notices.some(line => line.startsWith('notice: anthropic models API lifecycle:')), notices.join('\n'))
+    strictAssert.deepEqual(sources.deprecations, anthropicEntries)
+    strictAssert.deepEqual(sources.currentIds, ids)
+    strictAssert.equal(sources.endpointAvailable, true)
+    const line = `- ${providerSourceConflictSummary(conflict)}`
+    strictAssert.ok(line.startsWith('- anthropic models API cross-check failed: ') && line.endsWith('; the deprecations page was used without it'), line)
+    const committed = { ...anthropicFeed, models: [{ id: 'claude-opus-4-6' }] }
+    strictAssert.ok(renderSemanticDiff(committed, committed, { sourceConflicts: sources.sourceConflicts }).includes(`## Source conflicts\n\n${line}\n`))
+    strictAssert.ok(!compareFeeds(committed, committed, { sourceConflicts: sources.sourceConflicts }).changed)
+    const merged = mergeFeed({ ...anthropicFeed, models: [] }, { ...sources, provider: PROVIDERS.anthropic, notice: () => {} }).feed
+    for (const id of ids) strictAssert.ok(merged.models.some(model => model.id === id || model.aliases?.includes(id)), `${id} reaches the merged feed`)
+  })
+}
+const anthropicListingFailures = [
+  ['an HTTP error', () => new Response('upstream rejected key fixture-key', { status: 503 }), /anthropic fetch failed for .*: HTTP 503/],
+  ['a network error', () => { throw new TypeError('fetch failed', { cause: new Error('getaddrinfo ENOTFOUND api.anthropic.com') }) }, /anthropic fetch failed for .*ENOTFOUND/],
+  ['a non-JSON body', { '': '<html>maintenance</html>' }, /anthropic models response is not valid JSON/],
+  ['a missing data array', { '': JSON.stringify({ has_more: false, last_id: null }) }, /anthropic models response has no data array/],
+  ['a data value that is not an array', { '': '{"data": "nope"}' }, /anthropic models response has no data array/],
+  ['a missing has_more', { '': anthropicApiPage(anthropicApiAgreeing, { has_more: undefined }) }, /boolean has_more/],
+  ['has_more without a last_id', { '': anthropicApiPage([], { has_more: true, last_id: null }) }, /has_more is true without a last_id/],
+  ['an id that fails the id check', { '': anthropicApiPage([anthropicApiRow('claude x fixture-key', 'active')]) }, /invalid model id: claude x \[redacted\]$/],
+  ['an id repeated within a page', { '': anthropicApiPage([anthropicApiRow('claude-x', 'active'), anthropicApiRow('claude-x', 'active')]) }, /duplicate model id claude-x/],
+  ['an id repeated across pages', { '': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')], { has_more: true }), 'claude-fable-5-1': anthropicApiPage([anthropicApiRow('claude-fable-5-1', 'active')]) }, /duplicate model id across pages: claude-fable-5-1/],
+]
+for (const [label, pages, pattern] of anthropicListingFailures) {
+  const reasons = []
+  for (const policy of [undefined, '', 'warn', 'strict']) {
+    try {
+      await anthropicApiLoad(pages, { env: policy === undefined ? {} : { MODEL_EOL_CROSS_CHECKS: policy } })
+      reasons.push(`no error under ${policy}`)
+    } catch (error) { reasons.push(error.message) }
+  }
+  reviewTest(`Anthropic models API: ${label} in the models listing stops the run under every MODEL_EOL_CROSS_CHECKS policy`, () => {
+    for (const reason of reasons) {
+      strictAssert.match(reason, pattern)
+      strictAssert.ok(!reason.includes('fixture-key'), reason)
+    }
+  })
+}
+let strictLifecycleReason = ''
+try { await anthropicApiLoad({ '': anthropicApiPage([anthropicApiRow('claude-x', 'deprecated', 'June 5, 2026')]) }, { env: { MODEL_EOL_CROSS_CHECKS: 'strict' } }) } catch (error) { strictLifecycleReason = error.message }
+const unknownPolicyReasons = []
+for (const value of ['Strict', 'stirct']) {
+  try { await anthropicApiLoad({ '': anthropicApiPage(anthropicApiAgreeing) }, { env: { MODEL_EOL_CROSS_CHECKS: value } }) } catch (error) { unknownPolicyReasons.push(error.message) }
+}
+const sunsetPage = { '': anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]) }
+const warnPolicySources = await anthropicApiLoad(sunsetPage, { env: { MODEL_EOL_CROSS_CHECKS: 'warn' } })
+const emptyPolicySources = await anthropicApiLoad(sunsetPage, { env: { MODEL_EOL_CROSS_CHECKS: '' } })
+reviewTest('Anthropic models API: MODEL_EOL_CROSS_CHECKS=strict turns a lifecycle cross-check failure back into a failed run, warn or empty keeps it a warning, and any other value is refused', () => {
+  strictAssert.equal(strictLifecycleReason, 'anthropic models response entry claude-x has an unparseable deprecated_at: "June 5, 2026"')
+  strictAssert.deepEqual(unknownPolicyReasons, ['MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not "Strict"', 'MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not "stirct"'])
+  strictAssert.deepEqual([warnPolicySources, emptyPolicySources].map(sources => sources.sourceConflicts.map(conflict => conflict.reason)), [['cross-check-failed'], ['cross-check-failed']])
+  strictAssert.deepEqual([warnPolicySources, emptyPolicySources].map(sources => sources.currentIds), [['claude-x'], ['claude-x']])
+})
+const anthropicBadModelsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-anthropic-bad-models-'))
+try {
+  for (const name of ['anthropic-deprecations.md', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(anthropicBadModelsDir, name))
+  fs.cpSync(path.join(fixtures, 'anthropic-model-pages'), path.join(anthropicBadModelsDir, 'anthropic-model-pages'), { recursive: true })
+  fs.writeFileSync(path.join(anthropicBadModelsDir, 'anthropic-models.json'), anthropicApiPage([{ ...anthropicApiRow('claude-x', 'sunset'), deprecated_at: null }]))
+  const notices = []
+  const lenient = await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicBadModelsDir, env: {}, notice: message => notices.push(message) })
+  let strictReason = ''
+  try { await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicBadModelsDir, env: { MODEL_EOL_CROSS_CHECKS: 'strict' }, notice: () => {} }) } catch (error) { strictReason = error.message }
+  fs.writeFileSync(path.join(anthropicBadModelsDir, 'anthropic-models.json'), '{"data": "nope"}')
+  let listingReason = ''
+  try { await loadProviderSources(PROVIDERS.anthropic, { fixtures: anthropicBadModelsDir, env: {}, notice: () => {} }) } catch (error) { listingReason = error.message }
+  reviewTest('Anthropic models API: a bad fixture models response follows the same listing and cross-check policy as a live one', () => {
+    strictAssert.deepEqual(lenient.sourceConflicts.map(conflict => [conflict.reason, conflict.message]), [['cross-check-failed', 'anthropic models response entry claude-x has an unrecognised lifecycle: "sunset"']])
+    strictAssert.ok(notices.includes('warning: anthropic models API cross-check failed: anthropic models response entry claude-x has an unrecognised lifecycle: "sunset"'))
+    strictAssert.equal(lenient.endpointAvailable, true)
+    strictAssert.deepEqual(lenient.currentIds, ['claude-x'])
+    strictAssert.match(strictReason, /unrecognised lifecycle: "sunset"/)
+    strictAssert.match(listingReason, /anthropic models response has no data array/)
+  })
+} finally {
+  fs.rmSync(anthropicBadModelsDir, { recursive: true, force: true })
+}
+const anthropicApiCliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-anthropic-api-cli-'))
+try {
+  for (const name of ['anthropic-deprecations.md', 'anthropic-llms.txt']) fs.copyFileSync(path.join(fixtures, name), path.join(anthropicApiCliDir, name))
+  fs.cpSync(path.join(fixtures, 'anthropic-model-pages'), path.join(anthropicApiCliDir, 'anthropic-model-pages'), { recursive: true })
+  fs.writeFileSync(path.join(anthropicApiCliDir, 'anthropic-models.json'), anthropicApiPage(anthropicApiConflicting))
+  const cli = spawnSync(process.execPath, [refresh, '--provider', 'anthropic', '--check', '--fixtures', anthropicApiCliDir], { encoding: 'utf8' })
+  assert([0, 3].includes(cli.status) && cli.stdout.includes(`## Source conflicts\n\n- ${expectedConflictLines[0]}`) && cli.stderr.includes('notice: anthropic models API lifecycle: 2 active, 3 deprecated, 2 retired; 6 conflicts with the deprecations page') && cli.stderr.includes(`notice: ${expectedConflictLines[4]}`), 'refresh --check prints Anthropic models API conflicts in the diff and on stderr without failing')
+} finally {
+  fs.rmSync(anthropicApiCliDir, { recursive: true, force: true })
+}
+
 assert(openaiEntries.every(entry => !/[\s/]/.test(entry.id)), 'OpenAI endpoint and product retirement rows are excluded from the model feed')
 assert(normalizeBedrockId('anthropic.claude-3-haiku-20240307-v1:0') === 'claude-3-haiku-20240307', 'Bedrock normalization strips a known provider prefix and v1 suffix')
 assert(normalizeBedrockId('meta.llama3-1-405b-instruct-v2:0') === 'llama3-1-405b-instruct', 'Bedrock normalization strips v2 suffixes')
 assert(normalizeBedrockId('future-provider.example-model:0') === 'example-model', 'Bedrock normalization handles an unknown provider prefix generically')
 assert(normalizeBedrockId('cohere.command-r:0') === 'command-r', 'Bedrock normalization strips a bare colon version suffix')
 assert(normalizeVertexId('publishers/google/models/gemini-2.5-pro') === 'gemini-2.5-pro', 'Vertex normalization strips a publisher resource prefix')
-assert(bedrockEntries.length === 17, 'Bedrock lifecycle fixture parses and deduplicates logical model rows')
-assert(bedrockEntries.find(entry => entry.bedrockId === 'anthropic.claude-3-haiku-20240307-v1:0')?.eol === '2026-09-10', 'Bedrock parser handles rowspan model rows')
+assert(bedrockEntries.length === 19, 'Bedrock lifecycle fixture parses and deduplicates logical model entries')
+assert(bedrockEntries.find(entry => entry.bedrockId === 'anthropic.claude-3-haiku-20240307-v1:0')?.eol === '2026-09-10', 'Bedrock parser merges regional lines and repeated entries for one model')
 assert(bedrockEntries.find(entry => entry.bedrockId === 'amazon.nova-canvas-v1:0')?.legacy === '2026-03-30', 'Bedrock parser reads human legacy dates')
 assert(bedrockEntries.every(entry => entry.legacy && entry.eol), 'Bedrock lifecycle records preserve parsed Legacy and EOL dates')
-assert(bedrockById.get('amazon.nova-canvas-v1:0')?.status === 'legacy', 'Bedrock parser marks rows without a public Extended Access date as Legacy')
+assert(bedrockById.get('amazon.nova-canvas-v1:0')?.status === 'legacy', 'Bedrock parser marks entries without a public Extended Access date as Legacy')
 assert(bedrockById.get('anthropic.claude-3-haiku-20240307-v1:0')?.status === 'extended-access', 'Bedrock parser ingests the public Extended Access lifecycle phase')
-assert(bedrockById.get('anthropic.claude-3-sonnet-20240229-v1:0')?.status === 'extended-access', 'Bedrock parser conservatively combines regional Legacy and Extended Access rows')
-const shiftedBedrockRow = parseBedrockLifecycleHtml(`
-  <table>
-    <tr><th>Provider</th><th>Model</th><th>Model ID</th><th>Regions</th><th>Legacy date</th><th>EOL date</th><th>Public extended access date</th></tr>
-    <tr><td>Command R</td><td>cohere.command-r-v1:0</td><td>us-east-1, us-west-2</td><td>February 19, 2026</td><td>August 19, 2026</td><td>May 19, 2026</td></tr>
-  </table>
-`)
-assert(shiftedBedrockRow[0]?.bedrockId === 'cohere.command-r-v1:0' && shiftedBedrockRow[0]?.eol === '2026-08-19' && shiftedBedrockRow[0]?.status === 'extended-access', 'Bedrock parser realigns rows whose provider cell is omitted')
-const explicitBedrockStatuses = parseBedrockLifecycleHtml(`
-  <table>
-    <tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th><th>Lifecycle status</th></tr>
-    <tr><td>amazon.legacy-model-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>—</td><td>Legacy</td></tr>
-    <tr><td>amazon.extended-model-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>June 1, 2026</td><td>Public Extended Access</td></tr>
-    <tr><td>amazon.eol-model-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>June 1, 2026</td><td>End-of-Life (EOL)</td></tr>
-  </table>
-`)
+assert(bedrockById.get('anthropic.claude-3-sonnet-20240229-v1:0')?.status === 'extended-access', 'Bedrock parser keeps Extended Access across regional lines')
+assert(bedrockById.get('cohere.command-r-plus-v1:0')?.eol === '2026-08-19', 'Bedrock parser reads an entry whose model name carries a Markdown escape')
+const bedrockFields = (id, legacy = 'March 1, 2026', eol = 'September 1, 2026', extended = '\u2014') => [['Model name', 'Example'], ['Model ID', id], ['Regions', 'us-east-1'], ['Legacy date', legacy], ['EOL date', eol], ['Public extended access start date', extended]]
+const bedrockEntry = (fields, provider = 'Example') => `- **${provider}**\n${fields.map(field => `  - ${Array.isArray(field[0]) ? field.map(([label, value]) => `**${label}:** ${value}`).join(' / ') : `**${field[0]}:** ${field[1]}`}`).join('\n')}\n`
+const bedrockPage = (...entries) => `# Model lifecycle (Legacy)\n\n**Models with a scheduled EOL date**\n\n${entries.join('\n')}\nThe public extended access date indicates when a Legacy model enters the public extended access portion of the Legacy period.\n`
+const bedrockError = markdown => {
+  try {
+    parseBedrockLifecycleMarkdown(markdown)
+  } catch (error) {
+    return error.message
+  }
+  return ''
+}
+const reorderedBedrock = parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry([...bedrockFields('cohere.command-r-v1:0', 'February 19, 2026', 'August 19, 2026', 'May 19, 2026')].reverse(), 'Cohere')))
+assert(reorderedBedrock[0]?.bedrockId === 'cohere.command-r-v1:0' && reorderedBedrock[0]?.eol === '2026-08-19' && reorderedBedrock[0]?.status === 'extended-access', 'Bedrock parser reads an entry by its labels, so field order cannot misalign a date')
+const explicitBedrockStatuses = parseBedrockLifecycleMarkdown(bedrockPage(
+  bedrockEntry([...bedrockFields('amazon.legacy-model-v1:0'), ['Lifecycle status', 'Legacy']]),
+  bedrockEntry([...bedrockFields('amazon.extended-model-v1:0', 'March 1, 2026', 'September 1, 2026', 'June 1, 2026'), ['Lifecycle status', 'Public Extended Access']]),
+  bedrockEntry([...bedrockFields('amazon.eol-model-v1:0', 'March 1, 2026', 'September 1, 2026', 'June 1, 2026'), ['Lifecycle status', 'End-of-Life (EOL)']]),
+))
 assert(JSON.stringify(explicitBedrockStatuses.map(entry => entry.status)) === JSON.stringify(['legacy', 'extended-access', 'retired']), 'Bedrock parser normalizes explicit official lifecycle statuses')
 for (const [label, value] of [['unknown', 'Deprecated'], ['empty', '']]) {
-  let reason = ''
-  try {
-    parseBedrockLifecycleHtml(`
-      <table>
-        <tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th><th>Status</th></tr>
-        <tr><td>amazon.bad-status-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>—</td><td>${value}</td></tr>
-      </table>
-    `)
-  } catch (error) {
-    reason = error.message
-  }
+  const reason = bedrockError(bedrockPage(bedrockEntry([...bedrockFields('amazon.bad-status-v1:0'), ['Status', value]])))
   assert(reason.includes('unsupported lifecycle status'), `Bedrock parser fails closed on ${label} lifecycle status values`)
 }
-let malformedExtendedAccessReason = ''
-try {
-  parseBedrockLifecycleHtml(`
-    <table>
-      <tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th></tr>
-      <tr><td>amazon.bad-extended-date-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>Eventually</td></tr>
-    </table>
-  `)
-} catch (error) {
-  malformedExtendedAccessReason = error.message
+assert(bedrockError(bedrockPage(bedrockEntry(bedrockFields('amazon.bad-extended-date-v1:0', 'March 1, 2026', 'September 1, 2026', 'Eventually')))).includes('unrecognised public extended access date'), 'Bedrock parser fails closed on malformed public Extended Access dates')
+assert(bedrockError(bedrockPage(bedrockEntry(bedrockFields('amazon.schema-drift-v1:0').slice(0, 5)))).includes('amazon.schema-drift-v1:0 is missing its Public extended access start date'), 'Bedrock parser fails closed when an entry drops the Extended Access label')
+reviewTest('Markdown lifecycle: Bedrock refuses an HTML body, an empty body, and a page without model entries', () => {
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown('<!DOCTYPE html><html><body><table></table></body></html>'), /aws-bedrock lifecycle page is HTML, not Markdown/)
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown('<!-- note -->\n<html><body>x</body></html>'), /is HTML, not Markdown/)
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(' \n'), /aws-bedrock lifecycle page is empty/)
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown('# Model lifecycle (Legacy)\n\nNo models are scheduled.\n'), /no model entries/)
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(bedrockPage(`\`\`\`\n${bedrockEntry(bedrockFields('amazon.fenced-v1:0'))}\`\`\`\n`)), /no model entries/)
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(bedrockPage(`<!--\n${bedrockEntry(bedrockFields('amazon.hidden-v1:0'))}-->\n`)), /no model entries/)
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(`${bedrockPage(bedrockEntry(bedrockFields('amazon.open-comment-v1:0')))}<!-- unterminated`), /unbalanced comment marker/)
+})
+reviewTest('Markdown lifecycle: Bedrock ignores fenced and commented entries next to live ones', () => {
+  const live = bedrockEntry(bedrockFields('amazon.live-v1:0'))
+  const expected = parseBedrockLifecycleMarkdown(bedrockPage(live))
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(live, `<!-- ${bedrockEntry(bedrockFields('amazon.live-v1:0', 'January 1, 2026', 'February 1, 2026'))} -->`)), expected)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(live, `\`\`\`\n${bedrockEntry(bedrockFields('amazon.live-v1:0', 'January 1, 2026', 'February 1, 2026'))}\`\`\`\n`)), expected)
+})
+for (const [name, markdown, pattern] of [
+  ['an unknown label', bedrockEntry([...bedrockFields('amazon.unknown-label-v1:0'), ['Retirement date', 'September 1, 2026']]), /line \d+: unrecognised label: Retirement date/],
+  ['a renamed label', bedrockEntry(bedrockFields('amazon.renamed-label-v1:0').map(([label, value]) => [label === 'EOL date' ? 'EOL Date' : label, value])), /unrecognised label: EOL Date/],
+  ['a missing Model ID', bedrockEntry(bedrockFields('amazon.no-id-v1:0').filter(([label]) => label !== 'Model ID')), /the Example entry has no Model ID/],
+  ['a missing Legacy date', bedrockEntry(bedrockFields('amazon.no-legacy-v1:0').filter(([label]) => label !== 'Legacy date')), /amazon\.no-legacy-v1:0 is missing its Legacy date/],
+  ['a missing EOL date', bedrockEntry(bedrockFields('amazon.no-eol-v1:0').filter(([label]) => label !== 'EOL date')), /amazon\.no-eol-v1:0 is missing its EOL date/],
+  ['a duplicated label', bedrockEntry([...bedrockFields('amazon.twice-v1:0'), ['EOL date', 'October 1, 2026']]), /line \d+: duplicate EOL date/],
+  ['a duplicated Model ID', bedrockEntry([...bedrockFields('amazon.first-v1:0'), ['Model ID', 'amazon.second-v1:0']]), /duplicate Model ID/],
+  ['a label set both for the entry and on a regional line', bedrockEntry([...bedrockFields('amazon.both-v1:0').slice(0, 2), ['Legacy date', 'March 1, 2026'], [['Regions', 'us-east-1'], ['Legacy date', 'April 1, 2026'], ['EOL date', 'September 1, 2026'], ['Public extended access start date', '\u2014']]]), /duplicate Legacy date/],
+  ['a Model ID on a regional line', bedrockEntry([['Model name', 'Example'], [['Model ID', 'amazon.regional-id-v1:0'], ['Regions', 'us-east-1'], ['Legacy date', 'March 1, 2026'], ['EOL date', 'September 1, 2026'], ['Public extended access start date', '\u2014']]]), /Model ID inside a regional line/],
+  ['a duplicated label on a regional line', bedrockEntry([...bedrockFields('amazon.regional-twice-v1:0').slice(0, 2), [['Regions', 'us-east-1'], ['EOL date', 'September 1, 2026'], ['Legacy date', 'March 1, 2026'], ['EOL date', 'October 1, 2026'], ['Public extended access start date', '\u2014']]]), /duplicate EOL date/],
+  ['a regional line missing a date', bedrockEntry([...bedrockFields('amazon.regional-short-v1:0').slice(0, 2), [['Regions', 'us-east-1'], ['Legacy date', 'March 1, 2026'], ['Public extended access start date', '\u2014']]]), /amazon\.regional-short-v1:0 is missing its EOL date/],
+  ['a malformed regional segment', bedrockEntry([...bedrockFields('amazon.regional-bad-v1:0').slice(0, 2), ['Regions', 'us-east-1 / **Legacy date** March 1, 2026']]), /unrecognised segment: \*\*Legacy date\*\* March 1, 2026/],
+  ['an entry without labelled fields', '- **Example**\n', /the Example entry has no labelled fields/],
+  ['an unlabelled item inside an entry', bedrockEntry([...bedrockFields('amazon.unlabelled-v1:0'), ['Note', 'x']]).replace('**Note:** x', 'See the note below'), /unrecognised line in the Example entry: - See the note below/],
+  ['a continuation line inside an entry', bedrockEntry(bedrockFields('amazon.wrapped-v1:0')).replace('**Regions:** us-east-1\n', '**Regions:** us-east-1,\n    us-west-2\n'), /unrecognised line in the Example entry: us-west-2/],
+  ['a labelled item outside an entry', `Some prose.\n  - **Model ID:** amazon.loose-v1:0\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /labelled item outside a model entry/],
+  ['a labelled item after a blank line', bedrockEntry(bedrockFields('amazon.split-entry-v1:0')).replace('  - **EOL date:**', '\n  - **EOL date:**'), /labelled item outside a model entry/],
+  ['a Model ID label in prose', `${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}\n**Model ID:** amazon.prose-v1:0\n`, /has the label Model ID outside a model entry/],
+  ['a top-level labelled item', `${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}\n- **EOL date:** September 1, 2026\n`, /has the label EOL date outside a model entry/],
+  ['a lifecycle pipe table', `| Model ID | Legacy date | EOL date |\n| --- | --- | --- |\n| amazon.table-v1:0 | March 1, 2026 | September 1, 2026 |\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /line \d+: lifecycle table where labelled lists are expected/],
+  ['a raw HTML table', `<table><tr><th>Model ID</th></tr></table>\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /raw HTML table/],
+  ['a misaligned pipe table', `| Region | Note |\n| --- | --- |\n| us-east-1 |\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /line \d+: table row has 1 cells; the header has 2/],
+  ['an EOL date with no sooner than', bedrockEntry(bedrockFields('amazon.floor-v1:0', 'March 1, 2026', 'No sooner than January 8, 2027')), /amazon\.floor-v1:0 has an unrecognised EOL date: No sooner than January 8, 2027/],
+  ['an EOL date with or later', bedrockEntry(bedrockFields('amazon.later-v1:0', 'March 1, 2026', 'January 8, 2027 or later')), /amazon\.later-v1:0 has an unrecognised EOL date: January 8, 2027 or later/],
+  ['a tentative EOL date', bedrockEntry(bedrockFields('amazon.tentative-v1:0', 'March 1, 2026', 'January 8, 2027 (tentative)')), /unrecognised EOL date: January 8, 2027 \(tentative\)/],
+  ['an EOL value with two dates', bedrockEntry(bedrockFields('amazon.two-dates-v1:0', 'March 1, 2026', 'March 8, 2027 (us-gov-west-1); January 8, 2027 elsewhere')), /unrecognised EOL date: March 8, 2027 \(us-gov-west-1\); January 8, 2027 elsewhere/],
+  ['a struck-through EOL date', bedrockEntry(bedrockFields('amazon.struck-v1:0', 'March 1, 2026', '~~January 8, 2027~~ March 8, 2027')), /struck-through text in Markdown is refused: ~~January 8, 2027~~ March 8, 2027/],
+  ['a Legacy date with a qualifier', bedrockEntry(bedrockFields('amazon.legacy-floor-v1:0', 'No earlier than March 1, 2026')), /unrecognised legacy date: No earlier than March 1, 2026/],
+  ['an extended access date with a qualifier', bedrockEntry(bedrockFields('amazon.extended-floor-v1:0', 'March 1, 2026', 'September 1, 2026', 'June 1, 2026 or later')), /unrecognised public extended access date: June 1, 2026 or later/],
+  ['a labelled sub-bullet one level deeper', bedrockEntry(bedrockFields('amazon.deeper-v1:0')).replace('  - **Regions:** us-east-1\n', '').replace(/(\*\*Public extended access start date:\*\* .*\n)/, '$1    - **Regions:** us-gov-west-1\n'), /labelled item at a different list depth in the Example entry: - \*\*Regions:\*\* us-gov-west-1/],
+  ['a labelled sub-bullet at the content column of a deeper list', bedrockEntry(bedrockFields('amazon.deep-start-v1:0')).replace('  - **Model name:**', '        - **Model name:**'), /labelled item at a different list depth/],
+  ['an HTML bold label outside an entry', `${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}\n<b>EOL date:</b> June 1, 2026 for amazon.listed-v1:0 in all Regions\n`, /line \d+: the label EOL date outside a model entry/],
+  ['an underscore bold label outside an entry', `${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}\n__EOL date:__ June 1, 2026\n`, /the label EOL date outside a model entry/],
+  ['a strong label outside an entry', `<strong>Model ID:</strong> amazon.prose-v1:0\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /the label Model ID outside a model entry/],
+  ['a plain label outside an entry', `${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}\nPublic extended access start date: June 1, 2026\n`, /the label Public extended access start date outside a model entry/],
+  ['a second label inside a value', bedrockEntry(bedrockFields('amazon.listed-v1:0')).replace('**Regions:** us-east-1', '**Regions:** us-east-1 <b>EOL date:</b> June 1, 2026'), /the Regions value holds another label: EOL date/],
+  ['a display name as Model ID', bedrockEntry(bedrockFields('DeepSeek V3')), /invalid model id: DeepSeek V3/],
+  ['an empty Model ID', bedrockEntry(bedrockFields('')), /invalid model id: \(empty\)/],
+]) {
+  reviewTest(`Markdown lifecycle: Bedrock fails closed on ${name}`, () => {
+    strictAssert.match(bedrockError(bedrockPage(markdown)), pattern)
+  })
 }
-assert(malformedExtendedAccessReason.includes('unrecognised public extended access date'), 'Bedrock parser fails closed on malformed public Extended Access dates')
-let missingExtendedAccessColumnReason = ''
-try {
-  parseBedrockLifecycleHtml(`
-    <table>
-      <tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th></tr>
-      <tr><td>amazon.schema-drift-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td></tr>
-    </table>
-  `)
-} catch (error) {
-  missingExtendedAccessColumnReason = error.message
-}
-assert(missingExtendedAccessColumnReason.includes('missing the Public extended access start date column'), 'Bedrock parser fails closed when the official table schema drops the Extended Access column')
+reviewTest('Markdown lifecycle: Bedrock ignores unrelated lists and tables', () => {
+  const live = bedrockEntry(bedrockFields('amazon.live-v1:0'))
+  const expected = parseBedrockLifecycleMarkdown(bedrockPage(live))
+  const extras = '+ Create a new custom model deployment for on-demand inference.\n+ Continue using any existing on-demand deployments.\n  - nested detail\n\n| Region | Note |\n| --- | --- |\n| us-east-1 | ok |\n'
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(live, extras)), expected)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(live, '**Regions** column notes and **EOL** prose do not count as labels.\n')), expected)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage('**For models with EOL dates after February 1, 2026: ** After a minimum of 3 months in the Legacy state, a model enters public extended access.\n\n', live)), expected)
+})
+reviewTest('Markdown lifecycle: Bedrock reads entry fields at any one consistent list depth', () => {
+  const expected = parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry(bedrockFields('amazon.live-v1:0'))))
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry(bedrockFields('amazon.live-v1:0')).replace(/^ {2}-/gm, '    -'))), expected)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry(bedrockFields('amazon.live-v1:0')).replace(/^ {2}-/gm, '\t-'))), expected)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry(bedrockFields('amazon.live-v1:0', 'March 1, 2026 ', 'Sept 1, 2026')))), expected)
+})
 
-const cardIndexHtml = fs.readFileSync(path.join(fixtures, 'bedrock-model-cards.html'), 'utf8')
-const cardUrls = parseBedrockModelCardsIndexHtml(cardIndexHtml)
-const cardHtml = new Map(cardUrls.map(url => [url, fs.readFileSync(path.join(fixtures, 'bedrock-model-cards', path.basename(new URL(url).pathname)), 'utf8')]))
-const cards = new Map([...cardHtml].map(([url, html]) => [path.basename(new URL(url).pathname), parseBedrockModelCardHtml(html, url)]))
+const cardIndexMarkdown = fs.readFileSync(path.join(fixtures, 'bedrock-model-cards.md'), 'utf8')
+const cardUrls = parseBedrockModelCardsIndexMarkdown(cardIndexMarkdown)
+const cardMarkdown = new Map(cardUrls.map(url => [url, fs.readFileSync(path.join(fixtures, 'bedrock-model-cards', path.basename(new URL(bedrockMarkdownUrl(url)).pathname)), 'utf8')]))
+const cards = new Map([...cardMarkdown].map(([url, markdown]) => [path.basename(new URL(url).pathname), parseBedrockModelCardMarkdown(markdown, url)]))
 const card = slug => cards.get(`model-card-${slug}.html`)
 const cardRecords = [...cards.values()].flatMap(result => result.records)
 const skippedCards = [...cards.values()].flatMap(result => result.skipped)
-assert(cardUrls.length === 11 && cardRecords.length === 10 && skippedCards.length === 2, 'eleven Bedrock cards yield ten records and two reported skips')
+assert(cardUrls.length === 12 && cardRecords.length === 10 && skippedCards.length === 2, 'twelve Bedrock cards yield ten records and two reported skips')
+assert(cardUrls.every(url => url.startsWith(new URL('.', BEDROCK_MODEL_CARDS_URL).href) && url.endsWith('.html')), 'Bedrock index links resolve to the human card pages')
 const llamaCard = card('meta-llama-3-1-405b-instruct').records[0]
-assert(card('meta-llama-3-1-405b-instruct').records.length === 1 && llamaCard.bedrockId === 'meta.llama3-1-405b-instruct-v1:0' && llamaCard.shutdown === '2026-07-07' && llamaCard.status === 'legacy' && !Object.hasOwn(llamaCard, 'date_precision'), 'a "Legacy: <date>" Model EOL date is an exact legacy shutdown')
+assert(card('meta-llama-3-1-405b-instruct').records.length === 1 && llamaCard.bedrockId === 'meta.llama3-1-405b-instruct-v1:0' && llamaCard.shutdown === '2026-07-07' && llamaCard.status === 'legacy' && !Object.hasOwn(llamaCard, 'date_precision'), 'an exact Model EOL date with a matching EOL lifecycle line is an exact legacy shutdown')
 const fableCard = card('anthropic-claude-fable-5-1').records[0]
 assert(card('anthropic-claude-fable-5-1').records.length === 1 && fableCard.shutdown === '2027-09-01' && fableCard.date_precision === 'tentative' && fableCard.status === 'active' && !Object.hasOwn(fableCard, 'announced'), 'Fable deduplicates endpoint IDs and keeps its unannounced N/A EOL floor')
 const canvasCard = card('amazon-nova-canvas').records[0]
 assert(canvasCard.shutdown === '2026-09-30' && canvasCard.status === 'legacy' && !Object.hasOwn(canvasCard, 'date_precision'), 'Nova Canvas uses its exact EOL and regional Legacy status')
 const liteCard = card('amazon-nova-lite').records[0]
 assert(liteCard.shutdown === '2025-12-05' && liteCard.date_precision === 'tentative', 'Nova Lite selects the later human floor over the US floor')
-const haikuCards = card('anthropic-claude-haiku-4-5').records
-assert(haikuCards.length === 2 && haikuCards.every(record => record.shutdown === '2026-10-16') && haikuCards.some(record => record.bedrockId === 'anthropic.claude-haiku-4-5'), 'Haiku preserves both Model IDs and selects the later floor')
+const haikuCard = card('anthropic-claude-haiku-4-5').records[0]
+assert(card('anthropic-claude-haiku-4-5').records.length === 1 && haikuCard.bedrockId === 'anthropic.claude-haiku-4-5' && haikuCard.shutdown === '2026-10-16' && haikuCard.date_precision === 'tentative', 'Haiku skips its N/A runtime Model ID and keeps the bare mantle ID')
+const haikuCards = [haikuCard, { ...haikuCard, bedrockId: 'anthropic.claude-haiku-4-5-20251001-v1:0' }]
 assert(card('amazon-titan-text-embeddings-v2-2').skipped[0]?.reason === 'no lifecycle fields' && card('amazon-titan-text-embeddings-v2-2').skipped[0]?.ids[0] === 'amazon.titan-embed-g1-text-02', 'Titan reports its URL and ID despite having only Model EOL date N/A')
-assert(card('mistral-ai-devstral-2-123b').skipped[0]?.reason === 'no day-precision date', 'Devstral reports its month-only floor without inventing a day')
+assert(card('mistral-ai-magistral-small-2509').skipped[0]?.reason === 'no day-precision date', 'Magistral reports a card with a Legacy period and no date without inventing a day')
 const mistralCard = card('mistral-ai-mistral-7b-instruct').records[0]
-assert(mistralCard.shutdown === '2025-03-01' && mistralCard.date_precision === 'tentative', 'Mistral selects the later US not-before floor')
+assert(mistralCard.shutdown === '2027-03-30' && mistralCard.status === 'legacy' && !Object.hasOwn(mistralCard, 'date_precision'), 'Mistral 7B reads an exact EOL with Legacy status')
 const jambaCard = card('ai21-labs-jamba-1-5-large').records[0]
 assert(jambaCard.shutdown === '2026-11-26' && jambaCard.status === 'legacy' && !Object.hasOwn(jambaCard, 'date_precision'), 'Jamba parses an exact EOL and takes Legacy status from its Model lifecycle line without regional cells')
 const cardOnlyJamba = mergeBedrockSources(bedrockEntries.filter(record => record.bedrockId !== jambaCard.bedrockId), [jambaCard])
@@ -969,6 +1406,8 @@ const commandCard = card('cohere-command-r').records[0]
 assert(commandCard.shutdown === '2026-08-19' && !Object.hasOwn(commandCard, 'date_precision'), 'Command R retains its exact EOL despite its month-only floor')
 const embedCard = card('cohere-embed-v4').records[0]
 assert(embedCard.shutdown === '2026-04-15' && embedCard.date_precision === 'tentative', 'Embed v4 parses a floor without a publisher feed entry')
+const marengoFixtureCard = card('twelvelabs-marengo-embed-3-0').records[0]
+assert(marengoFixtureCard.shutdown === '2027-03-22' && marengoFixtureCard.status === 'legacy' && !Object.hasOwn(marengoFixtureCard, 'date_precision'), 'Marengo Embed 3.0 reads its regional Legacy lifecycle at its regional EOL date')
 assert(cardRecords.every(record => cardUrls.includes(record.source) && !Object.hasOwn(record, 'announced') && !Object.hasOwn(record, 'legacy')), 'all card records retain their own source and omit announcements')
 
 const bedrockSourceNotices = []
@@ -986,6 +1425,7 @@ const emptyBedrockFeed = { publisher: 'amazon', models: [] }
 const bedrockInfoOptions = { sourceConflicts: bedrockConflicts.conflicts, skippedModelCards: skippedCards }
 const bedrockInfoDiff = renderSemanticDiff(emptyBedrockFeed, emptyBedrockFeed, bedrockInfoOptions)
 assert(!compareFeeds(emptyBedrockFeed, emptyBedrockFeed, bedrockInfoOptions).changed && bedrockInfoDiff.includes('## Source conflicts') && bedrockInfoDiff.includes('legacy table wins') && bedrockInfoDiff.includes('## Model cards without lifecycle fields') && bedrockInfoDiff.includes('no day-precision date'), 'Bedrock conflicts and skips render informational sections without semantic changes')
+assert(bedrockInfoDiff.includes(BEDROCK_LIFECYCLE_URL) && skippedCards.every(item => bedrockInfoDiff.includes(item.source)) && !bedrockInfoDiff.includes('.md'), 'Bedrock conflicts and skips cite the human pages, not the Markdown copies')
 
 const realBedrockFeeds = ['amazon', 'anthropic', 'cohere', 'mistral'].map(publisher => JSON.parse(fs.readFileSync(path.join(root, 'feeds', `${publisher}.json`), 'utf8')))
 const realBedrockMerge = mergeBedrockDistributions(realBedrockFeeds, { records: loadedBedrock.records })
@@ -995,8 +1435,8 @@ assert(normalizeBedrockId(mistralCard.bedrockId) === 'mistral-7b-instruct' && re
 for (const record of [embedCard, jambaCard, liteCard]) {
   assert(realBedrockMerge.noPublisherFeed.some(item => item.bedrockId === record.bedrockId), `absent publisher ID remains unmatched: ${record.bedrockId}`)
 }
-assert(!realBedrockMerge.noPublisherFeed.some(item => item.bedrockId === haikuCards[1].bedrockId) && bedrockDistribution('anthropic', 'claude-haiku-4-5-20251001')?.date_precision === 'tentative', 'the bare Haiku 4.5 Bedrock ID binds through the committed publisher alias')
-assert(bedrockDistribution('anthropic', 'claude-fable-5-1')?.source === fableCard.source && bedrockDistribution('anthropic', 'claude-haiku-4-5-20251001')?.date_precision === 'tentative', 'Fable and dated Haiku bind tentative distributions with card sources')
+assert(!realBedrockMerge.noPublisherFeed.some(item => item.bedrockId === haikuCard.bedrockId) && bedrockDistribution('anthropic', 'claude-haiku-4-5-20251001')?.date_precision === 'tentative', 'the bare Haiku 4.5 Bedrock ID binds through the committed publisher alias')
+assert(bedrockDistribution('anthropic', 'claude-fable-5-1')?.source === fableCard.source && bedrockDistribution('anthropic', 'claude-haiku-4-5-20251001')?.source === haikuCard.source, 'Fable and dated Haiku bind tentative distributions with card sources')
 assert(bedrockDistribution('amazon', 'nova-canvas')?.source === BEDROCK_LIFECYCLE_URL && bedrockDistribution('cohere', 'command-r-03-2024')?.source === BEDROCK_LIFECYCLE_URL, 'legacy-bound distributions use the legacy page source')
 assert(realBedrockMerge.feeds.every(feed => validateFeed(feed).length === 0), 'combined Bedrock fixture feeds pass semantic validation')
 
@@ -1011,110 +1451,138 @@ try {
 } catch (error) { cardCollisionReason = error.message }
 assert(haikuCards.every(record => cardCollisionReason.includes(record.bedrockId)), 'different card payloads bound to one model throw naming both IDs')
 
-const fableHtml = cardHtml.get(fableCard.source)
-const canvasHtml = cardHtml.get(canvasCard.source)
-const eolField = value => fableHtml.replace('<b>Model EOL date:</b> N/A', `<b>Model EOL date:</b> ${value}`)
+const fableMarkdown = cardMarkdown.get(fableCard.source)
+const canvasMarkdown = cardMarkdown.get(canvasCard.source)
+const commandMarkdown = cardMarkdown.get(commandCard.source)
+const cardField = (label, value) => `+ **${label}:** ${value}\n`
+const eolField = value => fableMarkdown.replace(cardField('Model EOL date', 'N/A'), cardField('Model EOL date', value))
 const reviewCardSource = new URL('model-card-example.html', BEDROCK_MODEL_CARDS_URL).href
-const reviewIdTable = '<table><tr><th>Model ID</th></tr><tr><td>anthropic.example-v1:0</td></tr></table>'
-const reviewFloor = '<p>EOL no sooner than: September 1, 2027</p>'
+const cardRow = cells => `| ${cells.join(' | ')} |`
+const cardTable = (header, rows) => `\n${[cardRow(header), cardRow(header.map(() => '---')), ...rows.map(cardRow)].join('\n')}\n\n`
+const cellTable = (...cells) => cardTable(cells.map((_, index) => `Region ${index + 1}`), [cells])
+const reviewIdTable = cardTable(['**Model ID**'], [['anthropic.example-v1:0']])
+const reviewFloor = cardField('EOL no sooner than', 'September 1, 2027')
 const reviewCard = reviewIdTable + reviewFloor
-reviewTest('Third pass F1: Bedrock counts a td Model ID header before a related th table', () => {
-  const html = '<table><tr><td>Model ID</td></tr><tr><td>anthropic.example-v1:0</td></tr></table><p>Model EOL date: December 1, 2026</p><h2>Related models</h2><table><tr><th>Model ID</th></tr><tr><td>anthropic.other-v1:0</td></tr></table>'
-  strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), error =>
+const parseReviewCard = markdown => parseBedrockModelCardMarkdown(markdown, reviewCardSource)
+reviewTest('Markdown card: Bedrock refuses an HTML body, an empty body, a raw HTML table, and a misaligned pipe table', () => {
+  for (const [markdown, pattern] of [
+    ['<!DOCTYPE html><html><body><table><tr><th>Model ID</th></tr></table></body></html>', /page is HTML, not Markdown/],
+    ['', /empty/],
+    [`${reviewCard}<table><tr><td>Legacy (EOL: 2028-01-01)</td></tr></table>\n`, /raw HTML table/],
+    [`${reviewCard}\n| Region | In-Region |\n| --- | --- |\n| us-east-1 |\n`, /page: line \d+: table row has 1 cells; the header has 2/],
+  ]) {
+    strictAssert.throws(() => parseReviewCard(markdown), error => error.message.includes(reviewCardSource) && pattern.test(error.message))
+  }
+})
+reviewTest('Third pass F1: Bedrock counts a Model ID header in a related-models table too', () => {
+  const markdown = `${reviewIdTable}${cardField('Model EOL date', 'December 1, 2026')}\n## Related models\n${cardTable(['Model ID'], [['anthropic.other-v1:0']])}`
+  strictAssert.throws(() => parseReviewCard(markdown), error =>
     error.message.includes(reviewCardSource) && error.message.includes('more than one Model ID table'))
 })
-reviewTest('Third pass F1: Bedrock recognises Model ID in any first-row cell regardless of cell kind', () => {
-  const html = '<table><tr><td>Model</td><td>Model ID</td></tr><tr><td>Example</td><td>anthropic.example-v1:0</td></tr></table>' + reviewFloor
-  strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+reviewTest('Third pass F1: Bedrock recognises Model ID in any header cell, with or without emphasis', () => {
+  strictAssert.deepEqual(parseReviewCard(cardTable(['Model', 'Model ID'], [['Example', 'anthropic.example-v1:0']]) + reviewFloor), parseReviewCard(reviewCard))
+  strictAssert.deepEqual(parseReviewCard(cardTable(['Model ID'], [['`anthropic.example-v1:0`']]) + reviewFloor), parseReviewCard(reviewCard))
 })
-reviewTest('Third pass F1: Bedrock refuses a Model ID header outside the first row', () => {
-  const html = reviewCard.replace('<table>', '<table><tr><td>Unrecognised heading</td></tr>')
-  strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /no Model ID table/)
+reviewTest('Third pass F1: Bedrock refuses a Model ID header outside the header row', () => {
+  strictAssert.throws(() => parseReviewCard(cardTable(['Unrecognised heading'], [['**Model ID**'], ['anthropic.example-v1:0']]) + reviewFloor), /no Model ID table/)
 })
-for (const [shape, html] of [
+for (const [shape, markdown] of [
   ['zero', reviewFloor],
-  ['related models', reviewCard + '<h2>Related models</h2><table><tr><th>Model ID</th></tr><tr><td>anthropic.other-v1:0</td></tr></table>'],
+  ['related models', reviewCard + `\n## Related models\n${cardTable(['**Model ID**'], [['anthropic.other-v1:0']])}`],
   ['duplicate', reviewCard + reviewIdTable],
 ]) {
   reviewTest(`Second pass F1: Bedrock rejects ${shape} Model ID tables`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), error =>
+    strictAssert.throws(() => parseReviewCard(markdown), error =>
       error.message.includes(reviewCardSource) && error.message.includes('Model ID table'))
   })
 }
-const reviewEndpointTable = ids => `<table><tr><th>Endpoint</th><th>Model ID</th><th>Geo inference ID</th><th>Global inference ID</th></tr>${ids.map((id, index) =>
-  `<tr><td>endpoint-${index}</td><td>${id}</td><td>us.anthropic.example-v1:0 eu.anthropic.example-v1:0</td><td>global.anthropic.example-v1:0</td></tr>`).join('')}</table>`
+reviewTest('Second pass F1: Bedrock rejects a Model ID table with two Model ID columns or no rows', () => {
+  strictAssert.throws(() => parseReviewCard(cardTable(['Model ID', 'Model ID'], [['anthropic.example-v1:0', 'anthropic.example-v1:0']]) + reviewFloor), /ambiguous Model ID columns/)
+  strictAssert.throws(() => parseReviewCard(cardTable(['Model ID'], []) + reviewFloor), /Model ID table has no entries/)
+})
+const reviewEndpointTable = ids => cardTable(['**Endpoint**', '**Model ID**', '**Geo inference ID**', '**Global inference ID**'], ids.map((id, index) =>
+  [`endpoint-${index}`, id, '`us.anthropic.example-v1:0`<br />`eu.anthropic.example-v1:0`', 'global.anthropic.example-v1:0']))
 reviewTest('Endpoint table: Bedrock skips an N/A Model ID cell and records only the base id', () => {
-  const html = reviewEndpointTable(['N/A', 'anthropic.example-v1:0']) + reviewFloor
-  strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  strictAssert.deepEqual(parseReviewCard(reviewEndpointTable(['N/A', 'anthropic.example-v1:0']) + reviewFloor), parseReviewCard(reviewCard))
 })
 reviewTest('Endpoint table: Bedrock skips a Model ID table whose every id is N/A with a notice', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(reviewEndpointTable(['N/A', 'n/a']) + reviewFloor, reviewCardSource), {
+  strictAssert.deepEqual(parseReviewCard(reviewEndpointTable(['N/A', 'n/a']) + reviewFloor), {
     records: [], skipped: [{ source: reviewCardSource, ids: [], reason: 'no model ids' }],
   })
 })
 reviewTest('Endpoint table: Bedrock matches the N/A Model ID marker case-insensitively', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(reviewEndpointTable(['n/a', 'anthropic.example-v1:0']) + reviewFloor, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  strictAssert.deepEqual(parseReviewCard(reviewEndpointTable(['n/a', 'anthropic.example-v1:0']) + reviewFloor), parseReviewCard(reviewCard))
 })
 for (const id of ['N/A (see profiles)', 'not available', '']) {
   reviewTest(`Endpoint table: Bedrock still rejects a non-N/A invalid Model ID: ${JSON.stringify(id)}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(reviewEndpointTable([id, 'anthropic.example-v1:0']) + reviewFloor, reviewCardSource), error =>
+    strictAssert.throws(() => parseReviewCard(reviewEndpointTable([id, 'anthropic.example-v1:0']) + reviewFloor), error =>
       error.message.includes(reviewCardSource) && error.message.includes('invalid Model ID in row 2'))
   })
 }
-const reviewKimiFields = '<p>Model launch date: 18th Sept 2026</p><p>EOL no sooner than: Not Applicable, at least 45 day EOL Notice will be provided</p><p>Legacy period: at least 45 days</p>'
+const reviewKimiFields = cardField('Model launch date', '18th Sept 2026') + cardField('EOL no sooner than', 'Not Applicable, at least 45 day EOL Notice will be provided') + cardField('Legacy period', 'at least 45 days')
 reviewTest('Free-text lifecycle: Bedrock skips a Kimi-style card without a day-precision date', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(reviewIdTable + reviewKimiFields, reviewCardSource), {
+  strictAssert.deepEqual(parseReviewCard(reviewIdTable + reviewKimiFields), {
     records: [], skipped: [{ source: reviewCardSource, ids: ['anthropic.example-v1:0'], reason: 'no day-precision date' }],
   })
 })
 reviewTest('Free-text lifecycle: Bedrock treats a bare Not Applicable floor as no floor', () => {
-  strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: Not Applicable</p>`, reviewCardSource).skipped[0]?.reason, 'no day-precision date')
-  strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: not applicable</p>`, reviewCardSource).skipped[0]?.reason, 'no day-precision date')
-  strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: N/A</p>`, reviewCardSource).skipped[0]?.reason, 'no day-precision date')
+  for (const floor of ['Not Applicable', 'not applicable', 'N/A']) {
+    strictAssert.equal(parseReviewCard(reviewIdTable + cardField('EOL no sooner than', floor)).skipped[0]?.reason, 'no day-precision date')
+  }
 })
 reviewTest('Free-text lifecycle: Bedrock accepts a Legacy period without "at least" (Claude 5.5 cards)', () => {
-  const expected = parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: at least 6 months</p>`, reviewCardSource)
+  const expected = parseReviewCard(reviewCard + cardField('Legacy period', 'at least 6 months'))
   for (const period of ['6 months', '1 month', '45 days']) {
-    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: ${period}</p>`, reviewCardSource), expected)
+    strictAssert.deepEqual(parseReviewCard(reviewCard + cardField('Legacy period', period)), expected)
   }
 })
 for (const period of ['TBD', 'six months', '6 weeks', 'at least', 'up to 6 months', '6 months minimum']) {
   reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised Legacy period: ${period}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: ${period}</p>`, reviewCardSource), /unrecognised Legacy period/)
+    strictAssert.throws(() => parseReviewCard(reviewCard + cardField('Legacy period', period)), /unrecognised Legacy period/)
   })
 }
 for (const floor of ['TBD', 'Currently Not Applicable', 'Not Applicabled', 'NA']) {
   reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised floor: ${floor}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: ${floor}</p>`, reviewCardSource), /unrecognised EOL no sooner than date/)
+    strictAssert.throws(() => parseReviewCard(reviewIdTable + cardField('EOL no sooner than', floor)), /unrecognised EOL no sooner than date/)
   })
 }
 reviewTest('Free-text lifecycle: Bedrock accepts an ordinal launch date alongside a valid floor', () => {
-  const expected = parseBedrockModelCardHtml(`${reviewCard}<p>Model launch date: September 18, 2026</p>`, reviewCardSource)
-  strictAssert.deepEqual(expected, parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  const expected = parseReviewCard(reviewCard + cardField('Model launch date', 'September 18, 2026'))
+  strictAssert.deepEqual(expected, parseReviewCard(reviewCard))
   for (const launch of ['18th Sept 2026', '18 September 2026', '1st Sep 2026', '2nd Jan 2026', '3rd March 2026', '4TH SEPT 2026']) {
-    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Model launch date: ${launch}</p>`, reviewCardSource), expected)
+    strictAssert.deepEqual(parseReviewCard(reviewCard + cardField('Model launch date', launch)), expected)
   }
 })
 for (const launch of ['Sometime 2026', '18th Smarch 2026', '18th Sept 26', '18th of Sept 2026', 'Sept 2026 18th']) {
   reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised launch date: ${launch}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Model launch date: ${launch}</p>`, reviewCardSource), /unrecognised Model launch date/)
+    strictAssert.throws(() => parseReviewCard(reviewCard + cardField('Model launch date', launch)), /unrecognised Model launch date/)
   })
 }
 reviewTest('Free-text lifecycle: Bedrock rejects an ordinal launch date that is not a calendar date', () => {
-  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Model launch date: 30th Feb 2026</p>`, reviewCardSource), /invalid date/)
+  strictAssert.throws(() => parseReviewCard(reviewCard + cardField('Model launch date', '30th Feb 2026')), /invalid date/)
+})
+reviewTest('Markdown card: Bedrock reads a field from a plain line, a list item, or bold markup alike', () => {
+  const expected = parseReviewCard(reviewIdTable + cardField('Model EOL date', 'December 1, 2027'))
+  for (const line of ['Model EOL date: December 1, 2027\n', '- Model EOL date: December 1, 2027\n', '* **Model EOL date:** December 1, 2027\n', '+  **Model EOL date:** December 1, 2027\n', '**Model EOL date**: December 1, 2027\n']) {
+    strictAssert.deepEqual(parseReviewCard(reviewIdTable + line), expected, line)
+  }
 })
 for (const [shape, comment] of [
-  ['EOL paragraph', '<p>Model EOL date: December 1, 2026</p>'],
+  ['EOL line', cardField('Model EOL date', 'December 1, 2026')],
   ['ID table', reviewIdTable.replace('anthropic.example-v1:0', 'anthropic.other-v1:0')],
-  ['regional status', '<table><tr><td>Legacy (EOL: 2026-12-01)</td></tr></table>'],
+  ['regional status', cellTable('Legacy (EOL: 2026-12-01)')],
 ]) {
   reviewTest(`Second pass F2: Bedrock ignores a commented ${shape} before extraction`, () => {
-    const visible = reviewCard + '<p>Model EOL date: December 1, 2027</p>'
-    strictAssert.deepEqual(parseBedrockModelCardHtml(`${visible}<!-- ${comment} -->`, reviewCardSource), parseBedrockModelCardHtml(visible, reviewCardSource))
+    const visible = reviewCard + cardField('Model EOL date', 'December 1, 2027')
+    strictAssert.deepEqual(parseReviewCard(`${visible}<!-- ${comment} -->\n`), parseReviewCard(visible))
   })
 }
 reviewTest('Second pass F2: A commented exact EOL cannot replace a visible floor', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<!-- <p>Model EOL date: December 1, 2026</p> -->`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  strictAssert.deepEqual(parseReviewCard(`${reviewCard}<!-- ${cardField('Model EOL date', 'December 1, 2026')} -->\n`), parseReviewCard(reviewCard))
+})
+reviewTest('Markdown card: Bedrock does not read fields or regional cells out of fenced code, but counts their labels', () => {
+  strictAssert.deepEqual(parseReviewCard(`${reviewCard}\`\`\`\n| Region |\n| --- |\n| Legacy (EOL: 2026-12-01) |\n\`\`\`\n`), parseReviewCard(reviewCard))
+  strictAssert.throws(() => parseReviewCard(`${reviewCard}\`\`\`\n${cardField('Model EOL date', 'December 1, 2026')}\`\`\`\n`), /unaccounted Model EOL date field/)
 })
 for (const [eol, payload] of [
   ['December 1, 2026', { shutdown: '2026-12-01', status: 'active' }],
@@ -1122,214 +1590,212 @@ for (const [eol, payload] of [
   ['No sooner than 12/1/2026', { shutdown: '2026-12-01', date_precision: 'tentative', status: 'active' }],
 ]) {
   reviewTest(`Second pass F3: Bedrock parses a standalone Model EOL date: ${eol}`, () => {
-    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: ${eol}</p>`, reviewCardSource), {
+    strictAssert.deepEqual(parseReviewCard(reviewIdTable + cardField('Model EOL date', eol)), {
       records: [{ bedrockId: 'anthropic.example-v1:0', ...payload, source: reviewCardSource }], skipped: [],
     })
   })
 }
 reviewTest('Free-text lifecycle: Bedrock treats "Not announced." like N/A (GPT-6.1 Sol card)', () => {
   for (const eol of ['Not announced.', 'Not announced']) {
-    strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: ${eol}</p>`, reviewCardSource).skipped[0]?.reason, 'no lifecycle fields')
+    strictAssert.equal(parseReviewCard(reviewIdTable + cardField('Model EOL date', eol)).skipped[0]?.reason, 'no lifecycle fields')
     strictAssert.deepEqual(
-      parseBedrockModelCardHtml(`${reviewIdTable}<p>Model launch date: September 29, 2026</p><p>Model EOL date: ${eol}</p>`, reviewCardSource),
-      parseBedrockModelCardHtml(`${reviewIdTable}<p>Model launch date: September 29, 2026</p><p>Model EOL date: N/A</p>`, reviewCardSource))
-    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Model EOL date: ${eol}</p>`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+      parseReviewCard(reviewIdTable + cardField('Model launch date', 'September 29, 2026') + cardField('Model EOL date', eol)),
+      parseReviewCard(reviewIdTable + cardField('Model launch date', 'September 29, 2026') + cardField('Model EOL date', 'N/A')))
+    strictAssert.deepEqual(parseReviewCard(reviewCard + cardField('Model EOL date', eol)), parseReviewCard(reviewCard))
   }
 })
-const reviewRegionEol = '<table><tr><td>Legacy (EOL: 2028-01-01)</td></tr></table>'
+const reviewRegionEol = cellTable('Legacy (EOL: 2028-01-01)')
 for (const eol of ['N/A', 'Not announced.', 'No sooner than 9/1/2027']) {
-  for (const [shape, extra] of [['alone', ''], ['with a launch date', '<p>Model launch date: September 29, 2026</p>'], ['with a floor', reviewFloor]]) {
+  for (const [shape, extra] of [['alone', ''], ['with a launch date', cardField('Model launch date', 'September 29, 2026')], ['with a floor', reviewFloor]]) {
     reviewTest(`PR 107 review: Bedrock fails closed on a regional EOL without an exact Model EOL date (${eol}, ${shape})`, () => {
-      strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}${extra}<p>Model EOL date: ${eol}</p>${reviewRegionEol}`, reviewCardSource),
+      strictAssert.throws(() => parseReviewCard(`${reviewIdTable}${extra}${cardField('Model EOL date', eol)}${reviewRegionEol}`),
         error => error.message.includes(reviewCardSource) && error.message.includes('region EOL 2028-01-01 without an exact Model EOL date'))
     })
   }
 }
 reviewTest('PR 107 review: Bedrock fails closed on a regional EOL with no Model EOL date field', () => {
-  strictAssert.throws(() => parseBedrockModelCardHtml(reviewIdTable + reviewRegionEol, reviewCardSource), /region EOL 2028-01-01 without an exact Model EOL date/)
+  strictAssert.throws(() => parseReviewCard(reviewIdTable + reviewRegionEol), /region EOL 2028-01-01 without an exact Model EOL date/)
 })
-const reviewNoIdTable = '<table><tr><th>Model ID</th></tr><tr><td>N/A</td></tr></table>'
+const reviewNoIdTable = cardTable(['**Model ID**'], [['N/A']])
 reviewTest('PR 107 review: Bedrock validates regional EOL cells on a card with no recordable Model ID', () => {
-  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewNoIdTable}<table><tr><td>Legacy (EOL: someday)</td></tr></table>`, reviewCardSource), /unrecognised region EOL: Legacy \(EOL: someday\)/)
-  strictAssert.equal(parseBedrockModelCardHtml(reviewNoIdTable + reviewRegionEol, reviewCardSource).skipped[0]?.reason, 'no model ids')
+  strictAssert.throws(() => parseReviewCard(`${reviewNoIdTable}${cellTable('Legacy (EOL: someday)')}`), /unrecognised region EOL: Legacy \(EOL: someday\)/)
+  strictAssert.equal(parseReviewCard(reviewNoIdTable + reviewRegionEol).skipped[0]?.reason, 'no model ids')
 })
 reviewTest('PR 107 review: Bedrock reports a malformed regional EOL before an invalid Model EOL date', () => {
-  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: February 30, 2028</p><table><tr><td>Legacy (EOL: someday)</td></tr></table>`, reviewCardSource),
+  strictAssert.throws(() => parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'February 30, 2028')}${cellTable('Legacy (EOL: someday)')}`),
     /unrecognised region EOL: Legacy \(EOL: someday\)/)
 })
 reviewTest('PR 107 review: Bedrock records a Legacy-prefixed Model EOL date with matching regional cells', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: Legacy: January 1, 2028</p>${reviewRegionEol}${reviewRegionEol}`, reviewCardSource), {
+  strictAssert.deepEqual(parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'Legacy: January 1, 2028')}${reviewRegionEol}${reviewRegionEol}`), {
     records: [{ bedrockId: 'anthropic.example-v1:0', shutdown: '2028-01-01', status: 'legacy', source: reviewCardSource }], skipped: [],
   })
 })
 for (const eol of ['August 31, 2027', 'Legacy: August 31, 2027']) {
   reviewTest(`PR 107 review: Bedrock rejects a Model EOL date before the EOL no sooner than floor: ${eol}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Model EOL date: ${eol}</p>`, reviewCardSource),
+    strictAssert.throws(() => parseReviewCard(reviewCard + cardField('Model EOL date', eol)),
       error => error.message.includes(reviewCardSource) && error.message.includes('Model EOL date 2027-08-31 precedes EOL no sooner than 2027-09-01'))
   })
 }
 reviewTest('PR 107 review: Bedrock accepts a Model EOL date on or after the floor, and ignores a month-only floor', () => {
   for (const [eol, shutdown] of [['September 1, 2027', '2027-09-01'], ['September 2, 2027', '2027-09-02']]) {
-    strictAssert.equal(parseBedrockModelCardHtml(`${reviewCard}<p>Model EOL date: ${eol}</p>`, reviewCardSource).records[0]?.shutdown, shutdown)
+    strictAssert.equal(parseReviewCard(reviewCard + cardField('Model EOL date', eol)).records[0]?.shutdown, shutdown)
   }
-  strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>EOL no sooner than: Sep 2027</p><p>Model EOL date: August 31, 2027</p>`, reviewCardSource).records[0]?.shutdown, '2027-08-31')
+  strictAssert.equal(parseReviewCard(reviewIdTable + cardField('EOL no sooner than', 'Sep 2027') + cardField('Model EOL date', 'August 31, 2027')).records[0]?.shutdown, '2027-08-31')
 })
 for (const cell of ['legacy (EOL: 2028-01-01)', 'Legacy (EOL : 2028-01-01)', 'Legacy ( EOL: 2028-01-01)', 'LEGACY (eol: 2028-01-01)', 'Legacy(EOL: 2028-01-01)', 'Legacy (EOL: 2028-1-1)',
   'US East (N. Virginia): Legacy (EOL: 2028-01-01)', 'Legacy - EOL: 2028-01-01', 'Legacy (End of life: 2028-01-01)', 'End-of-life 2028-01-01',
   'Legacy', 'Legacy model', 'Legacy (EOL)', 'Legacy (EOL policy)',
   'E.O.L.: 2028-01-01', 'End of lifecycle: 2028-01-01', 'End of support: 2028-01-01', 'Retired (2028-01-01)', 'Retired']) {
   reviewTest(`PR 107 review: Bedrock fails closed on any table cell that mentions legacy or EOL in another shape: ${cell}`, () => {
-    const regional = `<table><tr><td>${cell}</td></tr></table>`
-    for (const html of [`${reviewIdTable}<p>Model EOL date: January 1, 2028</p>${regional}`, reviewNoIdTable + regional]) {
-      strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unrecognised region EOL/)
+    const regional = cellTable(cell)
+    for (const markdown of [`${reviewIdTable}${cardField('Model EOL date', 'January 1, 2028')}${regional}`, reviewNoIdTable + regional]) {
+      strictAssert.throws(() => parseReviewCard(markdown), /unrecognised region EOL/)
     }
   })
 }
 for (const [shape, cell] of [
-  ['img alt text', '<td><img src="icon-legacy.png" alt="Legacy (EOL: 2028-01-02)"></td>'],
-  ['a td title', '<td title="Legacy (EOL: 2028-01-02)"></td>'],
-  ['an abbr title', '<td><abbr title="End of life: 2028-01-02">Retiring</abbr></td>'],
-  ['an aria-label', '<td><span aria-label="Legacy (EOL: 2028-01-02)"></span></td>'],
-  ['a row header', '<th scope="row">Legacy (EOL: 2028-01-02)</th>'],
-  ['split markup', '<td>Leg<span>acy</span> (E<em>OL</em>: 2028-01-02)</td>'],
+  ['image alt text', '![Legacy (EOL: 2028-01-02)](https://docs.aws.amazon.com/bedrock/latest/userguide/images/icons/icon-legacy.png)'],
+  ['a link title', '[Retiring](model-lifecycle.html "End of life: 2028-01-02")'],
+  ['a raw abbr title', '<abbr title="End of life: 2028-01-02">Retiring</abbr>'],
+  ['a raw aria-label', '<span aria-label="Legacy (EOL: 2028-01-02)"></span>'],
+  ['split emphasis', 'Leg**acy** (E*OL*: 2028-01-02)'],
+  ['split raw markup', 'Leg<span>acy</span> (E<em>OL</em>: 2028-01-02)'],
 ]) {
   reviewTest(`PR 107 review: Bedrock does not let a regional EOL hide in ${shape}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr>${cell}</tr></table>`, reviewCardSource),
+    strictAssert.throws(() => parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'January 1, 2028')}${cellTable(cell)}`),
       /unrecognised region EOL|region EOL 2028-01-02 differs/)
   })
 }
-reviewTest('PR 107 review: Bedrock records a matching regional EOL from a row header as legacy', () => {
-  strictAssert.equal(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 2, 2028</p><table><tr><th scope="row">Legacy (EOL: 2028-01-02)</th></tr></table>`, reviewCardSource).records[0]?.status, 'legacy')
+reviewTest('PR 107 review: Bedrock records a matching regional EOL from a header cell as legacy', () => {
+  strictAssert.equal(parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'January 2, 2028')}${cardTable(['Legacy (EOL: 2028-01-02)'], [['us-east-1']])}`).records[0]?.status, 'legacy')
 })
 reviewTest('PR 107 review: Bedrock does not read lifecycle words inside Model ID and inference ID cells', () => {
   for (const id of ['vendor.eol-model-v1:0', 'vendor.legacy-model-v1:0', 'vendor.retired-v1:0']) {
-    const table = `<table><tr><th>Model ID</th><th>Geo inference ID</th></tr><tr><td>${id}</td><td>us.${id} eu.${id}</td></tr></table>`
-    strictAssert.equal(parseBedrockModelCardHtml(table, reviewCardSource).skipped[0]?.reason, 'no lifecycle fields')
-    strictAssert.equal(parseBedrockModelCardHtml(`${table}<p>Model EOL date: January 1, 2028</p>`, reviewCardSource).records[0]?.status, 'active')
+    const table = cardTable(['**Model ID**', '**Geo inference ID**'], [[id, `\`us.${id}\`<br />\`eu.${id}\``]])
+    strictAssert.equal(parseReviewCard(table).skipped[0]?.reason, 'no lifecycle fields')
+    strictAssert.equal(parseReviewCard(table + cardField('Model EOL date', 'January 1, 2028')).records[0]?.status, 'active')
   }
 })
-reviewTest('PR 107 review pass 6: Bedrock does not read lifecycle words out of ids, URLs, digits, underscores, other attributes, or double-decoded entities', () => {
-  for (const cell of [
-    '<td>us.vendor.eol2-v1:0 N/A</td>', '<td>us.vendor.eol-v1:0 N/A</td>', '<td>us.vendor.legacy_model-v1:0 Not supported</td>',
-    '<th>EOL2 availability</th>', '<td>https://bedrock-mantle.{region}.api.aws/vendor/eol</td>', '<td>https://bedrock-mantle.{region}.api.aws/vendor/eol2</td>',
-    '<td><span data-title="Legacy status">Active</span></td>', `<td><img src='https://icons.example/x?alt="legacy"'>Supported</td>`,
-    '<td data-aria-label="EOL">Supported</td>', '<td>l&amp;#101;gacy</td>',
-    '<td><img src="icon-yes.png" alt="Green circle with check mark"></td>', '<td><img src="icon-no.png" alt="Red circle with X"></td>',
+reviewTest('PR 107 review pass 6: Bedrock does not read lifecycle words out of ids, URLs, link and image targets, digits, underscores, or double-decoded entities', () => {
+  for (const cells of [
+    ['us.vendor.eol2-v1:0 N/A'], ['us.vendor.eol-v1:0 N/A'], ['us.vendor.legacy_model-v1:0 Not supported'],
+    ['https://bedrock-mantle.{region}.api.aws/vendor/eol'], ['https://bedrock-mantle.{region}.api.aws/vendor/eol2'],
+    ['[Supported](https://icons.example/legacy.html)'], ['![supported](https://icons.example/icon-legacy.png) Supported'], ['l&amp;#101;gacy'],
+    ['![Green circle with check mark](icon-yes.png)'], ['![Red circle with X](icon-no.png)'],
   ]) {
-    const html = `${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr>${cell}</tr></table>`
-    strictAssert.equal(parseBedrockModelCardHtml(html, reviewCardSource).records[0]?.status, 'active', cell)
+    strictAssert.equal(parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'January 1, 2028')}${cellTable(...cells)}`).records[0]?.status, 'active', cells[0])
   }
+  strictAssert.equal(parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'January 1, 2028')}${cardTable(['EOL2 availability'], [['Supported']])}`).records[0]?.status, 'active')
 })
-for (const cell of ['<td><img alt=Legacy></td>', '<td title=retired></td>', '<td><span aria-label=EOL></span></td>', "<td><img alt='Legacy (EOL: 2028-01-02)'></td>", '<td TITLE="Legacy">Supported</td>', '<td>E.O.L.: 2028-01-01</td>', '<td>e.o.l.: 2028-01-01</td>',
-  '<td><img alt="Legacy > Active"></td>', "<td><img title='Supported > EOL'></td>"]) {
-  reviewTest(`PR 107 review pass 6: Bedrock detects a lifecycle word in an unquoted or differently cased attribute: ${cell}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr>${cell}</tr></table>`, reviewCardSource), /unrecognised region EOL/)
+for (const cell of ['<img alt=Legacy>', '<span title=retired></span>', '<span aria-label=EOL></span>', "<img alt='Legacy (EOL: 2028-01-02)'>", '<span TITLE="Legacy">Supported</span>', 'E.O.L.: 2028-01-01', 'e.o.l.: 2028-01-01',
+  '<img alt="Legacy > Active">', "<img title='Supported > EOL'>", '![legacy](icon.png)', '[Supported](icon.html "Retired")']) {
+  reviewTest(`PR 107 review pass 6: Bedrock detects a lifecycle word in raw markup, alt text, a title, or any case: ${cell}`, () => {
+    strictAssert.throws(() => parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'January 1, 2028')}${cellTable(cell)}`), /unrecognised region EOL/)
   })
 }
 reviewTest('PR 107 review: Bedrock leaves the live regional status shapes that carry no EOL alone', () => {
-  for (const cell of ['', 'Supported', 'Not supported', 'Active', 'us-east-1 (N. Virginia)', '<img src="icon-yes.png" alt="supported">']) {
-    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<table><tr><td>${cell}</td></tr></table>`, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  for (const cell of ['', 'Supported', 'Not supported', 'Active', 'us-east-1 (N. Virginia)', '![supported](https://docs.aws.amazon.com/bedrock/latest/userguide/images/icons/icon-yes.png)', '+ ![supported](icon-yes.png) [Guardrails](guardrails.html)<br />+ ![supported](icon-yes.png) [Flows](flows.html)']) {
+    strictAssert.deepEqual(parseReviewCard(`${reviewCard}${cellTable(cell)}`), parseReviewCard(reviewCard))
   }
 })
 reviewTest('PR 107 review: Bedrock accepts Legacy periods whose number and unit agree', () => {
-  const expected = parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: at least 6 months</p>`, reviewCardSource)
+  const expected = parseReviewCard(reviewCard + cardField('Legacy period', 'at least 6 months'))
   for (const period of ['1 month', '1 day', 'at least 1 month', '2 days', '10 days', '12 months', 'at least 45 days', '999 days']) {
-    strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: ${period}</p>`, reviewCardSource), expected)
+    strictAssert.deepEqual(parseReviewCard(reviewCard + cardField('Legacy period', period)), expected)
   }
 })
 for (const period of ['1 days', '1 months', 'at least 1 days', '2 month', '6 day', '0 days', '0 months', 'at least 0 days', '01 months', '00 days', '1000 days', 'at least 9999 months']) {
   reviewTest(`PR 107 review: Bedrock rejects a Legacy period whose number and unit disagree or are zero: ${period}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<p>Legacy period: ${period}</p>`, reviewCardSource), /unrecognised Legacy period/)
+    strictAssert.throws(() => parseReviewCard(reviewCard + cardField('Legacy period', period)), /unrecognised Legacy period/)
   })
 }
 for (const eol of ['Not yet announced', 'Not announced until 2027', 'TBA', 'Announced.']) {
   reviewTest(`Free-text lifecycle: Bedrock still rejects an unrecognised Model EOL date: ${eol}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: ${eol}</p>`, reviewCardSource), /unrecognised Model EOL date/)
+    strictAssert.throws(() => parseReviewCard(reviewIdTable + cardField('Model EOL date', eol)), /unrecognised Model EOL date/)
   })
 }
 reviewTest('Second pass F3: Bedrock validates a standalone EOL and skips only absent or N/A lifecycle fields', () => {
-  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: February 30, 2026</p>`, reviewCardSource), /invalid date.*February 30, 2026/)
-  for (const field of ['', '<p>Model EOL date: N/A</p>', '<p>Model lifecycle policy: Standard</p>']) {
-    strictAssert.equal(parseBedrockModelCardHtml(reviewIdTable + field, reviewCardSource).skipped[0]?.reason, 'no lifecycle fields')
+  strictAssert.throws(() => parseReviewCard(reviewIdTable + cardField('Model EOL date', 'February 30, 2026')), /invalid date.*February 30, 2026/)
+  for (const field of ['', cardField('Model EOL date', 'N/A'), cardField('Model lifecycle policy', 'Standard')]) {
+    strictAssert.equal(parseReviewCard(reviewIdTable + field).skipped[0]?.reason, 'no lifecycle fields')
   }
 })
 for (const [label, value] of [
   ['Model launch date', 'December 1, 2025'], ['EOL no sooner than', 'December 1, 2027'],
   ['Legacy period', 'at least 6 months'], ['Model lifecycle policy', 'Standard'], ['Model EOL date', 'December 1, 2027'],
 ]) {
-  for (const fragment of [`<div>${label}: ${value}</div>`, `<p>Details: ${label}: ${value}</p>`, `<p>Model launch date: December 1, 2025; ${label}: ${value}</p>`]) {
-    reviewTest(`Second pass F5: Bedrock accounts for ${label} outside its field paragraph: ${fragment}`, () => {
-      strictAssert.throws(() => parseBedrockModelCardHtml(reviewCard + fragment, reviewCardSource), error =>
+  for (const fragment of [`> ${label}: ${value}\n`, `### ${label}: ${value}\n`, `Details: ${label}: ${value}\n`, `+ **Model launch date:** December 1, 2025; ${label}: ${value}\n`, cellTable(`${label}: ${value}`)]) {
+    reviewTest(`Second pass F5: Bedrock accounts for ${label} outside its field line: ${JSON.stringify(fragment)}`, () => {
+      strictAssert.throws(() => parseReviewCard(reviewCard + fragment), error =>
         error.message.includes(reviewCardSource) && error.message.includes(label))
     })
   }
-  for (const fragment of [
-    `<dl><dt>${label}</dt><dd>${value}</dd></dl>`,
-    `<div>${label.toUpperCase()}: ${value}</div>`,
-    `<p>Details: ${label.toLowerCase()} ${value}</p>`,
-  ]) {
-    reviewTest(`Third pass F2: Bedrock counts whole-word lifecycle labels regardless of case or colon: ${fragment}`, () => {
-      strictAssert.throws(() => parseBedrockModelCardHtml(reviewCard + fragment, reviewCardSource), error =>
+  for (const fragment of [`${label}\n: ${value}\n`, `${label.toUpperCase()}: ${value}\n`, `Details: ${label.toLowerCase()} ${value}\n`]) {
+    reviewTest(`Third pass F2: Bedrock counts whole-word lifecycle labels regardless of case or colon: ${JSON.stringify(fragment)}`, () => {
+      strictAssert.throws(() => parseReviewCard(reviewCard + fragment), error =>
         error.message.includes(reviewCardSource) && error.message.includes(`unaccounted ${label} field`))
     })
   }
 }
 reviewTest('Third pass F2: Bedrock refuses the reported definition-list and title-case EOL fields', () => {
-  for (const fragment of ['<dl><dt>Model EOL date</dt><dd>December 1, 2026</dd></dl>', '<div>Model EOL Date: December 1, 2026</div>']) {
-    strictAssert.throws(() => parseBedrockModelCardHtml(reviewCard + fragment, reviewCardSource), /unaccounted Model EOL date field/)
+  for (const fragment of ['Model EOL date\n: December 1, 2026\n', 'Model EOL Date: December 1, 2026\n', '+ **Model EOL Date:** December 1, 2026\n']) {
+    strictAssert.throws(() => parseReviewCard(reviewCard + fragment), /unaccounted Model EOL date field/)
   }
 })
 reviewTest('Third pass F2: Bedrock matches whole labels without matching longer words', () => {
-  const html = reviewCard + '<p>Premodel EOL date; Model EOL dates; Model launch dates; Legacy periods; Model lifecycle policymaker; EOL no sooner thanks</p>'
-  strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
+  const markdown = `${reviewCard}Premodel EOL date; Model EOL dates; Model launch dates; Legacy periods; Model lifecycle policymaker; EOL no sooner thanks\n`
+  strictAssert.deepEqual(parseReviewCard(markdown), parseReviewCard(reviewCard))
 })
-const lifecycleLine = value => `<p><b>Model lifecycle:</b> ${value}</p>`
-const lifecycleCard = (value, eol = 'N/A') => fableHtml.replace(lifecycleLine('Active'), lifecycleLine(value)).replace('<b>Model EOL date:</b> N/A', `<b>Model EOL date:</b> ${eol}`)
-const lifecyclePolicy = text => `<p><b>Model lifecycle policy:</b> <a href="./model-lifecycle-legacy.html">${text}</a></p>`
-const lifecycleBanner = '<p>This model version has reached the end of its life. For how model lifecycle stages work, see <a href="./model-lifecycle.html">Model lifecycle</a>.</p>'
+const lifecycleLine = value => cardField('Model lifecycle', value)
+const lifecycleCard = (value, eol = 'N/A') => fableMarkdown.replace(lifecycleLine('Active'), lifecycleLine(value)).replace(cardField('Model EOL date', 'N/A'), cardField('Model EOL date', eol))
+const lifecyclePolicy = text => cardField('Model lifecycle policy', `[${text}](model-lifecycle-legacy.md)`)
+const lifecycleBanner = '\nThis model version has reached the end of its life. For how model lifecycle stages work, see [Model lifecycle](model-lifecycle-legacy.md).\n\n'
 reviewTest('Model lifecycle line: Bedrock keeps an Active card and a card without the line on current behaviour', () => {
-  strictAssert.ok(fableHtml.includes(lifecycleLine('Active')))
-  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Active'), fableCard.source), card('anthropic-claude-fable-5-1'))
-  strictAssert.deepEqual(parseBedrockModelCardHtml(fableHtml.replace(lifecycleLine('Active'), ''), fableCard.source), card('anthropic-claude-fable-5-1'))
+  strictAssert.ok(fableMarkdown.includes(lifecycleLine('Active')))
+  strictAssert.deepEqual(parseBedrockModelCardMarkdown(lifecycleCard('Active'), fableCard.source), card('anthropic-claude-fable-5-1'))
+  strictAssert.deepEqual(parseBedrockModelCardMarkdown(fableMarkdown.replace(lifecycleLine('Active'), ''), fableCard.source), card('anthropic-claude-fable-5-1'))
 })
 reviewTest('Model lifecycle line: Bedrock marks a Legacy card legacy without changing its tentative floor', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+  strictAssert.deepEqual(parseBedrockModelCardMarkdown(lifecycleCard('Legacy'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
 })
 for (const value of ['EOL: 2027-09-01', 'EOL: 2027-09-01 (certain regions)']) {
   reviewTest(`Model lifecycle line: Bedrock marks a matching ${value} card legacy at its exact Model EOL date`, () => {
     const { date_precision: _, ...exact } = fableCard
-    strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard(value, 'September 1, 2027'), fableCard.source).records, [{ ...exact, shutdown: '2027-09-01', status: 'legacy' }])
+    strictAssert.deepEqual(parseBedrockModelCardMarkdown(lifecycleCard(value, 'September 1, 2027'), fableCard.source).records, [{ ...exact, shutdown: '2027-09-01', status: 'legacy' }])
   })
 }
 reviewTest('Model lifecycle line: Bedrock rejects an EOL line on a card without an exact Model EOL date', () => {
-  for (const [html, source] of [
+  for (const [markdown, source] of [
     [lifecycleCard('EOL: 2026-12-01'), fableCard.source],
     [lifecycleCard('EOL: 2026-10-14', 'No sooner than 12/1/2026'), fableCard.source],
     [lifecycleCard('EOL: 2026-10-14 (certain regions)', 'No sooner than 12/1/2026'), fableCard.source],
     [`${reviewIdTable}${lifecycleLine('EOL: 2026-10-14')}`, reviewCardSource],
-    [`${reviewIdTable}<p>Model EOL date: N/A</p>${lifecycleLine('EOL: 2026-10-14')}`, reviewCardSource],
+    [`${reviewIdTable}${cardField('Model EOL date', 'N/A')}${lifecycleLine('EOL: 2026-10-14')}`, reviewCardSource],
   ]) {
-    strictAssert.throws(() => parseBedrockModelCardHtml(html, source), /Model lifecycle EOL 2026-10-14 without an exact Model EOL date|Model lifecycle EOL 2026-12-01 without an exact Model EOL date/)
+    strictAssert.throws(() => parseBedrockModelCardMarkdown(markdown, source), /Model lifecycle EOL 2026-10-14 without an exact Model EOL date|Model lifecycle EOL 2026-12-01 without an exact Model EOL date/)
   }
-  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+  strictAssert.deepEqual(parseBedrockModelCardMarkdown(lifecycleCard('Legacy', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
 })
 reviewTest('Model lifecycle line: Bedrock parses the live EOL card shape with its end-of-life banner', () => {
-  const html = cardHtml.get(commandCard.source).replace(lifecycleLine('Legacy'), lifecycleLine('EOL: 2026-08-19')).replace('<p><b>Model launch date:', `${lifecycleBanner}<p><b>Model launch date:`)
-  strictAssert.ok(html.includes(lifecycleBanner) && html.includes(lifecycleLine('EOL: 2026-08-19')))
-  strictAssert.deepEqual(parseBedrockModelCardHtml(html, commandCard.source).records, [{ ...commandCard, status: 'legacy' }])
+  strictAssert.ok(commandMarkdown.includes('reached end of life on August 19, 2026') && commandMarkdown.includes(lifecycleLine('EOL: 2026-08-19')))
+  strictAssert.deepEqual(parseBedrockModelCardMarkdown(commandMarkdown, commandCard.source).records, [{ ...commandCard, status: 'legacy' }])
+  strictAssert.deepEqual(parseBedrockModelCardMarkdown(commandMarkdown.replace('+ **Model launch date:**', `${lifecycleBanner}+ **Model launch date:**`), commandCard.source), card('cohere-command-r'))
 })
 reviewTest('Model lifecycle line: Bedrock reads Legacy (certain regions) as legacy', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(lifecycleCard('Legacy (certain regions)', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
+  strictAssert.deepEqual(parseBedrockModelCardMarkdown(lifecycleCard('Legacy (certain regions)', 'No sooner than 12/1/2026'), fableCard.source).records, [{ ...fableCard, status: 'legacy' }])
 })
 const marengoSource = new URL('model-card-twelvelabs-marengo-embed-3-0.html', BEDROCK_MODEL_CARDS_URL).href
-const marengoCard = (lifecycle, eol) => '<table><tr><th>Endpoint</th><th>Model ID</th></tr><tr><td>bedrock-runtime</td><td>twelvelabs.marengo-embed-3-0-v1:0</td></tr></table>' +
-  '<ul><li><p><b>Model launch date:</b> Oct 29, 2025</p></li><li><p><b>EOL no sooner than:</b> Oct 29, 2026</p></li><li><p><b>Legacy period:</b> at least 6 months</p></li>' +
-  '<li><p><b>Model lifecycle policy:</b> <a href="./model-lifecycle-legacy.html">Model lifecycle (For Models Launched Prior to Sept 7 2026)</a></p></li>' +
-  (eol === undefined ? '' : `<li><p><b>Model EOL date:</b> ${eol}</p></li>`) + (lifecycle === undefined ? '' : `<li>${lifecycleLine(lifecycle)}</li>`) + '</ul>'
+const marengoCard = (lifecycle, eol) => cardTable(['**Endpoint**', '**Model ID**'], [['bedrock-runtime', 'twelvelabs.marengo-embed-3-0-v1:0']]) +
+  cardField('Model launch date', 'Oct 29, 2025') + cardField('EOL no sooner than', 'Oct 29, 2026') + cardField('Legacy period', 'at least 6 months') +
+  lifecyclePolicy('Model lifecycle (For Models Launched Prior to Sept 7 2026)') +
+  (eol === undefined ? '' : cardField('Model EOL date', eol)) + (lifecycle === undefined ? '' : lifecycleLine(lifecycle))
 const marengoRecord = { bedrockId: 'twelvelabs.marengo-embed-3-0-v1:0', shutdown: '2027-03-22', status: 'legacy', source: marengoSource }
 const marengoLive = ['Legacy in ap-northeast-2; Active in other Regions', 'March 22, 2027 (ap-northeast-2 only)']
 reviewTest('Regional lifecycle: Bedrock reads the live Marengo Embed 3.0 card as legacy at its regional EOL date', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(marengoCard(...marengoLive), marengoSource), { records: [marengoRecord], skipped: [] })
+  strictAssert.deepEqual(parseBedrockModelCardMarkdown(marengoCard(...marengoLive), marengoSource), { records: [marengoRecord], skipped: [] })
+  const fixture = cardMarkdown.get(marengoSource)
+  strictAssert.ok(fixture.includes(lifecycleLine(marengoLive[0])) && fixture.includes(cardField('Model EOL date', marengoLive[1])))
+  strictAssert.deepEqual(card('twelvelabs-marengo-embed-3-0'), { records: [marengoRecord], skipped: [] })
 })
 for (const [lifecycle, eol, expected] of [
   ['Legacy in ap-northeast-2; Active in other Regions', 'March 22, 2027', marengoRecord],
@@ -1338,7 +1804,7 @@ for (const [lifecycle, eol, expected] of [
   ['Legacy in ap-northeast-2, us-gov-west-1; Active in other Regions', 'March 22, 2027 (us-gov-west-1, ap-northeast-2 only)', marengoRecord],
 ]) {
   reviewTest(`Regional lifecycle: Bedrock marks ${lifecycle} with Model EOL date ${eol ?? '(absent)'} legacy`, () => {
-    strictAssert.deepEqual(parseBedrockModelCardHtml(marengoCard(lifecycle, eol), marengoSource).records, [expected])
+    strictAssert.deepEqual(parseBedrockModelCardMarkdown(marengoCard(lifecycle, eol), marengoSource).records, [expected])
   })
 }
 for (const value of [
@@ -1353,21 +1819,21 @@ for (const value of [
 ]) {
   reviewTest(`Regional lifecycle: Bedrock rejects an unrecognised regional value: ${value}`, () => {
     for (const eol of ['March 22, 2027', 'March 22, 2027 (ap-northeast-2 only)', 'N/A', undefined]) {
-      strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(value, eol), marengoSource), error =>
+      strictAssert.throws(() => parseBedrockModelCardMarkdown(marengoCard(value, eol), marengoSource), error =>
         error.message.includes(marengoSource) && error.message.includes(`unrecognised Model lifecycle: ${value}`), String(eol))
     }
   })
 }
 for (const lifecycle of [undefined, 'Active', 'Legacy', 'Legacy (certain regions)', 'EOL: 2027-03-22', 'EOL: 2027-03-22 (certain regions)', 'Legacy in us-east-1; Active in other Regions', 'Legacy in ap-northeast-2, us-east-1; Active in other Regions']) {
   reviewTest(`Regional lifecycle: Bedrock rejects a regional Model EOL date whose Regions differ from Model lifecycle: ${lifecycle ?? '(absent)'}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(lifecycle, 'March 22, 2027 (ap-northeast-2 only)'), marengoSource), error =>
+    strictAssert.throws(() => parseBedrockModelCardMarkdown(marengoCard(lifecycle, 'March 22, 2027 (ap-northeast-2 only)'), marengoSource), error =>
       error.message.includes(marengoSource) && error.message.includes('Model EOL date March 22, 2027 (ap-northeast-2 only) does not match the Regions in Model lifecycle'))
   })
 }
 for (const eol of ['March 22, 2027 (ap-northeast-2)', 'March 22, 2027 (Seoul only)', 'March 22, 2027 (ap-northeast-2 only).', 'March 22, 2027 (ap-northeast-2 only) (ap-northeast-2 only)', 'March 22, 2027 (ap-northeast-2 Only)',
   'Legacy: March 22, 2027 (ap-northeast-2 only)', 'No sooner than 3/22/2027 (ap-northeast-2 only)', 'March 2027 (ap-northeast-2 only)', 'N/A (ap-northeast-2 only)', '(ap-northeast-2 only)', 'March 22, 2027(ap-northeast-2 only)']) {
   reviewTest(`Regional lifecycle: Bedrock rejects a malformed regional Model EOL date: ${eol}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(marengoLive[0], eol), marengoSource), error =>
+    strictAssert.throws(() => parseBedrockModelCardMarkdown(marengoCard(marengoLive[0], eol), marengoSource), error =>
       error.message.includes(marengoSource) && /unrecognised Model EOL date date|does not match the Regions/.test(error.message))
   })
 }
@@ -1379,66 +1845,67 @@ reviewTest('Regional lifecycle: Bedrock keeps the floor, calendar-date, and dupl
     [['Legacy in ap-northeast-2; Active in other Regions', 'March 22, 2027 (ap-northeast-2, ap-northeast-2 only)'], /duplicate Region in ap-northeast-2, ap-northeast-2/],
   ]
   for (const [[lifecycle, eol], pattern] of cases) {
-    strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(lifecycle, eol), marengoSource), pattern, `${lifecycle} / ${eol}`)
+    strictAssert.throws(() => parseBedrockModelCardMarkdown(marengoCard(lifecycle, eol), marengoSource), pattern, `${lifecycle} / ${eol}`)
   }
-  strictAssert.throws(() => parseBedrockModelCardHtml(marengoCard(marengoLive[0], marengoLive[1]).replace('</ul>', `<li>${lifecycleLine('Active')}</li></ul>`), marengoSource), /duplicate Model lifecycle field/)
+  strictAssert.throws(() => parseBedrockModelCardMarkdown(marengoCard(marengoLive[0], marengoLive[1]) + lifecycleLine('Active'), marengoSource), /duplicate Model lifecycle field/)
 })
 reviewTest('Regional lifecycle: the live legacy table still wins over the regional Marengo card record', () => {
   const table = { bedrockId: marengoRecord.bedrockId, status: 'legacy', legacy: '2026-09-22', eol: '2027-03-22' }
   strictAssert.deepEqual(mergeBedrockSources([table], [marengoRecord]), { records: [{ ...table, source: BEDROCK_LIFECYCLE_URL }], conflicts: [] })
+  strictAssert.deepEqual(loadedBedrock.records.find(record => record.bedrockId === marengoRecord.bedrockId), { ...bedrockById.get(marengoRecord.bedrockId), source: BEDROCK_LIFECYCLE_URL })
 })
-for (const paragraph of ['<p>Model lifecycle stages are described in the user guide.</p>', '<p><a href="./model-lifecycle.html">Model lifecycle</a> explains the stages.</p>', '<p><b>Model lifecycle policies:</b> see the user guide</p>']) {
-  reviewTest(`Model lifecycle line: Bedrock ignores prose that opens with the words: ${paragraph}`, () => {
-    strictAssert.deepEqual(parseBedrockModelCardHtml(fableHtml.replace('<p><b>Model launch date:', `${paragraph}<p><b>Model launch date:`), fableCard.source).records, [fableCard])
+for (const line of ['Model lifecycle stages are described in the user guide.\n', '[Model lifecycle](model-lifecycle.md) explains the stages.\n', '**Model lifecycle policies:** see the user guide\n']) {
+  reviewTest(`Model lifecycle line: Bedrock ignores prose that opens with the words: ${JSON.stringify(line)}`, () => {
+    strictAssert.deepEqual(parseBedrockModelCardMarkdown(fableMarkdown.replace('+ **Model launch date:**', `${line}+ **Model launch date:**`), fableCard.source).records, [fableCard])
   })
 }
 for (const value of ['active', 'LEGACY', 'Deprecated', 'Retired', 'EOL', 'EOL: 2027-9-1', 'EOL 2027-09-01', 'EOL: September 1, 2027', 'EOL: 2027-09-01 (some regions)', 'EOL: 2027-09-01 (certain regions', 'Legacy (some regions)', 'Active; EOL: 2027-09-01']) {
   reviewTest(`Model lifecycle line: Bedrock rejects an unrecognised value: ${value}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard(value), fableCard.source), error =>
+    strictAssert.throws(() => parseBedrockModelCardMarkdown(lifecycleCard(value), fableCard.source), error =>
       error.message.includes(fableCard.source) && error.message.includes(`unrecognised Model lifecycle: ${value}`))
   })
 }
 reviewTest('Model lifecycle line: Bedrock rejects an EOL line with an impossible calendar date', () => {
-  strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard('EOL: 2027-02-30'), fableCard.source), /Model lifecycle EOL must be a real calendar date/)
+  strictAssert.throws(() => parseBedrockModelCardMarkdown(lifecycleCard('EOL: 2027-02-30'), fableCard.source), /Model lifecycle EOL must be a real calendar date/)
 })
 for (const value of ['EOL: 2027-09-02', 'EOL: 2027-09-02 (certain regions)']) {
   reviewTest(`Model lifecycle line: Bedrock rejects ${value} that differs from the exact Model EOL date`, () => {
     for (const eol of ['September 1, 2027', 'Legacy: September 1, 2027']) {
-      strictAssert.throws(() => parseBedrockModelCardHtml(lifecycleCard(value, eol), fableCard.source), /Model lifecycle EOL 2027-09-02 differs from Model EOL date 2027-09-01/)
+      strictAssert.throws(() => parseBedrockModelCardMarkdown(lifecycleCard(value, eol), fableCard.source), /Model lifecycle EOL 2027-09-02 differs from Model EOL date 2027-09-01/)
     }
   })
 }
-reviewTest('Model lifecycle line: Bedrock rejects a duplicate Model lifecycle paragraph', () => {
+reviewTest('Model lifecycle line: Bedrock rejects a duplicate Model lifecycle line', () => {
   for (const second of ['Active', 'Legacy']) {
-    strictAssert.throws(() => parseBedrockModelCardHtml(fableHtml.replace(lifecycleLine('Active'), lifecycleLine('Active') + lifecycleLine(second)), fableCard.source), /duplicate Model lifecycle field/)
+    strictAssert.throws(() => parseBedrockModelCardMarkdown(fableMarkdown.replace(lifecycleLine('Active'), lifecycleLine('Active') + lifecycleLine(second)), fableCard.source), /duplicate Model lifecycle field/)
   }
 })
-for (const fragment of ['<div>Model lifecycle: Legacy</div>', '<div>MODEL LIFECYCLE : Legacy</div>', '<p>Details: Model lifecycle: Legacy</p>', '<p>Context window: 8K tokens; Model lifecycle: Legacy</p>', '<li>Model lifecycle: EOL: 2027-09-01</li>']) {
-  reviewTest(`Model lifecycle line: Bedrock accounts for Model lifecycle outside its field paragraph: ${fragment}`, () => {
-    for (const html of [reviewCard + fragment, fableHtml + fragment]) {
-      strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unaccounted Model lifecycle field outside its paragraph/)
+for (const fragment of ['> Model lifecycle: Legacy\n', '### MODEL LIFECYCLE : Legacy\n', 'Details: Model lifecycle: Legacy\n', 'Context window: 8K tokens; Model lifecycle: Legacy\n', cellTable('Model lifecycle: EOL: 2027-09-01')]) {
+  reviewTest(`Model lifecycle line: Bedrock accounts for Model lifecycle outside its field line: ${JSON.stringify(fragment)}`, () => {
+    for (const markdown of [reviewCard + fragment, `${fableMarkdown}\n${fragment}`]) {
+      strictAssert.throws(() => parseReviewCard(markdown), /unaccounted Model lifecycle field outside its field line/)
     }
   })
 }
-for (const paragraph of ['<p><b>Model lifecycle</b> Legacy</p>', '<p><b>Model lifecycle -</b> Legacy</p>', '<p><b>Model lifecycle</b>: Legacy</p>', '<p>MODEL LIFECYCLE Legacy</p>', '<p><b>Model lifecycle status:</b> Legacy</p>', '<p><b>Model lifecycle</b></p>', '<p>Model lifecycle status: Legacy</p>', '<p><span class="x"><b>Model lifecycle status:</b></span> Legacy</p>', '<p><strong>Model lifecycle stage</strong> retired</p>']) {
-  reviewTest(`Model lifecycle line: Bedrock rejects a paragraph that opens with Model lifecycle in another shape: ${paragraph}`, () => {
-    for (const html of [reviewCard + paragraph, fableHtml.replace(lifecycleLine('Active'), paragraph)]) {
-      strictAssert.throws(() => parseBedrockModelCardHtml(html, reviewCardSource), /unrecognised Model lifecycle field: Model lifecycle/i)
+for (const line of ['**Model lifecycle** Legacy', '**Model lifecycle -** Legacy', 'MODEL LIFECYCLE Legacy', '**Model lifecycle status:** Legacy', '**Model lifecycle**', 'Model lifecycle status: Legacy', '<span class="x"><b>Model lifecycle status:</b></span> Legacy', '<strong>Model lifecycle stage</strong> retired', '__Model lifecycle stage__ retired', '+ **Model lifecycle stage** retired']) {
+  reviewTest(`Model lifecycle line: Bedrock rejects a line that opens with Model lifecycle in another shape: ${line}`, () => {
+    for (const markdown of [`${reviewCard}${line}\n`, fableMarkdown.replace(lifecycleLine('Active'), `${line}\n`)]) {
+      strictAssert.throws(() => parseReviewCard(markdown), /unrecognised Model lifecycle field: Model lifecycle/i)
     }
   })
 }
-reviewTest('Model lifecycle line: the policy paragraph, its link texts, and the EOL banner are not Model lifecycle fields', () => {
+reviewTest('Model lifecycle line: the policy line, its link texts, and the EOL banner are not Model lifecycle fields', () => {
   for (const text of ['Model lifecycle (For Models Launched Prior to Sept 7 2026)', 'Model lifecycle', 'Bedrock Model Lifecycle']) {
-    const html = reviewCard + lifecycleBanner + lifecyclePolicy(text)
-    strictAssert.deepEqual(parseBedrockModelCardHtml(html, reviewCardSource), parseBedrockModelCardHtml(reviewCard, reviewCardSource))
-    strictAssert.equal(parseBedrockModelCardHtml(html + lifecycleLine('Legacy'), reviewCardSource).records[0]?.status, 'legacy')
+    const markdown = reviewCard + lifecycleBanner + lifecyclePolicy(text)
+    strictAssert.deepEqual(parseReviewCard(markdown), parseReviewCard(reviewCard))
+    strictAssert.equal(parseReviewCard(markdown + lifecycleLine('Legacy')).records[0]?.status, 'legacy')
   }
 })
-for (const [url, html] of cardHtml) {
-  reviewTest(`Third pass F2: Fixture lifecycle labels appear only in their field paragraphs: ${path.basename(new URL(url).pathname)}`, () => {
-    const outsideFields = stripComments(html).replace(/<p\b[^>]*>[\s\S]*?<\/p>/gi, paragraph =>
-      /^\s*(?:Model launch date|EOL no sooner than|Legacy period|Model lifecycle policy|Model EOL date):/.test(paragraph.replace(/<[^>]*>/g, ' ').trim()) ? '' : paragraph)
-      .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+for (const [url, markdown] of cardMarkdown) {
+  reviewTest(`Third pass F2: Fixture lifecycle labels appear only in their field lines: ${path.basename(new URL(url).pathname)}`, () => {
+    const outsideFields = stripComments(markdown).split('\n')
+      .filter(line => !/^\s*[-*+]\s+\*\*(?:Model launch date|EOL no sooner than|Legacy period|Model lifecycle policy|Model EOL date):\*\*/.test(line))
+      .join(' ').replace(/\s+/g, ' ')
     strictAssert.doesNotMatch(outsideFields, /\b(?:Model launch date|EOL no sooner than|Legacy period|Model lifecycle policy|Model EOL date)\b/i)
   })
 }
@@ -1470,76 +1937,81 @@ for (const [kind, dates, conflictCount] of [
     })
   }
 }
-for (const [label, html] of [
-  ['missing ID table', fableHtml.replace('<b>Model ID</b>', '<b>Other ID</b>')],
-  ['invalid ID', fableHtml.replace('<code class="code">anthropic.claude-fable-5-1</code>', '<code>bad id</code>')],
-  ['invalid second ID', cardHtml.get(haikuCards[0].source).replace('<code class="code">anthropic.claude-haiku-4-5</code>', '<code>bad id</code>')],
+for (const [label, markdown] of [
+  ['missing ID table', fableMarkdown.replace('| **Model ID** |', '| **Other ID** |')],
+  ['invalid ID', fableMarkdown.replace('| anthropic.claude-fable-5-1 |', '| bad id |')],
+  ['invalid second ID', fableMarkdown.replace(/(\| anthropic\.claude-fable-5-1 \|[\s\S]*?)\| anthropic\.claude-fable-5-1 \|/, '$1| bad id |')],
   ['empty field', eolField('')],
-  ['duplicate field', `${fableHtml}<p>Model EOL date: N/A</p>`],
+  ['duplicate field', `${fableMarkdown}\n${cardField('Model EOL date', 'N/A')}`],
   ['invalid human date', eolField('February 30, 2026')],
   ['unlisted ISO date', eolField('2026-09-30')],
   ['unlisted date text', eolField('Around September 30, 2026')],
   ['trailing date text', eolField('September 30, 2026 or later')],
-  ['invalid floor', fableHtml.replace('September 1, 2027', 'September 31, 2027')],
-  ['unknown month floor', fableHtml.replace('September 1, 2027', 'Smarch 2027')],
-  ['invalid legacy period', fableHtml.replace('at least 6 months', 'about a year')],
+  ['invalid floor', fableMarkdown.replace('September 1, 2027', 'September 31, 2027')],
+  ['unknown month floor', fableMarkdown.replace('September 1, 2027', 'Smarch 2027')],
+  ['invalid legacy period', fableMarkdown.replace('at least 6 months', 'about a year')],
+  ['HTML body', `<!DOCTYPE html>\n${fableMarkdown}`],
   ...['13/1/2026', '0/1/2026', '1/0/2026', '2/29/2025', '4/31/2026', '1/1/26', '1/1/2026 extra'].map(value => [`invalid US ${value}`, eolField(`No sooner than ${value}`)]),
 ]) {
   let reason = ''
-  try { parseBedrockModelCardHtml(html, fableCard.source) } catch (error) { reason = error.message }
+  try { parseBedrockModelCardMarkdown(markdown, fableCard.source) } catch (error) { reason = error.message }
   assert(reason.includes(fableCard.source), `Bedrock fails closed and names the card for ${label}`)
 }
 let regionConflictReason = ''
-try { parseBedrockModelCardHtml(canvasHtml.replace('Legacy (EOL: 2026-09-30)', 'Legacy (EOL: 2026-10-01)'), canvasCard.source) } catch (error) { regionConflictReason = error.message }
+try { parseBedrockModelCardMarkdown(canvasMarkdown.replace('Legacy (EOL: 2026-09-30)', 'Legacy (EOL: 2026-10-01)'), canvasCard.source) } catch (error) { regionConflictReason = error.message }
 assert(regionConflictReason.includes(canvasCard.source) && regionConflictReason.includes('differs from Model EOL date'), 'regional EOL disagreement throws naming the card')
-const leapFloor = parseBedrockModelCardHtml(eolField('No sooner than 2/29/2028'), fableCard.source).records[0]
+const leapFloor = parseBedrockModelCardMarkdown(eolField('No sooner than 2/29/2028'), fableCard.source).records[0]
 assert(leapFloor.shutdown === '2028-02-29', 'Bedrock accepts valid US leap dates and chooses the later floor')
-const monthWithUs = parseBedrockModelCardHtml(eolField('No sooner than 4/28/2026').replace('September 1, 2027', 'Aug 2025'), fableCard.source).records[0]
+const monthWithUs = parseBedrockModelCardMarkdown(eolField('No sooner than 4/28/2026').replace('September 1, 2027', 'Aug 2025'), fableCard.source).records[0]
 assert(monthWithUs.shutdown === '2026-04-28', 'a month-only floor leaves the day-precision US floor operative')
-assert(parseBedrockModelCardsIndexHtml(cardIndexHtml + cardIndexHtml).length === 11, 'Bedrock index deduplicates card links')
-assert(parseBedrockModelCardsIndexHtml('<a href="./model-card-example_v1.2.html">card</a><!-- <a href="./model-card-hidden.html">hidden</a> -->').length === 1, 'Bedrock index accepts safe slug punctuation and ignores comments')
-for (const href of ['model-card-x.html', './model-card-x.html#lifecycle', './model-card-x.html?view=1&amp;lang=en#lifecycle', new URL('model-card-x.html', BEDROCK_MODEL_CARDS_URL).href]) {
-  reviewTest(`Second pass F7: Bedrock resolves index href ${href}`, () => {
-    strictAssert.deepEqual(parseBedrockModelCardsIndexHtml(`<a href="${href}">card</a>`), [new URL('model-card-x.html', BEDROCK_MODEL_CARDS_URL).href])
+assert(parseBedrockModelCardsIndexMarkdown(cardIndexMarkdown + cardIndexMarkdown).length === 12, 'Bedrock index deduplicates card links')
+assert(parseBedrockModelCardsIndexMarkdown('[card](model-card-example_v1.2.md)\n<!-- [hidden](model-card-hidden.md) -->\n```\n[fenced](model-card-fenced.md)\n```\n').length === 1, 'Bedrock index accepts safe slug punctuation and ignores comments and fenced code')
+for (const href of ['model-card-x.md', './model-card-x.md#lifecycle', './model-card-x.md?view=1&amp;lang=en#lifecycle', 'model-card-x.html', '<model-card-x.md>', 'model-card-x.md "Card title"', new URL('model-card-x.md', BEDROCK_MODEL_CARDS_URL).href]) {
+  reviewTest(`Second pass F7: Bedrock resolves index href ${href} to the human card page`, () => {
+    strictAssert.deepEqual(parseBedrockModelCardsIndexMarkdown(`[card](${href})`), [new URL('model-card-x.html', BEDROCK_MODEL_CARDS_URL).href])
   })
 }
-for (const href of ['../model-card-x.html', './nested/model-card-x.html', './model-card-.html', './model-card-x.pdf', 'https://example.test/model-card-foreign.html', 'http://[bad/model-card-x.html', 'mailto:model-card-x.html']) {
+reviewTest('Second pass F7: Bedrock reads reference links and raw anchors in the index', () => {
+  strictAssert.deepEqual(parseBedrockModelCardsIndexMarkdown('[card][x]\n\n[x]: model-card-x.md\n'), [new URL('model-card-x.html', BEDROCK_MODEL_CARDS_URL).href])
+  strictAssert.deepEqual(parseBedrockModelCardsIndexMarkdown('Cards: <a href="./model-card-x.html">x</a>\n'), [new URL('model-card-x.html', BEDROCK_MODEL_CARDS_URL).href])
+})
+for (const href of ['../model-card-x.md', './nested/model-card-x.md', './model-card-.md', './model-card-x.pdf', 'https://example.test/model-card-foreign.md', 'http://[bad/model-card-x.md', 'mailto:model-card-x.md']) {
   reviewTest(`Second pass F7: Bedrock rejects an invalid card href alongside a valid link: ${href}`, () => {
-    strictAssert.throws(() => parseBedrockModelCardsIndexHtml(`<a href="./model-card-valid.html">valid</a><a href="${href}">invalid</a>`), error =>
+    strictAssert.throws(() => parseBedrockModelCardsIndexMarkdown(`[valid](model-card-valid.md), [invalid](${href})`), error =>
       error.message.includes(BEDROCK_MODEL_CARDS_URL) && error.message.includes(href))
   })
 }
-const boundedIndex = count => Array.from({ length: count }, (_, index) => `<a href="./model-card-example-${index}.html">card</a>`).join('')
-assert(parseBedrockModelCardsIndexHtml(boundedIndex(MAX_BEDROCK_MODEL_CARDS)).length === 400, 'Bedrock index accepts exactly 400 unique card links')
-for (const html of ['', '<a href="https://example.test/model-card-foreign.html">foreign</a>', boundedIndex(MAX_BEDROCK_MODEL_CARDS + 1)]) {
+const boundedIndex = count => Array.from({ length: count }, (_, index) => `[card](model-card-example-${index}.md)`).join(', ')
+assert(parseBedrockModelCardsIndexMarkdown(boundedIndex(MAX_BEDROCK_MODEL_CARDS)).length === 400, 'Bedrock index accepts exactly 400 unique card links')
+for (const markdown of ['', '[foreign](https://example.test/model-card-foreign.md)', boundedIndex(MAX_BEDROCK_MODEL_CARDS + 1), '<!DOCTYPE html><a href="./model-card-x.html">x</a>', '# Models\n\nNo cards yet.\n']) {
   let reason = ''
-  try { parseBedrockModelCardsIndexHtml(html) } catch (error) { reason = error.message }
-  assert(reason.includes(BEDROCK_MODEL_CARDS_URL), 'empty or oversized Bedrock index fails closed with its URL')
+  try { parseBedrockModelCardsIndexMarkdown(markdown) } catch (error) { reason = error.message }
+  assert(reason.includes(BEDROCK_MODEL_CARDS_URL), 'empty, HTML, link-free, or oversized Bedrock index fails closed with its URL')
 }
 
 const missingCardDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-bedrock-cards-'))
 try {
-  fs.writeFileSync(path.join(missingCardDir, 'bedrock-lifecycle.html'), bedrockHtml)
-  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), '<a href="./model-card-missing.html">missing</a>')
+  fs.writeFileSync(path.join(missingCardDir, 'bedrock-lifecycle.md'), bedrockMarkdown)
+  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.md'), '[missing](model-card-missing.md)\n')
   let reason = ''
   try { await loadDistributorSource('aws-bedrock', { fixtures: missingCardDir, notice: () => {} }) } catch (error) { reason = error.message }
-  assert(reason.includes('bedrock-model-cards/model-card-missing.html') && reason.includes('https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-missing.html'), 'missing card fixture throws with its path and URL')
+  assert(reason.includes('bedrock-model-cards/model-card-missing.md') && reason.includes('https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-missing.html'), 'missing card fixture throws with its path and the human card URL')
   const missingCardRun = run(['--distributor', 'aws-bedrock', '--fixtures', missingCardDir, '--out', path.join(missingCardDir, 'out')])
   assert(missingCardRun.code === 1 && !fs.existsSync(path.join(missingCardDir, 'out')), 'missing card fixture stops refresh before writing feeds')
-  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), '<html>No cards</html>')
+  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.md'), '# Models at a glance\n\nNo cards.\n')
   const noCardsRun = run(['--distributor', 'aws-bedrock', '--fixtures', missingCardDir, '--out', path.join(missingCardDir, 'out')])
   assert(noCardsRun.code === 1 && !fs.existsSync(path.join(missingCardDir, 'out')), 'zero-link index stops refresh before writing feeds')
   fs.mkdirSync(path.join(missingCardDir, 'bedrock-model-cards'))
-  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), [canvasCard, commandCard].map(record => `<a href="./${path.basename(new URL(record.source).pathname)}">card</a>`).join(''))
+  fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.md'), [canvasCard, commandCard].map(record => `[card](${path.basename(new URL(bedrockMarkdownUrl(record.source)).pathname)})`).join(', '))
   for (const record of [canvasCard, commandCard]) {
-    const html = cardHtml.get(record.source).replace(/September 30, 2026|August 19, 2026/g, 'January 1, 2028').replace(/Legacy \(EOL: 2026-09-30\)/g, 'Legacy (EOL: 2028-01-01)')
-    fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards', path.basename(new URL(record.source).pathname)), html)
+    const markdown = cardMarkdown.get(record.source).replace(/September 30, 2026|August 19, 2026/g, 'January 1, 2028').replace(/EOL: 2026-09-30|EOL: 2026-08-19/g, 'EOL: 2028-01-01')
+    fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards', path.basename(new URL(bedrockMarkdownUrl(record.source)).pathname)), markdown)
   }
   const conflictsRun = spawnSync(process.execPath, [refresh, '--distributor', 'aws-bedrock', '--check', '--fixtures', missingCardDir], { encoding: 'utf8' })
   assert([0, 3].includes(conflictsRun.status) && conflictsRun.stdout.includes('## Source conflicts') && conflictsRun.stderr.split('\n').filter(line => line.startsWith('notice:') && line.includes('legacy table wins')).length === 2, 'Bedrock exact conflicts reach CLI diff and notices without failing refresh')
   reviewTest('Second pass F8: Bedrock alias source conflicts reach CLI diff and notices', () => {
-    const filename = path.basename(new URL(commandCard.source).pathname)
-    fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.html'), `<a href="./${filename}">card</a>`)
+    const filename = path.basename(new URL(bedrockMarkdownUrl(commandCard.source)).pathname)
+    fs.writeFileSync(path.join(missingCardDir, 'bedrock-model-cards.md'), `[card](${filename})`)
     const cardPath = path.join(missingCardDir, 'bedrock-model-cards', filename)
     fs.writeFileSync(cardPath, fs.readFileSync(cardPath, 'utf8').replaceAll('cohere.command-r-v1:0', 'cohere.command-r-03-2024-v1:0'))
     const result = spawnSync(process.execPath, [refresh, '--distributor', 'aws-bedrock', '--check', '--fixtures', missingCardDir], { encoding: 'utf8' })
@@ -1555,7 +2027,9 @@ const crawlRequests = []
 const crawlNotices = []
 let activeCardRequests = 0
 let maximumCardRequests = 0
+const cardMarkdownByFetchUrl = new Map([...cardMarkdown].map(([url, markdown]) => [bedrockMarkdownUrl(url), markdown]))
 const crawledBedrock = await loadDistributorSource('aws-bedrock', {
+  env: {},
   notice: value => crawlNotices.push(value),
   fetchImpl: async (url, options) => {
     crawlRequests.push({ url, options })
@@ -1563,25 +2037,28 @@ const crawledBedrock = await loadDistributorSource('aws-bedrock', {
     maximumCardRequests = Math.max(maximumCardRequests, activeCardRequests)
     await new Promise(resolve => setImmediate(resolve))
     activeCardRequests--
-    const html = url === BEDROCK_LIFECYCLE_URL ? bedrockHtml : url === BEDROCK_MODEL_CARDS_URL ? cardIndexHtml : cardHtml.get(url)
-    if (html === undefined) throw new Error(`unexpected request ${url}`)
-    return new Response(html)
+    const markdown = url === BEDROCK_LIFECYCLE_MARKDOWN_URL ? bedrockMarkdown : url === BEDROCK_MODEL_CARDS_MARKDOWN_URL ? cardIndexMarkdown : cardMarkdownByFetchUrl.get(url)
+    if (markdown === undefined) throw new Error(`unexpected request ${url}`)
+    return new Response(markdown)
   },
 })
-assert(crawlRequests.length === 13 && maximumCardRequests === 1 && JSON.stringify(crawledBedrock.records) === JSON.stringify(loadedBedrock.records), 'mocked live crawl fetches legacy, index, and eleven cards sequentially')
+assert(crawlRequests.length === 14 && maximumCardRequests === 1 && JSON.stringify(crawledBedrock.records) === JSON.stringify(loadedBedrock.records), 'mocked live crawl fetches legacy, index, and twelve cards sequentially')
+assert(JSON.stringify(crawlRequests.map(request => request.url)) === JSON.stringify([BEDROCK_LIFECYCLE_MARKDOWN_URL, BEDROCK_MODEL_CARDS_MARKDOWN_URL, ...cardUrls.map(bedrockMarkdownUrl)]) && crawlRequests.every(request => request.url.endsWith('.md')), 'the Bedrock crawl fetches only the Markdown copies')
+assert(crawledBedrock.sourceUrl === BEDROCK_LIFECYCLE_URL && crawledBedrock.records.every(record => record.source.endsWith('.html')) && crawledBedrock.skipped.every(item => item.source.endsWith('.html')), 'Bedrock records and skipped cards cite the human pages')
+assert(crawlNotices.length === 3 && crawlNotices[0] === 'notice: bedrock models API skipped: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are not set' && crawlNotices.slice(1).every(notice => /model-card-[a-z0-9-]+\.html: skipped/.test(notice) && !notice.includes('.md')), 'live crawl reports both skips with human card URLs and no floor disagreement notices, after the models API skip')
 assert(crawlRequests.every(request => request.options.headers['accept-language'] === 'en' && request.options.signal instanceof AbortSignal), 'all distributor requests use English and an abort deadline')
-assert(crawlNotices.length === 2, 'live crawl reports both skips without floor disagreement notices')
 for (const [label, response] of [
   ['HTTP failure', () => new Response('unavailable', { status: 503 })],
   ['empty response', () => new Response('')],
   ['advertised oversized body', () => new Response('small', { headers: { 'content-length': String(MAX_DISTRIBUTOR_BODY_BYTES + 1) } })],
   ['streamed oversized body', () => ({ ok: true, body: (async function* () { yield Buffer.alloc(MAX_DISTRIBUTOR_BODY_BYTES); yield Buffer.from('x') })() })],
+  ['HTML page', () => new Response('<!DOCTYPE html><html><body>card</body></html>')],
 ]) {
   let reason = ''
   try {
     await loadDistributorSource('aws-bedrock', {
       notice: () => {},
-      fetchImpl: async url => url === BEDROCK_LIFECYCLE_URL ? new Response(bedrockHtml) : url === BEDROCK_MODEL_CARDS_URL ? new Response(`<a href="./${path.basename(new URL(fableCard.source).pathname)}">card</a>`) : response(),
+      fetchImpl: async url => url === BEDROCK_LIFECYCLE_MARKDOWN_URL ? new Response(bedrockMarkdown) : url === BEDROCK_MODEL_CARDS_MARKDOWN_URL ? new Response(`[card](${path.basename(new URL(bedrockMarkdownUrl(fableCard.source)).pathname)})`) : response(),
     })
   } catch (error) { reason = error.message }
   assert(reason.includes(fableCard.source), `Bedrock ${label} fails closed and names the card URL`)
@@ -1661,7 +2138,9 @@ const feedById = new Map(openaiFeed.models.map(model => [model.id, model]))
 const overlapping = openaiEntries.filter(entry => feedById.has(entry.id))
 assert(overlapping.length > 0, 'OpenAI fixture overlaps the committed feed')
 assert(anthropicEntries.length === 9, 'Anthropic deprecation fixture parses announcement and active status entries')
-assert(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805')?.replacement === 'claude-opus-4-6', 'Anthropic replacement parses')
+assert(anthropicEntries.find(entry => entry.id === 'claude-opus-4-1-20250805')?.replacement === 'claude-opus-4-8', 'Anthropic replacement parses')
+assert(PROVIDERS.anthropic.deprecationsFetchUrl === `${PROVIDERS.anthropic.deprecationsUrl}.md` && anthropicEntries.every(entry => entry.source === PROVIDERS.anthropic.deprecationsUrl), 'Anthropic fetches the Markdown page but cites the human page as source')
+assert(!anthropicEntries.some(entry => /temperature|top_p|top_k/.test(entry.id)), 'Anthropic Markdown fixture: the API parameter table yields no model records')
 const anthropicTentative = anthropicEntries.find(entry => entry.id === 'claude-fable-5-1')
 assert(anthropicTentative?.shutdown === '2027-09-01' && anthropicTentative.date_precision === 'tentative' && anthropicTentative.announced === undefined, 'Anthropic parses active tentative retirement dates without an announcement date')
 assert(anthropicTentative?.source === PROVIDERS.anthropic.deprecationsUrl, 'Anthropic tentative entries carry deprecations-page provenance')
@@ -1688,9 +2167,9 @@ const googleFixtureRows = [
 strictAssert.deepEqual(googleEntries, googleFixtureRows, 'Google Markdown fixture: every row parses with the callout precision, deprecated sections, wrapped and linked cells, and the agent table')
 assert(PROVIDERS.google.deprecationsFetchUrl === `${PROVIDERS.google.deprecationsUrl}.md` && googleEntries.every(entry => entry.source === PROVIDERS.google.deprecationsUrl), 'Google fetches the Markdown page but cites the human page as source')
 assert(googleIds.length === 3 && googleIds.includes('gemini-2.5-pro'), 'Google models endpoint fixture strips the models/ prefix')
-const genericStructuredHtml = `<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>generic-structured</code></td><td><code>first-model</code> or <code>second-model</code></td></tr></table>${anthropicStatusTable('generic-structured', 'Retired', '2026-01-01', '2027-01-01')}`
+const genericStructuredMarkdown = `## 2026-01-01\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`generic-structured`', '`first-model` or `second-model`']])}${anthropicStatusTable('generic-structured', 'Retired', '2026-01-01', '2027-01-01')}`
 const googleStructuredHtml = '<table><tr><th>Model</th><th>Shutdown date</th><th>Recommended replacement</th></tr><tr><td><code>google-structured</code></td><td>2027-01-01</td><td>first-model or second-model*</td></tr></table>'
-const genericStructured = parseAnthropicDeprecations(genericStructuredHtml)[0]
+const genericStructured = parseAnthropicDeprecations(genericStructuredMarkdown)[0]
 const googleStructured = parseGoogleDeprecationsHtml(googleStructuredHtml)[0]
 assert(JSON.stringify(genericStructured.replacement_options) === JSON.stringify(['first-model', 'second-model']), 'generic parser uses structured replacement routing')
 assert(!googleStructured.replacement && JSON.stringify(googleStructured.replacement_options) === JSON.stringify(['first-model']) && googleStructured.replacement_note === 'second-model*', 'Google parser keeps prose replacement tokens issue-only')
@@ -2123,8 +2602,6 @@ assert(azureError(azureTable('Azure OpenAI', [azureRow('changed-header')], ['Mod
 const azureValidTable = azureTable('Azure OpenAI', [azureRow('valid-header')])
 const reviewSpanGrid = tail => `<table><tr><td colspan="64" rowspan="64">x</td></tr>${'<tr></tr>'.repeat(63)}${'<tr><td colspan="64">x</td></tr>'.repeat(92)}<tr><td colspan="${tail}">x</td></tr></table>`
 for (const [name, parse, html] of [
-  ['Bedrock card', value => parseBedrockModelCardHtml(value, reviewCardSource), reviewCard],
-  ['Bedrock legacy', parseBedrockLifecycleHtml, bedrockHtml],
   ['Vertex', parseVertexModelVersionsHtml, vertexHtml],
   ['Azure', parseAzureModelRetirementScheduleHtml, azureValidTable],
 ]) {
@@ -2142,15 +2619,15 @@ for (const [name, parse, html] of [
 }
 reviewTest('Comment stripping loops until no marker survives', () => {
   strictAssert.ok(!/<!--/.test(stripComments('<!<!---->--<p>Model EOL date: December 1, 2026</p>-->')))
-  const nested = parseBedrockModelCardHtml(`${reviewCard}<!<!---->--<p>Model EOL date: December 1, 2026</p>-->`, reviewCardSource)
+  const nested = parseReviewCard(`${reviewCard}<!<!---->--${cardField('Model EOL date', 'December 1, 2026')}-->`)
   strictAssert.equal(nested.records[0]?.date_precision, 'tentative')
-  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewCard}<!-- unterminated`, reviewCardSource), /unbalanced comment marker/)
-  strictAssert.equal(parseBedrockModelCardHtml(`${reviewCard}<!--<p>Model EOL date: December 1, 2026</p>--!>`, reviewCardSource).records[0]?.date_precision, 'tentative')
+  strictAssert.throws(() => parseReviewCard(`${reviewCard}<!-- unterminated`), /unbalanced comment marker/)
+  strictAssert.equal(parseReviewCard(`${reviewCard}<!--${cardField('Model EOL date', 'December 1, 2026')}--!>`).records[0]?.date_precision, 'tentative')
 })
-reviewTest('Second pass F4: Bedrock refuses colspan="9007199254740992" within bounded memory and time', () => {
-  const html = `${reviewCard}<table><tr><td colspan="9007199254740992">x</td></tr></table>`
-  const script = `import assert from 'node:assert/strict'; import fs from 'node:fs'; import { parseBedrockModelCardHtml } from ${JSON.stringify(new URL('../distributors.mjs', import.meta.url).href)}; const [html, source] = fs.readFileSync(0, 'utf8').split('\\u0000'); assert.throws(() => parseBedrockModelCardHtml(html, source), /colspan.*64/);`
-  const result = spawnSync(process.execPath, ['--max-old-space-size=32', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000, maxBuffer: 64 * 1024, input: `${html}\u0000${reviewCardSource}` })
+reviewTest('Second pass F4: the HTML table reader refuses colspan="9007199254740992" within bounded memory and time', () => {
+  const html = `${vertexHtml}<table><tr><td colspan="9007199254740992">x</td></tr></table>`
+  const script = `import assert from 'node:assert/strict'; import fs from 'node:fs'; import { parseVertexModelVersionsHtml } from ${JSON.stringify(new URL('../distributors.mjs', import.meta.url).href)}; const html = fs.readFileSync(0, 'utf8'); assert.throws(() => parseVertexModelVersionsHtml(html), /colspan.*64/);`
+  const result = spawnSync(process.execPath, ['--max-old-space-size=32', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 2000, maxBuffer: 64 * 1024, input: html })
   strictAssert.equal(result.status, 0, `bounded child failed: ${result.error?.code ?? result.signal ?? result.status}`)
 })
 for (const headers of [
@@ -2208,8 +2685,8 @@ const footnotedError = (html, now = footnoteNow) => {
 }
 const footnotedRecord = parseFootnoted(footnotedTable([footnotedRow(), azureRow('plain-row')]) + offerFootnote(3) + '<p>Provisioned deployments are not upgraded automatically; move your traffic before retirement.</p>').records[0]
 assert(footnotedRecord.azureId === 'footnoted-2025-04-14' && footnotedRecord.shutdown === '2027-04-14' && !Object.hasOwn(footnotedRecord, 'date_precision'), 'Azure parses a retirement date carrying an offer-scoping footnote marker')
-assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Cohere', [azureRow('other-section')]) + offerFootnote(3, 'No earlier than 2027-04-14.')).records[0].shutdown === '2027-04-14', 'Azure reads a retirement footnote only from its own table')
-assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Azure OpenAI', [azureRow('second-table')]) + '<p>Dates are subject to change.</p>').records[0].shutdown === '2027-04-14', 'Azure ends a footnote region at the next table in the same section')
+assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Cohere', [azureRow('other-section')]) + offerFootnote(3, 'April 1, 2027 applies to other offers.')).records[0].shutdown === '2027-04-14', 'Azure reads a retirement footnote only from its own table')
+assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Azure OpenAI', [azureRow('second-table', '1', 'GA', '-')]) + '<p>Dates are subject to change.</p>').records[0].shutdown === '2027-04-14', 'Azure ends a footnote region at the next table in the same section')
 assert(footnotedError(footnotedTable() + azureTable('Azure OpenAI', [azureRow('second-table')]) + offerFootnote(3)).includes('footnote 3, which the table does not define'), 'Azure does not read a footnote placed after a second table in the same section')
 for (const phrase of [
   'No earlier than April 14, 2027', 'Retires at the earliest on April 14, 2027', 'April 14, 2027 or later', 'Not before April 14, 2027',
@@ -2295,8 +2772,8 @@ const tailRows = [azureRow('first-cited', '2024-05-13', 'Deprecated', '2027-01-1
 const tailFootnotes = offerFootnote(2, 'Offers retire on January 14, 2027.') + offerFootnote(3, 'April 14, 2027 applies to all active offers.')
 assert(footnotedError(footnotedTable(tailRows) + tailFootnotes + '<p>Global Batch for every version above retires on May 1, 2027.</p>').includes('first-cited version 2024-05-13 retirement cites footnote 2, and the notes after the last footnote states a later date 2027-05-01'), 'Azure applies the footnote date rules to notes after the last footnote')
 assert(parseFootnoted(footnotedTable(tailRows) + tailFootnotes + '<p>Regional Standard retired on March 31, 2026.</p>').records.length === 2, 'Azure accepts an already-past date after the last footnote and does not read later footnotes as trailing notes')
-const azureClockPage = footnotedTable() + offerFootnote(3)
-const azureClockLoad = now => loadDistributorSource('azure-ai-foundry', { fetchImpl: async () => new Response(azureClockPage), now, notice: () => {} }).then(() => '', error => error.message)
+const azureMarkdownFootnotePage = '### Azure OpenAI\n\n| Model | Version | Lifecycle | Retirement date | Replacement |\n| --- | --- | --- | --- | --- |\n| footnoted | 2025-04-14 | Deprecated | 2027-04-14^3^ | - |\n\n^3^ April 14, 2027 applies to all active offers for footnoted version 2025-04-14. Regional Standard deployments retired on March 31, 2026; that date is unchanged.\n'
+const azureClockLoad = now => loadDistributorSource('azure-ai-foundry', { fetchImpl: async () => new Response(azureMarkdownFootnotePage), now, env: {}, notice: () => {} }).then(() => '', error => error.message)
 assert(await azureClockLoad('2026-11-16T00:00:00Z') === '' && (await azureClockLoad('2026-03-31T00:00:00Z')).includes('not past on 2026-03-31'), 'Azure source loading passes the injected refresh clock to the parser')
 for (const [label, html] of [
   ['missing footnote', footnotedTable([footnotedRow('<sup>4</sup>')]) + offerFootnote(3)],
@@ -2441,7 +2918,7 @@ try {
 assert(azureBindingReason.includes('binds to anthropic') && azureBindingReason.includes('openai feed'), 'Azure section binding refuses a cross-publisher match')
 const azureNotices = []
 const loadedAzure = await loadDistributorSource('azure-ai-foundry', { fixtures, notice: notice => azureNotices.push(notice) })
-assert(loadedAzure.records.length === 174 && loadedAzure.conflicts.length === 2 && azureNotices.filter(notice => notice.startsWith('notice:') && notice.includes('earliest retirement wins')).length === 2, 'Azure fixture loading emits one notice per source conflict')
+assert(loadedAzure.records.length === 168 && loadedAzure.conflicts.length === 2 && azureNotices.filter(notice => notice.startsWith('notice:') && notice.includes('earliest retirement wins')).length === 2, 'Azure fixture loading emits one notice per source conflict')
 const azureUnchangedFeed = { publisher: 'openai', models: [] }
 const azureInformationalOptions = { sourceConflicts: azureSource.conflicts, unconfirmedDistributions: azureBinding.unconfirmedDistributions, noPublisherFeed: azureBinding.noPublisherFeed }
 const azureInformationalDiff = compareFeeds(azureUnchangedFeed, azureUnchangedFeed, azureInformationalOptions)
@@ -2685,15 +3162,17 @@ assert(currentAdditionDiff.changed, 'semantic diff treats a current-model additi
 const openaiCheck = run(['--provider', 'openai', '--check', '--fixtures', fixtures])
 assert(openaiCheck.code === 0 || openaiCheck.code === 3, 'OpenAI --check exits 0 or 3 depending on committed feed state, never a failure')
 assert(openaiCheck.out.includes('Unconfirmed entries') && openaiCheck.out.includes('retained because neither source confirmed it'), '--check retains and reports committed entries the fixture slice does not confirm')
+const openaiMarkdown = fs.readFileSync(path.join(fixtures, 'openai-deprecations.md'), 'utf8')
 
 const responseFor = body => ({ ok: true, status: 200, text: async () => body })
 
 const anthropicKeylessRequests = []
+const anthropicKeylessNotices = []
 const anthropicKeyless = await loadProviderSources(PROVIDERS.anthropic, {
-  env: {}, notice: () => {},
+  env: {}, notice: message => anthropicKeylessNotices.push(message),
   fetchImpl: async (url, options) => {
     anthropicKeylessRequests.push({ url, options })
-    if (url === PROVIDERS.anthropic.deprecationsUrl) return responseFor(anthropicHtml)
+    if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return responseFor(anthropicMarkdown)
     if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(`${anthropicIndex}\n${anthropicIndex}`)
     strictAssert.ok(anthropicModelUrls.includes(url))
     return responseFor(anthropicModelMarkdown(url))
@@ -2701,6 +3180,9 @@ const anthropicKeyless = await loadProviderSources(PROVIDERS.anthropic, {
 })
 assert(anthropicKeyless.currentIds === null && !anthropicKeyless.endpointAvailable && JSON.stringify(anthropicKeyless.currentModels) === JSON.stringify(anthropicPageModels) && anthropicKeylessRequests.length === 15, 'keyless Anthropic refresh reads the index and every unique model page')
 assert(anthropicKeylessRequests.every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en' && !options.headers['x-api-key']), 'Anthropic index and page requests use bounded fetches without credentials')
+assert(!anthropicKeylessRequests.some(({ url }) => new URL(url).hostname === 'api.anthropic.com') && JSON.stringify(anthropicKeyless.deprecations) === JSON.stringify(anthropicEntries) && !anthropicKeyless.sourceConflicts.length, 'keyless Anthropic refresh never calls the models API and reports no lifecycle conflicts')
+strictAssert.deepEqual(anthropicKeylessNotices, ['notice: ANTHROPIC_API_KEY is unset; skipping anthropic models endpoint and preserving committed entries'])
+assert(true, 'keyless Anthropic refresh prints only the unset-key notice, with no models API lifecycle summary')
 for (const [index, expectedPages, diagnostic] of [
   [[...anthropicCapUrls, ...anthropicCapUrls].join('\n'), 100, undefined],
   [[...anthropicCapUrls, anthropicTestUrl].join('\n'), 0, 'cap of 100 pages'],
@@ -2712,7 +3194,7 @@ for (const [index, expectedPages, diagnostic] of [
     await loadProviderSources(PROVIDERS.anthropic, {
       env: {}, notice: () => {},
       fetchImpl: async url => {
-        if (url === PROVIDERS.anthropic.deprecationsUrl) return responseFor(anthropicHtml)
+        if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return responseFor(anthropicMarkdown)
         if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(index)
         pageCalls++
         return responseFor(anthropicTestTable(`| Claude API | \`claude-test-${pageCalls}\` |`))
@@ -2725,7 +3207,7 @@ for (const failure of ['HTTP', 'empty', 'oversized-header', 'oversized-stream'])
   await strictAssert.rejects(loadProviderSources(PROVIDERS.anthropic, {
     env: {}, notice: () => {},
     fetchImpl: async url => {
-      if (url === PROVIDERS.anthropic.deprecationsUrl) return responseFor(anthropicHtml)
+      if (url === PROVIDERS.anthropic.deprecationsFetchUrl) return responseFor(anthropicMarkdown)
       if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(anthropicTestUrl)
       if (failure === 'HTTP') return { ok: false, status: 503 }
       if (failure === 'empty') return responseFor('')
@@ -2736,11 +3218,11 @@ for (const failure of ['HTTP', 'empty', 'oversized-header', 'oversized-stream'])
   assert(true, `Anthropic page loading fails closed on ${failure}`)
 }
 const boundedPublishers = {
-  openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiHtml, credential: 'Authorization' },
-  anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key' }, html: anthropicHtml, credential: 'x-api-key' },
+  openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiMarkdown, credential: 'Authorization' },
+  anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key', MODEL_EOL_CROSS_CHECKS: 'strict' }, html: anthropicMarkdown, credential: 'x-api-key' },
   google: { env: { GEMINI_API_KEY: 'fixture-key' }, html: googleMarkdown, credential: 'x-goog-api-key' },
-  mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralHtml, credential: 'Authorization' },
-  cohere: { env: { COHERE_API_KEY: 'fixture-key' }, html: cohereHtml, credential: 'Authorization' },
+  mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralMarkdown, credential: 'Authorization' },
+  cohere: { env: { COHERE_API_KEY: 'fixture-key' }, html: cohereMarkdown, credential: 'Authorization' },
 }
 const isModelsUrl = (publisher, url) => {
   const expected = new URL(PROVIDERS[publisher].modelsUrl)
@@ -2768,7 +3250,7 @@ for (const publisher of Object.keys(boundedPublishers)) {
   assert(requests.every(({ options }) => options.signal instanceof AbortSignal && options.headers['accept-language'] === 'en'), `${publisher} models and deprecations requests carry an abort deadline and request English`)
   assert(models.every(({ options }) => options.headers[credential]?.includes('fixture-key')) && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => !Object.hasOwn(options.headers, credential)), `${publisher} bounded fetch sends ${credential} only to the models endpoint`)
 
-  assert(models.every(({ options }) => options.redirect === 'error') && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => options.redirect === 'follow'), `${publisher} credentialed models requests refuse redirects while uncredentialed pages follow them`)
+  assert(models.every(({ options }) => options.redirect === 'error') && requests.filter(request => !isModelsUrl(publisher, request.url)).every(({ options }) => options.redirect === 'manual'), `${publisher} credentialed models requests refuse redirects while uncredentialed pages follow them hop by hop`)
 }
 const oversizedBody = () => new Response(Buffer.alloc(MAX_DISTRIBUTOR_BODY_BYTES + 1, 0x20))
 const oversizedHeader = () => new Response('{}', { headers: { 'content-length': String(MAX_DISTRIBUTOR_BODY_BYTES + 1) } })
@@ -2814,8 +3296,8 @@ for (const page of ['deprecations', 'models']) {
   assert(deadlines.includes(SOURCE_FETCH_DEADLINE_MS) && reason.includes(`exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline`), `a stalled ${page} request fails at the source fetch deadline`)
 }
 const vertexRequests = []
-await loadDistributorSource('vertex-ai', { fetchImpl: async (url, options) => { vertexRequests.push(options); return new Response(vertexHtml) }, notice: () => {} })
-assert(vertexRequests.length === 1 && vertexRequests[0].redirect === 'follow', 'uncredentialed distributor pages still follow redirects')
+await loadDistributorSource('vertex-ai', { fetchImpl: async (url, options) => { vertexRequests.push(options); return new Response(fs.readFileSync(path.join(fixtures, 'vertex-model-versions.md'), 'utf8')) }, notice: () => {} })
+assert(vertexRequests.length === 1 && vertexRequests[0].redirect === 'manual', 'uncredentialed distributor pages still follow redirects, hop by hop')
 let redirectReason = ''
 try {
   await loadBounded('google', async url => {
@@ -2831,6 +3313,92 @@ try {
   }, { headers: { authorization: 'Bearer sk-test-secret-value\nabc' } })
 } catch (error) { rejectedHeaderReason = error.message }
 assert(rejectedHeaderReason.includes('[redacted]') && !rejectedHeaderReason.includes('sk-test-secret-value') && !/[\r\n]/.test(rejectedHeaderReason), 'a rejected credential header is redacted and the error stays on one line')
+const redirectModes = []
+for (const headers of [{}, { Accept: 'text/markdown' }, { 'anthropic-version': '2023-06-01', accept: 'application/json' }, { Authorization: 'Bearer x' }, { 'x-api-key': 'k' }, { 'X-Goog-Api-Key': 'k' }, { 'X-Custom-Token': 't' }, { Cookie: 'c' }]) {
+  await fetchBoundedBody('https://docs.example.test/page.md', 'example', async (url, options) => { redirectModes.push(options.redirect); return new Response('body') }, { headers })
+}
+await fetchBoundedBody('https://docs.example.test/page.md', 'example', async (url, options) => { redirectModes.push(options.redirect); return new Response('body') }, { headers: { 'X-Tenant': 'acme' }, secretHeaders: ['x-tenant'] })
+assert(JSON.stringify(redirectModes) === JSON.stringify(['manual', 'manual', 'manual', 'error', 'error', 'error', 'error', 'error', 'error']), 'only credential headers, including ones the caller marks secret, make a fetch refuse redirects')
+assert(JSON.stringify(credentialHeaderNames({ Accept: 'text/markdown', 'anthropic-version': '2023-06-01', 'x-api-key': 'k', Authorization: 'a', 'X-Tenant': 't' }, ['X-TENANT'])) === JSON.stringify(['x-api-key', 'Authorization', 'X-Tenant']), 'credentialHeaderNames separates credential headers from ordinary ones')
+let ordinaryHeaderReason = ''
+try {
+  await fetchBoundedBody('https://api.example.test/v1/models', 'anthropic', async () => {
+    throw new TypeError('request with accept text/markdown and anthropic-version 2023-06-01 failed for key sk-ant-test-secret and token tok-secret-value')
+  }, { headers: { accept: 'text/markdown', 'anthropic-version': '2023-06-01', 'x-api-key': 'sk-ant-test-secret', Authorization: 'Bearer tok-secret-value' } })
+} catch (error) { ordinaryHeaderReason = error.message }
+assert(ordinaryHeaderReason.includes('accept text/markdown and anthropic-version 2023-06-01') && !ordinaryHeaderReason.includes('sk-ant-test-secret') && !ordinaryHeaderReason.includes('tok-secret-value') && ordinaryHeaderReason.split('[redacted]').length === 3, 'only credential header values are redacted, including a bearer token echoed without its scheme')
+let downgradeReason = ''
+try {
+  await fetchBoundedBody('https://docs.example.test/page.md', 'example', async () => Object.defineProperty(new Response('body'), 'url', { value: 'http://docs.example.test/page.md' }), { headers: { Accept: 'text/markdown' } })
+} catch (error) { downgradeReason = error.message }
+assert(downgradeReason === 'example fetch failed for https://docs.example.test/page.md: redirected to a http: URL', 'a followed redirect from https to http is refused')
+const httpsLanding = await fetchBoundedBody('https://docs.example.test/page.md', 'example', async () => Object.defineProperty(new Response('moved body'), 'url', { value: 'https://docs.example.test/moved.md' }), { headers: { Accept: 'text/markdown' } })
+const plainHttp = await fetchBoundedBody('http://127.0.0.1:1/feed.json', '--feeds-url', async () => Object.defineProperty(new Response('local body'), 'url', { value: 'http://127.0.0.1:1/feed.json' }))
+assert(httpsLanding === 'moved body' && plainHttp === 'local body', 'an https redirect target and a caller-chosen http URL still load')
+const redirectChain = (hops, final = () => new Response('final body')) => {
+  const requests = []
+  const fetchImpl = async (url, options) => {
+    requests.push({ url, options })
+    const location = hops[requests.length - 1]
+    return location === undefined ? final() : new Response('redirect body', { status: 302, headers: location === null ? {} : { location } })
+  }
+  return { requests, fetchImpl }
+}
+const redirectOutcome = async (start, chain, options) => fetchBoundedBody(start, 'example', chain.fetchImpl, options).then(body => ({ body }), error => ({ error: error.message }))
+const httpHop = redirectChain(['http://docs.example.test/insecure', 'https://docs.example.test/final.md'])
+const httpHopOutcome = await redirectOutcome('https://docs.example.test/page.md', httpHop)
+const relativeHops = redirectChain(['/moved/', 'next.md', '../final.md'])
+const relativeOutcome = await redirectOutcome('https://docs.example.test/a/page.md', relativeHops)
+const fiveHops = redirectChain(Array.from({ length: 5 }, (_, index) => `https://docs.example.test/hop-${index + 1}`))
+const fiveHopsOutcome = await redirectOutcome('https://docs.example.test/page.md', fiveHops)
+const sixHops = redirectChain(Array.from({ length: 6 }, (_, index) => `https://docs.example.test/hop-${index + 1}`))
+const sixHopsOutcome = await redirectOutcome('https://docs.example.test/page.md', sixHops)
+const noLocation = redirectChain([null])
+const noLocationOutcome = await redirectOutcome('https://docs.example.test/page.md', noLocation)
+const upgradeHops = redirectChain(['https://127.0.0.1:1/feed.json'])
+const upgradeOutcome = await redirectOutcome('http://127.0.0.1:1/feed.json', upgradeHops)
+const oversizedFinal = redirectChain(['https://docs.example.test/big.md'], () => new Response(Buffer.alloc(MAX_DISTRIBUTOR_BODY_BYTES + 1, 0x20)))
+const oversizedFinalOutcome = await redirectOutcome('https://docs.example.test/page.md', oversizedFinal)
+const credentialRedirect = redirectChain(['https://docs.example.test/final.md'])
+const credentialOutcome = await redirectOutcome('https://docs.example.test/page.md', credentialRedirect, { headers: { Authorization: 'Bearer secret-token-value' } })
+reviewTest('fetchBoundedBody follows redirects hop by hop: an http hop anywhere in the chain is refused before it is requested', () => {
+  strictAssert.deepEqual(httpHopOutcome, { error: 'example fetch failed for https://docs.example.test/page.md: redirected to a http: URL' })
+  strictAssert.deepEqual(httpHop.requests.map(request => request.url), ['https://docs.example.test/page.md'])
+  strictAssert.deepEqual(upgradeOutcome, { body: 'final body' })
+  strictAssert.deepEqual(upgradeHops.requests.map(request => request.url), ['http://127.0.0.1:1/feed.json', 'https://127.0.0.1:1/feed.json'])
+})
+reviewTest('fetchBoundedBody resolves a relative Location against the hop that sent it, and keeps the headers, deadline signal, and manual mode on every hop', () => {
+  strictAssert.deepEqual(relativeOutcome, { body: 'final body' })
+  strictAssert.deepEqual(relativeHops.requests.map(request => request.url), ['https://docs.example.test/a/page.md', 'https://docs.example.test/moved/', 'https://docs.example.test/moved/next.md', 'https://docs.example.test/final.md'])
+  const [first, ...rest] = relativeHops.requests.map(request => request.options)
+  strictAssert.ok(first.signal instanceof AbortSignal)
+  for (const options of rest) strictAssert.ok(options.signal === first.signal && options.redirect === 'manual' && options.headers['accept-language'] === 'en')
+})
+reviewTest(`fetchBoundedBody follows at most ${MAX_REDIRECTS} redirects, refuses a redirect without a Location, and bounds the final body`, () => {
+  strictAssert.equal(MAX_REDIRECTS, 5)
+  strictAssert.deepEqual([fiveHopsOutcome, fiveHops.requests.length], [{ body: 'final body' }, 6])
+  strictAssert.deepEqual([sixHopsOutcome, sixHops.requests.length], [{ error: 'example fetch failed for https://docs.example.test/page.md: more than 5 redirects' }, 6])
+  strictAssert.deepEqual(noLocationOutcome, { error: 'example fetch failed for https://docs.example.test/page.md: HTTP 302 redirect without a Location header' })
+  strictAssert.match(oversizedFinalOutcome.error, /response exceeds \d+ bytes$/)
+})
+reviewTest('fetchBoundedBody never follows a redirect for a request with a credential header', () => {
+  strictAssert.deepEqual(credentialRedirect.requests.map(request => [request.url, request.options.redirect]), [['https://docs.example.test/page.md', 'error']])
+  strictAssert.match(credentialOutcome.error, /: HTTP 302 - redirect body$/)
+})
+{
+  const deadlines = []
+  let reason = ''
+  const signals = []
+  globalThis.setTimeout = (callback, ms, ...args) => { deadlines.push(ms); return realSetTimeout(callback, ms === SOURCE_FETCH_DEADLINE_MS ? 0 : ms, ...args) }
+  try {
+    await fetchBoundedBody('https://docs.example.test/page.md', 'example', async (url, options) => {
+      signals.push(options.signal)
+      if (signals.length === 1) return new Response('', { status: 301, headers: { location: '/stalled.md' } })
+      return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+    })
+  } catch (error) { reason = error.message } finally { globalThis.setTimeout = realSetTimeout }
+  assert(deadlines.filter(ms => ms === SOURCE_FETCH_DEADLINE_MS).length === 1 && signals.length === 2 && signals[0] === signals[1] && reason.endsWith(`exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline`), 'one fetch deadline covers every redirect hop')
+}
 let bomModels = null
 try {
   bomModels = await loadBounded('openai', async url => isModelsUrl('openai', url)
@@ -2880,7 +3448,7 @@ const cohereAuthenticated = await loadProviderSources(PROVIDERS.cohere, {
   notice: message => cohereLiveNotices.push(message),
   fetchImpl: async (url, options) => {
     cohereRequests.push({ url: new URL(url), headers: options.headers })
-    if (url === PROVIDERS.cohere.deprecationsUrl) return responseFor(cohereHtml)
+    if (url === PROVIDERS.cohere.deprecationsFetchUrl) return responseFor(cohereMarkdown)
     if (new URL(url).searchParams.get('page_token')) {
       return responseFor(JSON.stringify({ models: [
         { name: 'command-a-03-2025', is_deprecated: false },
@@ -2902,10 +3470,10 @@ assert(cohereAuthenticated.undatedDeprecatedIds.join() === 'cohere-live-undated'
 const cohereKeylessRequests = []
 const cohereKeyless = await loadProviderSources(PROVIDERS.cohere, {
   env: {}, notice: () => {},
-  fetchImpl: async url => { cohereKeylessRequests.push(url); return responseFor(cohereHtml) },
+  fetchImpl: async url => { cohereKeylessRequests.push(url); return responseFor(cohereMarkdown) },
 })
 const cohereKeylessFeed = mergeFeed(cohereMerged.feed, { ...cohereKeyless, provider: PROVIDERS.cohere }).feed
-assert(cohereKeyless.currentIds === null && !cohereKeyless.endpointAvailable && cohereKeylessRequests.join() === PROVIDERS.cohere.deprecationsUrl && cohereKeylessFeed.models.length === cohereMerged.feed.models.length && cohereKeylessFeed.models.find(model => model.id === 'command-r-03-2024')?.aliases?.join() === 'command-r', 'keyless Cohere refresh uses only the page and preserves committed models and aliases')
+assert(cohereKeyless.currentIds === null && !cohereKeyless.endpointAvailable && cohereKeylessRequests.join() === PROVIDERS.cohere.deprecationsFetchUrl && cohereKeylessFeed.models.length === cohereMerged.feed.models.length && cohereKeylessFeed.models.find(model => model.id === 'command-r-03-2024')?.aliases?.join() === 'command-r', 'keyless Cohere refresh uses only the page and preserves committed models and aliases')
 for (const mode of ['http', 'malformed', 'cycle', 'cap']) {
   let calls = 0
   let reason = ''
@@ -2935,7 +3503,7 @@ const mistralAuthenticated = await loadProviderSources(PROVIDERS.mistral, {
   notice: () => {},
   fetchImpl: async (url, options) => {
     mistralRequests.push({ url, headers: options.headers })
-    return responseFor(url === PROVIDERS.mistral.modelsUrl ? JSON.stringify(mistralEndpointBody) : mistralHtml)
+    return responseFor(url === PROVIDERS.mistral.modelsUrl ? JSON.stringify(mistralEndpointBody) : mistralMarkdown)
   },
 })
 assert(mistralRequests.length === 2 && mistralRequests[0].headers.Authorization === 'Bearer fixture-key' && !Object.hasOwn(mistralRequests[1].headers, 'Authorization') && mistralRequests.every(request => request.headers['accept-language'] === 'en'), 'Mistral sends Bearer auth only to its models endpoint')
@@ -2948,11 +3516,11 @@ const mistralKeyless = await loadProviderSources(PROVIDERS.mistral, {
   notice: () => {},
   fetchImpl: async url => {
     mistralKeylessRequests.push(url)
-    return responseFor(mistralHtml)
+    return responseFor(mistralMarkdown)
   },
 })
 const mistralKeylessFeed = mergeFeed(mistralMerged.feed, { ...mistralKeyless, provider: PROVIDERS.mistral }).feed
-assert(mistralKeyless.currentIds === null && !mistralKeyless.endpointAvailable && mistralKeylessRequests.join() === PROVIDERS.mistral.deprecationsUrl && mistralKeylessFeed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest'), 'keyless Mistral refresh reads only the public page and preserves committed aliases')
+assert(mistralKeyless.currentIds === null && !mistralKeyless.endpointAvailable && mistralKeylessRequests.join() === PROVIDERS.mistral.deprecationsFetchUrl && mistralKeylessFeed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest'), 'keyless Mistral refresh reads only the public page and preserves committed aliases')
 for (const aliases of ['not-an-array', ['bad alias'], [42]]) {
   let reason = ''
   try {
@@ -3124,7 +3692,7 @@ const paginatedOpenAI = await loadProviderSources(PROVIDERS.openai, {
         ? responseFor(JSON.stringify({ data: [{ id: 'page-two' }], has_more: false, last_id: 'page-two' }))
         : responseFor(JSON.stringify({ data: [{ id: 'page-one' }], has_more: true, last_id: 'page-one' }))
     }
-    return responseFor(openaiHtml)
+    return responseFor(openaiMarkdown)
   },
 })
 assert(paginatedOpenAI.currentIds.length === 2 && paginatedOpenAI.currentIds.includes('page-two') && openaiPageUrls[1]?.searchParams.get('after') === 'page-one', 'OpenAI models pagination follows the last id into the next page')
@@ -3137,16 +3705,19 @@ const paginatedAnthropic = await loadProviderSources(PROVIDERS.anthropic, {
     const parsedUrl = new URL(url)
     anthropicPageUrls.push(parsedUrl)
     if (parsedUrl.pathname === '/v1/models') {
+      const row = id => ({ type: 'model', id, lifecycle: 'active', deprecated_at: null, retires_at: null })
       return parsedUrl.searchParams.get('after_id')
-        ? responseFor(JSON.stringify({ data: [{ id: 'anthropic-page-two' }], has_more: false, last_id: 'anthropic-page-two' }))
-        : responseFor(JSON.stringify({ data: [{ id: 'anthropic-page-one' }], has_more: true, last_id: 'anthropic-page-one' }))
+        ? responseFor(JSON.stringify({ data: [row('anthropic-page-two')], has_more: false, first_id: 'anthropic-page-two', last_id: 'anthropic-page-two' }))
+        : responseFor(JSON.stringify({ data: [row('anthropic-page-one')], has_more: true, first_id: 'anthropic-page-one', last_id: 'anthropic-page-one' }))
     }
     if (url === PROVIDERS.anthropic.aliasesUrl) return responseFor(anthropicIndex)
     if (anthropicModelUrls.includes(url)) return responseFor(anthropicModelMarkdown(url))
-    return responseFor(anthropicHtml)
+    return responseFor(anthropicMarkdown)
   },
 })
-assert(paginatedAnthropic.currentIds.length === 2 && anthropicPageUrls[1]?.searchParams.get('after_id') === 'anthropic-page-one', 'Anthropic models pagination follows after_id from last_id')
+const anthropicModelsRequests = anthropicPageUrls.filter(url => url.pathname === '/v1/models')
+assert(paginatedAnthropic.currentIds.length === 2 && anthropicModelsRequests[1]?.searchParams.get('after_id') === 'anthropic-page-one', 'Anthropic models pagination follows after_id from last_id')
+assert(anthropicModelsRequests.length === 2 && anthropicModelsRequests.every(url => url.searchParams.getAll('lifecycle[]').join() === 'active,deprecated,retired' && url.searchParams.get('limit') === '1000' && !url.searchParams.has('lifecycle')), 'Anthropic models pagination asks every page for all three lifecycle stages, 1000 at a time, in the SDK bracket encoding')
 
 let capCalls = 0
 let paginationCapReason = ''
@@ -3160,7 +3731,7 @@ try {
         capCalls++
         return responseFor(JSON.stringify({ data: [{ id: `cap-page-${capCalls}` }], has_more: true, last_id: `cap-page-${capCalls}` }))
       }
-      return responseFor(openaiHtml)
+      return responseFor(openaiMarkdown)
     },
   })
 } catch (error) {
@@ -3183,7 +3754,7 @@ assert(cohereCheck.stderr.includes('models endpoint flags cohere-fixture-undated
 const cohereCorruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-cohere-corrupt-'))
 try {
   fs.writeFileSync(path.join(cohereCorruptDir, 'cohere-models.json'), cohereModels)
-  fs.writeFileSync(path.join(cohereCorruptDir, 'cohere-deprecations.html'), cohereUnknown)
+  fs.writeFileSync(path.join(cohereCorruptDir, 'cohere-deprecations.md'), cohereMdUnknown)
   const out = path.join(cohereCorruptDir, 'out')
   const invalid = run(['--provider', 'cohere', '--fixtures', cohereCorruptDir, '--out', out])
   assert(invalid.code === 1 && invalid.err.includes('2026-04-04: Embed') && !fs.existsSync(out), 'Cohere refuses unknown page shapes before writing any feed')
@@ -3197,7 +3768,7 @@ assert(mistralCheck.stderr.split('\n').filter(line => line.startsWith('notice: m
 const mistralCorruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-mistral-corrupt-'))
 try {
   fs.writeFileSync(path.join(mistralCorruptDir, 'mistral-models.json'), mistralModels)
-  fs.writeFileSync(path.join(mistralCorruptDir, 'mistral-deprecations.html'), mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, '5/22/2026')))
+  fs.writeFileSync(path.join(mistralCorruptDir, 'mistral-deprecations.md'), mistralWithRow(5, '5/22/2026'))
   const out = path.join(mistralCorruptDir, 'out')
   const invalid = run(['--provider', 'mistral', '--fixtures', mistralCorruptDir, '--out', out])
   assert(invalid.code === 1 && invalid.err.includes('mistral-medium-2508') && !fs.existsSync(out), 'Mistral refuses malformed dates before writing any feed')
@@ -3220,6 +3791,21 @@ assert(vertexCheck.out.includes('no publisher feed'), 'Vertex --check reports un
 const azureCheck = spawnSync(process.execPath, [refresh, '--distributor', 'azure-ai-foundry', '--check', '--fixtures', fixtures], { encoding: 'utf8' })
 assert([0, 3].includes(azureCheck.status) && azureCheck.stdout.includes('## Source conflicts'), 'Azure CLI check renders source conflicts through distributor wiring')
 assert(azureCheck.stderr.split('\n').filter(line => line.startsWith('notice:') && line.includes('earliest retirement wins')).length === 2, 'Azure CLI prints both source conflicts on stderr')
+const crossCheckPolicyRuns = [
+  [['--distributor', 'aws-bedrock,vertex-ai'], 'Strict'],
+  [['--distributor', 'vertex-ai'], 'stirct'],
+  [['--provider', 'openai'], 'STRICT'],
+  [['--distributor', 'aws-bedrock,vertex-ai'], 'strict'],
+].map(([args, policy]) => [policy, spawnSync(process.execPath, [refresh, ...args, '--check', '--fixtures', fixtures], { encoding: 'utf8', env: { ...process.env, MODEL_EOL_CROSS_CHECKS: policy } })])
+reviewTest('refresh refuses an unknown MODEL_EOL_CROSS_CHECKS value before any source is read, whichever sources the run selects', () => {
+  for (const [policy, result] of crossCheckPolicyRuns.slice(0, 3)) {
+    strictAssert.equal(result.status, 1, `${policy}: ${result.stderr}`)
+    strictAssert.equal(result.stdout, '')
+    strictAssert.equal(result.stderr, `refresh failed: MODEL_EOL_CROSS_CHECKS must be unset, "warn", or "strict", not ${JSON.stringify(policy)}\n`)
+  }
+  const [, accepted] = crossCheckPolicyRuns[3]
+  strictAssert.ok([0, 3].includes(accepted.status), accepted.stderr)
+})
 const allDistributorsCheck = run(['--distributor', 'aws-bedrock,vertex-ai,azure-ai-foundry', '--check', '--fixtures', fixtures])
 assert([0, 3].includes(allDistributorsCheck.code) && allDistributorsCheck.out.includes('## Source conflicts'), 'refresh composes Azure with Bedrock and Vertex offline')
 
@@ -3497,7 +4083,7 @@ assert(fs.readFileSync(path.join(root, 'feeds', 'openai.json'), 'utf8') === befo
 assert(fs.readFileSync(path.join(root, 'feeds', 'anthropic.json'), 'utf8') === beforeAnthropic, 'refresh does not modify committed Anthropic feeds during tests')
 
 const corruptBedrockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-bedrock-corrupt-'))
-fs.writeFileSync(path.join(corruptBedrockDir, 'bedrock-lifecycle.html'), '<html><body><table><tr><th>Model ID</th><th>Legacy date</th></tr></table></body></html>')
+fs.writeFileSync(path.join(corruptBedrockDir, 'bedrock-lifecycle.md'), '# Model lifecycle (Legacy)\n\n- **Amazon**\n  - **Model ID:** amazon.corrupt-v1:0\n  - **Legacy date:** March 1, 2026\n')
 const corruptBedrockOut = path.join(corruptBedrockDir, 'out')
 const corruptBedrockRun = run(['--distributor', 'aws-bedrock', '--out', corruptBedrockOut, '--fixtures', corruptBedrockDir])
 assert(corruptBedrockRun.code === 1, 'corrupted Bedrock fixture exits nonzero')
@@ -3505,15 +4091,15 @@ assert(!fs.existsSync(corruptBedrockOut), 'corrupted Bedrock fixture produces no
 
 const corruptOpenAIDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-openai-corrupt-'))
 fs.copyFileSync(path.join(fixtures, 'openai-models.json'), path.join(corruptOpenAIDir, 'openai-models.json'))
-fs.writeFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.html'), '<html><body><h1>Deprecations</h1><p>corrupt</p></body></html>')
+fs.writeFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.md'), '# Deprecations\n\ncorrupt\n')
 const corruptOpenAIOut = path.join(corruptOpenAIDir, 'out')
 const corruptOpenAIRun = run(['--provider', 'openai', '--out', corruptOpenAIOut, '--fixtures', corruptOpenAIDir])
 assert(corruptOpenAIRun.code === 1, 'corrupted OpenAI fixture exits nonzero')
 assert(!fs.existsSync(corruptOpenAIOut), 'corrupted OpenAI fixture produces no output directory')
-const corruptOpenAIHtml = fs.readFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.html'), 'utf8')
+const corruptOpenAIMarkdown = fs.readFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.md'), 'utf8')
 let corruptOpenAIMessage
 try {
-  parseOpenAIDeprecations(corruptOpenAIHtml)
+  parseOpenAIDeprecationsMarkdown(corruptOpenAIMarkdown)
 } catch (error) {
   corruptOpenAIMessage = error.message
 }
@@ -3524,10 +4110,10 @@ const multiFailureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh
 try {
   const sources = path.join(multiFailureDir, 'sources')
   fs.cpSync(fixtures, sources, { recursive: true })
-  fs.writeFileSync(path.join(sources, 'openai-deprecations.html'), corruptOpenAIHtml)
+  fs.writeFileSync(path.join(sources, 'openai-deprecations.md'), corruptOpenAIMarkdown)
   fs.writeFileSync(path.join(sources, 'google-deprecations.md'), '# Gemini deprecations\n\nNo lifecycle table here.\n')
-  fs.writeFileSync(path.join(sources, 'bedrock-lifecycle.html'), '<html><body><table><tr><th>Model ID</th><th>Legacy date</th></tr></table></body></html>')
-  fs.writeFileSync(path.join(sources, 'azure-model-retirement-schedule.html'), '<html><body><h1>Retirements</h1><p>corrupt</p></body></html>')
+  fs.writeFileSync(path.join(sources, 'bedrock-lifecycle.md'), '<html><body><table><tr><th>Model ID</th><th>Legacy date</th></tr></table></body></html>')
+  fs.writeFileSync(path.join(sources, 'azure-model-retirement-schedule.md'), '# Retirements\n\ncorrupt\n')
   const out = path.join(multiFailureDir, 'out')
   fs.mkdirSync(out)
   const sourceLines = text => text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2, line.indexOf(':')))
@@ -3558,19 +4144,19 @@ for (const code of [0, 3]) {
 }
 
 const corruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-corrupt-'))
-for (const file of ['openai-models.json', 'anthropic-models.json', 'openai-deprecations.html']) {
+for (const file of ['openai-models.json', 'anthropic-models.json', 'openai-deprecations.md']) {
   fs.copyFileSync(path.join(fixtures, file), path.join(corruptDir, file))
 }
-fs.writeFileSync(path.join(corruptDir, 'anthropic-deprecations.html'), '<html><body><table><tr><td>corrupt</td></tr></table></body></html>')
+fs.writeFileSync(path.join(corruptDir, 'anthropic-deprecations.md'), '<html><body><table><tr><td>corrupt</td></tr></table></body></html>')
 const corruptOut = path.join(corruptDir, 'out')
 const corruptRun = run(['--provider', 'anthropic', '--out', corruptOut, '--fixtures', corruptDir])
-assert(corruptRun.code === 1, 'corrupted fixture exits nonzero')
+assert(corruptRun.code === 1 && corruptRun.err.includes('unsupported markup'), 'an HTML body where the Markdown deprecations page belongs exits nonzero')
 assert(!fs.existsSync(corruptOut), 'corrupted fixture produces no output directory')
 
 const malformedStatusDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-malformed-status-'))
 fs.copyFileSync(path.join(fixtures, 'anthropic-models.json'), path.join(malformedStatusDir, 'anthropic-models.json'))
 fs.writeFileSync(
-  path.join(malformedStatusDir, 'anthropic-deprecations.html'),
+  path.join(malformedStatusDir, 'anthropic-deprecations.md'),
   anthropicStatusTable('claude-malformed-status-floor', 'Active', 'N/A', 'Not sooner than Q4 2027'),
 )
 const malformedStatusOut = path.join(malformedStatusDir, 'out')
@@ -3578,124 +4164,103 @@ const malformedStatusRun = run(['--provider', 'anthropic', '--check', '--out', m
 assert(malformedStatusRun.code === 1 && malformedStatusRun.err.includes('claude-malformed-status-floor') && malformedStatusRun.err.includes('Not sooner than Q4 2027'), 'Anthropic refresh check fails loudly on an unparseable status floor')
 assert(!fs.existsSync(malformedStatusOut), 'an unparseable Anthropic status floor writes no feed output')
 
-const shapesBedrockTable = rows => `<table><tr><th>Provider</th><th>Model</th><th>Model ID</th><th>Regions</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th></tr>${rows.map(cells => `<tr>${cells.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</table>`
+const shapesBedrockEntry = ([provider, name, id, regions, legacy, eol, extended], extra = []) => bedrockEntry([['Model name', name], ['Model ID', id], ['Regions', regions], ['Legacy date', legacy], ['EOL date', eol], ['Public extended access start date', extended], ...extra], provider)
+const shapesBedrockPage = rows => bedrockPage(...rows.map(row => shapesBedrockEntry(row)))
+const shapesBedrockRegional = (provider, name, id, groups, extra = []) => bedrockEntry([['Model name', name], ['Model ID', id], ...groups.map(([regions, legacy, eol, extended, ...more]) => [['Regions', regions], ['Legacy date', legacy], ['EOL date', eol], ['Public extended access start date', extended], ...more])], provider)
 reviewTest('2026-10-18 shapes: Bedrock card accepts bare regional EOL cells that match the Model EOL date', () => {
-  strictAssert.deepEqual(parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr><td>EOL: 2028-01-01</td><td>EOL: 2028-01-01</td></tr></table>`, reviewCardSource).records,
+  strictAssert.deepEqual(parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'January 1, 2028')}${cellTable('EOL: 2028-01-01', 'EOL: 2028-01-01')}`).records,
     [{ bedrockId: 'anthropic.example-v1:0', shutdown: '2028-01-01', status: 'legacy', source: reviewCardSource }])
 })
 reviewTest('2026-10-18 shapes: Bedrock card fails closed on a bare regional EOL that differs from the Model EOL date', () => {
-  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr><td>EOL: 2028-01-02</td></tr></table>`, reviewCardSource), /region EOL 2028-01-02 differs/)
-  strictAssert.throws(() => parseBedrockModelCardHtml(`${reviewIdTable}<p>Model EOL date: January 1, 2028</p><table><tr><td>EOL: soon</td></tr></table>`, reviewCardSource), /unrecognised region EOL: EOL: soon/)
+  strictAssert.throws(() => parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'January 1, 2028')}${cellTable('EOL: 2028-01-02')}`), /region EOL 2028-01-02 differs/)
+  strictAssert.throws(() => parseReviewCard(`${reviewIdTable}${cardField('Model EOL date', 'January 1, 2028')}${cellTable('EOL: soon')}`), /unrecognised region EOL: EOL: soon/)
 })
 reviewTest('2026-10-18 shapes: Bedrock lifecycle treats a To be announced Extended Access start as unscheduled', () => {
-  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek-R1', 'deepseek.r1-v1:0', 'us-east-1', 'September 30, 2026', 'March 30, 2027', 'To be announced']])),
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(shapesBedrockPage([['DeepSeek', 'DeepSeek-R1', 'deepseek.r1-v1:0', 'us-east-1', 'September 30, 2026', 'March 30, 2027', 'To be announced']])),
     [{ bedrockId: 'deepseek.r1-v1:0', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
-  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek-R1', 'deepseek.r1-v1:0', 'us-east-1', 'September 30, 2026', 'To be announced', 'To be announced']])), /unrecognised EOL date: To be announced/)
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(shapesBedrockPage([['DeepSeek', 'DeepSeek-R1', 'deepseek.r1-v1:0', 'us-east-1', 'September 30, 2026', 'To be announced', 'To be announced']])), /unrecognised EOL date: To be announced/)
 })
-reviewTest('2026-10-18 shapes: Bedrock lifecycle records every endpoint-qualified model ID in one cell', () => {
-  const records = parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', 'September 30, 2026', 'March 30, 2027', 'To be announced']]))
+reviewTest('2026-10-18 shapes: Bedrock lifecycle records every endpoint-qualified model ID in one entry', () => {
+  const records = parseBedrockLifecycleMarkdown(shapesBedrockPage([['DeepSeek', 'DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', 'September 30, 2026', 'March 30, 2027', 'To be announced']]))
   strictAssert.deepEqual(records.map(record => [record.bedrockId, record.eol]), [['deepseek.v3-v1:0', '2027-03-30'], ['deepseek.v3.1', '2027-03-30']])
-  for (const cell of ['deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-runtime)', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-other)', 'deepseek.v3-v1:0 (bedrock-runtime), DeepSeek V3 (bedrock-mantle)']) {
-    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek', 'DeepSeek V3', cell, 'us-east-2', 'September 30, 2026', 'March 30, 2027', 'To be announced']])), /invalid model id/)
+  for (const id of ['deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-runtime)', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-other)', 'deepseek.v3-v1:0 (bedrock-runtime), DeepSeek V3 (bedrock-mantle)', 'deepseek.v3-v1:0 (bedrock-runtime)']) {
+    strictAssert.throws(() => parseBedrockLifecycleMarkdown(shapesBedrockPage([['DeepSeek', 'DeepSeek V3', id, 'us-east-2', 'September 30, 2026', 'March 30, 2027', 'To be announced']])), /invalid model id/)
   }
 })
-const shiftedDates = ['September 30, 2026', 'March 30, 2027', 'To be announced']
-reviewTest('Shifted row realignment: Bedrock resolves an endpoint-list ID cell whose provider cell is omitted', () => {
-  const records = parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', ...shiftedDates]]))
-  strictAssert.deepEqual(records, ['deepseek.v3-v1:0', 'deepseek.v3.1'].map(bedrockId => ({ bedrockId, status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' })))
-})
-reviewTest('Shifted row realignment: Bedrock resolves a shifted Z.AI row to its lowercase model ID', () => {
-  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['GLM 4.7', 'zai.glm-4.7', 'us-east-1, us-west-2', ...shiftedDates]])),
+const labelledDates = ['September 30, 2026', 'March 30, 2027', 'To be announced']
+reviewTest('Labelled entries: Bedrock reads the Model ID from its label even when the display name looks like an ID', () => {
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(shapesBedrockPage([['Z.AI', 'zai.glm-4.6', 'zai.glm-4.7', 'us-east-1, us-west-2', ...labelledDates]])),
     [{ bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
 })
-for (const cells of [
-  ['DeepSeek', 'DeepSeek-V3.1', 'see endpoint table', 'us-east-2', ...shiftedDates],
-  ['DeepSeek-V3.1', 'see endpoint table', 'us-east-2', ...shiftedDates],
-  ['Z.AI', 'GLM 4.7', 'see endpoint table', 'us-east-1', ...shiftedDates],
-  ['Z.AI', 'see endpoint table', 'us-east-1', ...shiftedDates],
-  ['DeepSeek', 'DeepSeek V3', '', 'deepseek.v3-v1:0', ...shiftedDates],
-  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', ...shiftedDates],
-  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'us-east-2', 'deepseek.v3-v1:0', 'March 30, 2027', 'To be announced'],
+for (const row of [
+  ['DeepSeek', 'DeepSeek-V3.1', 'see endpoint table', 'us-east-2', ...labelledDates],
+  ['Z.AI', 'GLM 4.7', 'GLM 4.7', 'us-east-1', ...labelledDates],
+  ['Z.AI', 'GLM 4.7', 'us-east-1', 'zai.glm-4.7', ...labelledDates],
+  ['DeepSeek', 'DeepSeek V3', 'September 30, 2026', 'us-east-2', ...labelledDates],
 ]) {
-  reviewTest(`Shifted row realignment: Bedrock refuses to realign onto a display name, provider, or a cell right of Model ID: ${cells.slice(0, 4).join(' | ')}`, () => {
-    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
+  reviewTest(`Labelled entries: Bedrock refuses a Model ID label holding a display name, provider, region, or date: ${row[2]}`, () => {
+    strictAssert.throws(() => parseBedrockLifecycleMarkdown(shapesBedrockPage([row])), /invalid model id/)
   })
 }
-reviewTest('Shifted row realignment: Bedrock refuses an endpoint list with a mixed-case ID', () => {
-  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['DeepSeek-V3.1', 'deepseek.v3-v1:0 (bedrock-runtime), DeepSeek.v3.1 (bedrock-mantle)', 'us-east-2, us-west-2', ...shiftedDates]])), /invalid model id/)
-})
-reviewTest('Shifted row realignment: Bedrock realigns the row after a provider rowspan that runs one row too long', () => {
-  const table = shapesBedrockTable([]).replace('</table>', `<tr><td rowspan="2">Z.AI</td><td>GLM 4.7</td><td>zai.glm-4.7</td><td>us-east-1</td><td>September 30, 2026</td><td>March 30, 2027</td><td>To be announced</td></tr><tr><td>Qwen</td><td>Qwen3 Coder 480B A35B Instruct</td><td>qwen.qwen3-coder-480b-a35b-v1:0</td><td>us-east-2</td><td>October 1, 2026</td><td>April 1, 2027</td><td>To be announced</td></tr></table>`)
-  strictAssert.deepEqual(parseBedrockLifecycleHtml(table), [
-    { bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' },
-    { bedrockId: 'qwen.qwen3-coder-480b-a35b-v1:0', status: 'legacy', legacy: '2026-10-01', eol: '2027-04-01' },
-  ])
-})
-for (const cells of [
-  ['Qwen', 'Qwen3 Coder', 'see endpoint table', 'qwen.qwen3-coder-480b-a35b-v1:0', 'October 1, 2026', 'April 1, 2027', 'To be announced'],
-  ['GLM 4.7', 'zai.glm-4.7', 'us-east-1', 'September 30, 2026', 'March 30, 2027', 'To be announced', 'extra'],
-  ['DeepSeek', 'DeepSeek V3', 'see endpoint table', 'us-east-2', 'deepseek.v3-v1:0', 'March 30, 2027', 'To be announced', 'extra'],
+for (const [label, row, pattern] of [
+  ['a Legacy date label holding a model ID', ['Meta', 'Llama A', 'meta.a-v1:0', 'us-east-1', 'meta.a-v1:0', 'December 1, 2026', 'To be announced'], /meta\.a-v1:0 has an unrecognised legacy date: meta\.a-v1:0/],
+  ['an EOL date label holding a region list', ['Meta', 'Llama A', 'meta.a-v1:0', 'us-east-1', 'September 1, 2026', 'us-east-1', 'To be announced'], /meta\.a-v1:0 has an unrecognised EOL date: us-east-1/],
+  ['an EOL date before the legacy date', ['Meta', 'Llama A', 'meta.a-v1:0', 'us-east-1', 'September 1, 2026', 'August 1, 2026', 'To be announced'], /meta\.a-v1:0 has EOL before legacy date/],
+  ['an Extended Access start before the legacy date', ['Meta', 'Llama A', 'meta.a-v1:0', 'us-east-1', 'September 1, 2026', 'December 1, 2026', 'August 1, 2026'], /public extended access before legacy date/],
+  ['an Extended Access start after the EOL date', ['Meta', 'Llama A', 'meta.a-v1:0', 'us-east-1', 'September 1, 2026', 'December 1, 2026', 'December 2, 2026'], /public extended access after EOL date/],
 ]) {
-  reviewTest(`Shifted row realignment: Bedrock refuses a candidate whose offset the row length does not explain: ${cells.join(' | ')}`, () => {
-    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([cells])), /invalid model id/)
+  reviewTest(`Labelled entries: Bedrock refuses ${label}`, () => {
+    strictAssert.throws(() => parseBedrockLifecycleMarkdown(shapesBedrockPage([row])), pattern)
   })
 }
-reviewTest('Shifted row realignment: Bedrock refuses a shifted row whose length matches the header only through a trailing empty cell', () => {
-  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['GLM 4.7', 'zai.glm-4.7', 'us-east-1', ...shiftedDates, '']])), /invalid model id/)
-  const table = shapesBedrockTable([]).replace('</table>', `<tr><td>Meta</td><td>Llama A</td><td>meta.a-v1:0</td><td>us-east-1</td><td>September 1, 2026</td><td rowspan="2">December 1, 2026</td><td>To be announced</td></tr><tr><td>Llama B</td><td>meta.b-v1:0</td><td>us-east-1</td><td>August 1, 2026</td><td>December 15, 2026</td><td></td></tr></table>`)
-  strictAssert.throws(() => parseBedrockLifecycleHtml(table), /invalid model id/)
+reviewTest('Labelled entries: Bedrock refuses Extended Access status without a start date', () => {
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(bedrockPage(shapesBedrockEntry(['Meta', 'Llama A', 'meta.a-v1:0', 'us-east-1', 'September 1, 2026', 'December 1, 2026', '\u2014'], [['Status', 'Extended access']]))), /reports extended access without a start date/)
 })
-reviewTest('Shifted row realignment: Bedrock keeps an in-place row with extra trailing empty cells', () => {
-  strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable([['Z.AI', 'GLM 4.7', 'zai.glm-4.7', 'us-east-1', ...shiftedDates, '', '']])),
-    [{ bedrockId: 'zai.glm-4.7', status: 'legacy', legacy: '2026-09-30', eol: '2027-03-30' }])
-})
-reviewTest('Shifted row realignment: Bedrock refuses a row in place whose extra cell pushed its dates out of their columns', () => {
-  const table = shapesBedrockTable([]).replace('</table>', `<tr><td>Meta</td><td>Llama A</td><td>meta.a-v1:0</td><td>us-east-1</td><td>September 1, 2026</td><td rowspan="2">December 1, 2026</td><td>To be announced</td></tr><tr><td>Meta</td><td>Llama B</td><td>meta.b-v1:0</td><td>us-east-1</td><td>August 1, 2026</td><td>November 1, 2026</td><td>To be announced</td></tr></table>`)
-  strictAssert.throws(() => parseBedrockLifecycleHtml(table), /meta\.b-v1:0 has more cells than the table header/)
-})
-reviewTest('Shifted row realignment: Bedrock still refuses two lowercase ID candidates left of Model ID', () => {
-  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable([['deepseek.r1-v1:0', 'deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)', 'us-east-2', ...shiftedDates]])),
-    /ambiguous model row: deepseek\.r1-v1:0, deepseek\.v3-v1:0 \(bedrock-runtime\), deepseek\.v3\.1 \(bedrock-mantle\)/)
-})
-reviewTest('Shifted row realignment: the Bedrock lifecycle fixture parses to the same records', () => {
-  strictAssert.equal(bedrockEntries.length, 17)
-  strictAssert.deepEqual(parseBedrockLifecycleHtml(fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.html'), 'utf8')), bedrockEntries)
+reviewTest('Labelled entries: the Bedrock lifecycle fixture parses to the same records', () => {
+  strictAssert.equal(bedrockEntries.length, 19)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(fs.readFileSync(path.join(fixtures, 'bedrock-lifecycle.md'), 'utf8')), bedrockEntries)
+  strictAssert.equal(bedrockMarkdown.match(/^ {2}- \*\*Regions:\*\* .* \/ \*\*Legacy date:\*\*/gm)?.length, 10)
 })
 reviewTest('2026-10-18 shapes: Bedrock lifecycle keeps the earliest deadline across disjoint region groups', () => {
   const groups = [
-    ['Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', 'ap-northeast-2, ap-south-1', 'October 10, 2026', 'November 13, 2026', 'October 10, 2026'],
-    ['Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', 'us-east-1, us-west-2', 'March 10, 2026', 'September 10, 2026', 'June 10, 2026'],
+    ['ap-northeast-2, ap-south-1', 'October 10, 2026', 'November 13, 2026', 'October 10, 2026'],
+    ['us-east-1, us-west-2', 'March 10, 2026', 'September 10, 2026', 'June 10, 2026'],
   ]
-  for (const rows of [groups, [...groups].reverse()]) {
-    strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable(rows)),
-      [{ bedrockId: 'anthropic.claude-3-haiku-20240307-v1:0', status: 'extended-access', legacy: '2026-03-10', eol: '2026-09-10' }])
+  const expected = [{ bedrockId: 'anthropic.claude-3-haiku-20240307-v1:0', status: 'extended-access', legacy: '2026-03-10', eol: '2026-09-10' }]
+  for (const order of [groups, [...groups].reverse()]) {
+    strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(shapesBedrockRegional('Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', order))), expected)
+    strictAssert.deepEqual(parseBedrockLifecycleMarkdown(shapesBedrockPage(order.map(group => ['Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', ...group]))), expected)
   }
-  const overlapping = [groups[0], [...groups[1].slice(0, 3), 'us-east-1, ap-south-1', ...groups[1].slice(4)]]
-  strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable(overlapping)), /conflicting rows for anthropic.claude-3-haiku-20240307-v1:0/)
-  const noRegions = `<table><tr><th>Model ID</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th></tr><tr><td>amazon.split-v1:0</td><td>March 1, 2026</td><td>September 1, 2026</td><td>—</td></tr><tr><td>amazon.split-v1:0</td><td>April 1, 2026</td><td>October 1, 2026</td><td>—</td></tr></table>`
-  strictAssert.throws(() => parseBedrockLifecycleHtml(noRegions), /conflicting rows for amazon.split-v1:0/)
+  const overlapping = [groups[0], ['us-east-1, ap-south-1', ...groups[1].slice(1)]]
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(bedrockPage(shapesBedrockRegional('Anthropic', 'Claude 3 Haiku', 'anthropic.claude-3-haiku-20240307-v1:0', overlapping))), /conflicting rows for anthropic.claude-3-haiku-20240307-v1:0/)
+  const noRegions = bedrockPage(...[['March 1, 2026', 'September 1, 2026'], ['April 1, 2026', 'October 1, 2026']].map(([legacy, eol]) =>
+    bedrockEntry([['Model ID', 'amazon.split-v1:0'], ['Legacy date', legacy], ['EOL date', eol], ['Public extended access start date', '\u2014']], 'Amazon')))
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(noRegions), /conflicting rows for amazon.split-v1:0/)
 })
 reviewTest('2026-10-18 review: disjoint region groups merge each field to its earliest value and the furthest phase', () => {
-  const rows = [
-    ['Example', 'Model', 'a.m-v1:0', 'us-east-1', 'January 1, 2026', 'December 1, 2026', 'March 1, 2026'],
-    ['Example', 'Model', 'a.m-v1:0', 'eu-west-1', 'June 1, 2026', 'October 1, 2026', 'To be announced'],
+  const groups = [
+    ['us-east-1', 'January 1, 2026', 'December 1, 2026', 'March 1, 2026'],
+    ['eu-west-1', 'June 1, 2026', 'October 1, 2026', 'To be announced'],
   ]
-  for (const order of [rows, [...rows].reverse()]) {
-    strictAssert.deepEqual(parseBedrockLifecycleHtml(shapesBedrockTable(order)), [{ bedrockId: 'a.m-v1:0', status: 'extended-access', legacy: '2026-01-01', eol: '2026-10-01' }])
+  for (const order of [groups, [...groups].reverse()]) {
+    strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(shapesBedrockRegional('Example', 'Model', 'a.m-v1:0', order))), [{ bedrockId: 'a.m-v1:0', status: 'extended-access', legacy: '2026-01-01', eol: '2026-10-01' }])
   }
 })
 reviewTest('2026-10-18 review: region groups with non-region-code tokens never merge different dates', () => {
   for (const regions of [['us-east-1', 'us-east-1*'], ['All Regions', 'us-gov-west-1']]) {
-    const rows = [
-      ['Example', 'Model', 'a.m-v1:0', regions[0], 'January 1, 2026', 'December 1, 2026', '—'],
-      ['Example', 'Model', 'a.m-v1:0', regions[1], 'June 1, 2026', 'October 1, 2026', '—'],
+    const groups = [
+      [regions[0], 'January 1, 2026', 'December 1, 2026', '\u2014'],
+      [regions[1], 'June 1, 2026', 'October 1, 2026', '\u2014'],
     ]
-    strictAssert.throws(() => parseBedrockLifecycleHtml(shapesBedrockTable(rows)), /conflicting rows for a.m-v1:0/)
+    strictAssert.throws(() => parseBedrockLifecycleMarkdown(bedrockPage(shapesBedrockRegional('Example', 'Model', 'a.m-v1:0', groups))), /conflicting rows for a.m-v1:0/)
   }
 })
 reviewTest('2026-10-18 review: disjoint region groups with an explicit retired status still conflict', () => {
-  const table = `<table><tr><th>Model ID</th><th>Regions</th><th>Legacy date</th><th>EOL date</th><th>Public extended access start date</th><th>Status</th></tr><tr><td>a.m-v1:0</td><td>us-east-1</td><td>January 1, 2026</td><td>July 1, 2026</td><td>March 1, 2026</td><td>EOL</td></tr><tr><td>a.m-v1:0</td><td>eu-west-1</td><td>June 1, 2026</td><td>October 1, 2026</td><td>—</td><td>Legacy</td></tr></table>`
-  strictAssert.throws(() => parseBedrockLifecycleHtml(table), /conflicting rows for a.m-v1:0/)
+  const groups = [
+    ['us-east-1', 'January 1, 2026', 'July 1, 2026', 'March 1, 2026', ['Status', 'EOL']],
+    ['eu-west-1', 'June 1, 2026', 'December 1, 2026', 'September 1, 2026', ['Status', 'Legacy']],
+  ]
+  strictAssert.throws(() => parseBedrockLifecycleMarkdown(bedrockPage(shapesBedrockRegional('Example', 'Model', 'a.m-v1:0', groups))), /conflicting rows for a.m-v1:0/)
 })
 const shapesOpenAIPage = cell => `<h2>2026-10-14: GPT-4 series model deprecations</h2><table><tr><th>Shutdown date</th><th>Model / system</th><th>Recommended replacement</th></tr><tr><td>January 14, 2027</td><td>${cell}</td><td><code>gpt-6-luna</code></td></tr></table>`
 reviewTest('2026-10-18 shapes: OpenAI splits a row that lists several dated snapshots into one record each', () => {
@@ -4123,6 +4688,16 @@ reviewTest('Notice-date layout: an OpenAI model row with an empty, unparseable, 
   }
 })
 const noticeStatusPage = status => noticeDateEdit(noticeCyberRow, noticeCyberRow.replace('>Deprecated<', `>${status}<`))
+const openaiMdParse = (page, now = noticeNow) => parseOpenAIDeprecationsMarkdown(page, undefined, { now })
+const openaiMdRow = (token, edit) => {
+  const lines = openaiMarkdown.split('\n')
+  const at = lines.flatMap((line, index) => line.startsWith('|') && line.includes(token) ? [index] : [])
+  strictAssert.equal(at.length, 1, token)
+  lines[at[0]] = `| ${edit(lines[at[0]].split('|').slice(1, -1).map(cell => cell.trim())).join(' | ')} |`
+  return lines.join('\n')
+}
+const openaiMdCyber = '`gpt-5.5-cyber-preview`'
+const openaiMdStatusPage = status => openaiMdRow(openaiMdCyber, cells => cells.with(2, status))
 reviewTest('Notice-date layout: an OpenAI Status other than Deprecated or a past Shut down fails closed naming the model', () => {
   for (const status of ['Read-only', 'Retired', 'Deprecated soon', '']) {
     strictAssert.throws(() => noticeParse(noticeStatusPage(status), new Date('2027-06-01T00:00:00Z')), new RegExp(`entry gpt-5\\.5-cyber-preview has an unrecognised status for shutdown 2027-02-01 on 2027-06-01: ${status || '\\(empty\\)'}$`), status)
@@ -4141,8 +4716,8 @@ reviewTest('Refresh clock: the CLI reads MODEL_EOL_GENERATED as the refresh day 
   const clockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-clock-'))
   try {
     fs.copyFileSync(path.join(fixtures, 'openai-models.json'), path.join(clockDir, 'openai-models.json'))
-    fs.writeFileSync(path.join(clockDir, 'openai-deprecations.html'), noticeStatusPage('Shut down'))
-    fs.writeFileSync(path.join(clockDir, 'azure-model-retirement-schedule.html'), footnotedTable() + offerFootnote(3))
+    fs.writeFileSync(path.join(clockDir, 'openai-deprecations.md'), openaiMdStatusPage('Shut down'))
+    fs.writeFileSync(path.join(clockDir, 'azure-model-retirement-schedule.md'), azureMarkdownFootnotePage)
     const refreshAt = (source, generated) => run([...source, '--check', '--fixtures', clockDir], { env: { ...process.env, MODEL_EOL_GENERATED: generated } })
     const openai = ['--provider', 'openai']
     const azure = ['--distributor', 'azure-ai-foundry']
@@ -4260,10 +4835,113 @@ reviewTest('Notice-date layout: an OpenAI family cell needs exactly one undated 
   }
   strictAssert.deepEqual(openAISnapshots('f', 'f-2025-03-20', 'f-2025-12-15'), [['f-2025-03-20', ['f']], ['f-2025-12-15', ['f']]])
 })
-const anthropicAnnouncement = '<h2>2026-01-01</h2><table><tr><th>Retirement date</th><th>Deprecated model</th><th>Recommended replacement</th></tr><tr><td>2027-01-01</td><td><code>claude-y-20250101</code></td><td><code>claude-next</code></td></tr></table>'
-const anthropicStatusRows = rows => `<table><tr><th>API model name</th><th>Current state</th><th>Deprecated</th><th>Tentative retirement date</th></tr>${rows.map(cells => `<tr>${cells.map((cell, index) => `<td>${index ? cell : `<code>${cell}</code>`}</td>`).join('')}</tr>`).join('')}</table>`
-const anthropicAliasMerge = (html, reverse = false, models = [{ id: 'claude-y-20250101', aliases: ['claude-y'] }]) => {
-  const deprecations = parseAnthropicDeprecations(html)
+const openaiMdHeaders = ['Shutdown date', 'Affected model', 'Status', 'Recommended replacement', 'Notice date']
+const openaiMdLine = cells => `| ${cells.join(' | ')} |`
+const openaiMdTable = (headers = openaiMdHeaders, rows = [['Jan 6, 2027', '`m-1`', 'Deprecated', '`gpt-next`', 'Oct 1, 2026']], heading = '## Upcoming deprecations') => `# Deprecations\n\n${heading}\n\n${openaiMdLine(headers)}\n${openaiMdLine(headers.map(() => '---'))}\n${rows.map(openaiMdLine).join('\n')}\n`
+const openaiMdRecords = page => openaiMdParse(page).map(record => [record.id, record.announced, record.shutdown, record.replacement ?? record.replacement_options])
+const openaiMdRecord = (id, page = openaiMarkdown) => openaiMdParse(page).find(record => record.id === id)
+reviewTest('Markdown source: the OpenAI Markdown fixture parses to the records of the rendered excerpt with the same rows, apart from curled apostrophes', () => {
+  strictAssert.deepEqual(openaiMdParse(openaiMarkdown), noticeParse(noticeDateHtml.replaceAll('’', "'")))
+  strictAssert.notDeepEqual(openaiMdParse(openaiMarkdown), noticeDateRecords())
+})
+reviewTest('Markdown source: each OpenAI row takes its announcement from its own notice date, and a bad notice cell stops the run naming the model', () => {
+  const lifecycle = id => { const { announced, shutdown } = openaiMdRecord(id) ?? {}; return [announced, shutdown] }
+  strictAssert.deepEqual(lifecycle('gpt-5-2025-08-07'), ['2026-06-11', '2026-12-11'])
+  strictAssert.deepEqual(lifecycle('gpt-5.5-cyber-preview'), ['2026-11-05', '2027-02-01'])
+  strictAssert.deepEqual(lifecycle('gpt-4-32k-0314'), ['2023-06-13', '2025-06-06'])
+  strictAssert.deepEqual(lifecycle('code-davinci-002'), ['2023-07-06', '2024-01-04'])
+  for (const notice of ['', 'TBD', 'Nov 5, 2026 (updated Nov 9, 2026)', 'Nov 31, 2026']) {
+    const page = openaiMdRow(openaiMdCyber, cells => cells.with(4, notice))
+    strictAssert.throws(() => openaiMdParse(page), notice === 'Nov 31, 2026' ? /entry gpt-5\.5-cyber-preview has no valid notice date: invalid date "Nov 31, 2026"$/ : /entry gpt-5\.5-cyber-preview has no valid notice date$/, notice)
+  }
+})
+reviewTest('Markdown source: an OpenAI status is Deprecated, or Shut down once the refresh clock reaches the shutdown date', () => {
+  for (const status of ['Read-only', 'Retired', 'Deprecated soon', '']) {
+    strictAssert.throws(() => openaiMdParse(openaiMdStatusPage(status), new Date('2027-06-01T00:00:00Z')), new RegExp(`entry gpt-5\\.5-cyber-preview has an unrecognised status for shutdown 2027-02-01 on 2027-06-01: ${status || '\\(empty\\)'}$`), status)
+  }
+  for (const status of ['Shut down', 'Shutdown']) {
+    strictAssert.throws(() => openaiMdParse(openaiMdStatusPage(status), new Date('2027-01-31T23:59:59Z')), /unrecognised status for shutdown 2027-02-01 on 2027-01-31/, status)
+    strictAssert.deepEqual(openaiMdParse(openaiMdStatusPage(status), new Date('2027-02-01T00:00:00Z')), openaiMdParse(openaiMarkdown), status)
+  }
+  strictAssert.throws(() => openaiMdParse(openaiMarkdown, new Date('not a date')), /refresh clock is not a valid date/)
+})
+reviewTest('Markdown source: OpenAI family-alias cells give one record per snapshot, and other multi-ID cells keep their aliases', () => {
+  const aliases = id => openaiMdRecord(id)?.aliases
+  strictAssert.deepEqual([aliases('gpt-4o-mini-tts-2025-03-20'), aliases('gpt-4o-mini-tts-2025-12-15')], [['gpt-4o-mini-tts'], ['gpt-4o-mini-tts']])
+  strictAssert.deepEqual([aliases('gpt-4o-2024-08-06'), aliases('gpt-4o-2024-11-20')], [undefined, undefined])
+  strictAssert.deepEqual(aliases('gpt-4-0613'), ['gpt-4', 'gpt-4-0613-completions', 'gpt-4-completions'])
+  strictAssert.deepEqual(aliases('gpt-4-0125-preview'), ['gpt-4-turbo-preview', 'gpt-4-turbo-preview-completions'])
+  strictAssert.ok(!openaiMdRecord('gpt-4o-mini-tts') && !openaiMdRecord('GPT-4o'))
+  const ambiguous = openaiMdRow('`gpt-4o-mini-tts-2025-03-20`', cells => cells.with(1, `${cells[1]}, \`gpt-4o-mini-tts-latest\``))
+  strictAssert.throws(() => openaiMdParse(ambiguous), /with ambiguous alias gpt-4o-mini-tts$/)
+})
+reviewTest('Markdown source: an OpenAI replacement cell without code spans is a note unless every part has the lowercase ID shape', () => {
+  const replacementOf = cell => Object.fromEntries(Object.entries(openaiMdRecord('gpt-4o-mini-transcribe-2025-03-20', openaiMdRow('`gpt-4o-mini-transcribe-2025-03-20`', cells => cells.with(3, cell)))).filter(([key]) => key.startsWith('replacement')))
+  strictAssert.deepEqual(replacementOf('`gpt-6-luna`'), { replacement: 'gpt-6-luna' })
+  strictAssert.deepEqual(replacementOf('gpt-6-luna'), { replacement: 'gpt-6-luna' })
+  for (const cell of ['gpt-5 or gpt-4.1', 'gpt-5, gpt-4.1', 'gpt-5 / gpt-4.1', '`gpt-5` or `gpt-4.1`']) strictAssert.deepEqual(replacementOf(cell), { replacement_options: ['gpt-5', 'gpt-4.1'] }, cell)
+  for (const cell of ['No one-to-one replacement', 'gpt-5 or later', 'GPT-5 / GPT-4.1', 'TBD']) strictAssert.deepEqual(replacementOf(cell), { replacement_note: cell }, cell)
+  for (const cell of ['---', 'N/A', 'none']) strictAssert.deepEqual(replacementOf(cell), {}, cell)
+  strictAssert.deepEqual(replacementOf('**No** one-to-one _replacement_'), { replacement_note: 'No one-to-one replacement' })
+  strictAssert.deepEqual(Object.entries(openaiMdRecord('sora-2')).filter(([key]) => key.startsWith('replacement')), [['replacement_note', 'No one-to-one replacement']])
+  strictAssert.deepEqual(Object.entries(openaiMdRecord('gpt-5.5-cyber-preview')).filter(([key]) => key.startsWith('replacement')), [['replacement_note', 'The most capable cyber model available to you.']])
+})
+reviewTest('Markdown source: an OpenAI notice header the parser does not accept stops the run, and a table without one dates from its heading', () => {
+  strictAssert.deepEqual(openaiMdRecords(openaiMdTable()), [['m-1', '2026-10-01', '2027-01-06', 'gpt-next']])
+  strictAssert.deepEqual(openaiMdRecords(openaiMdTable(openaiMdHeaders.with(4, 'Announcement date'))), [['m-1', '2026-10-01', '2027-01-06', 'gpt-next']])
+  const noStatus = [['Jan 6, 2027', '`m-1`', '`gpt-next`', 'Oct 1, 2026']]
+  for (const label of ['Notice date (UTC)', 'Date announced', 'Notice']) {
+    strictAssert.throws(() => openaiMdParse(openaiMdTable(['Shutdown date', 'Affected model', 'Recommended replacement', label], noStatus)), new RegExp(`table has an unrecognised notice header: ${label.toLowerCase().replace(/[()]/g, '\\$&')}$`), label)
+  }
+  strictAssert.throws(() => openaiMdParse(openaiMdTable(openaiMdHeaders.slice(0, 4), [['Jan 6, 2027', '`m-1`', 'Deprecated', '`gpt-next`']])), /table has a status column but no notice date column$/)
+  const undated = openaiMdTable(['Shutdown date', 'Affected model', 'Recommended replacement'], [['Jan 6, 2027', '`m-1`', '`gpt-next`']])
+  strictAssert.throws(() => openaiMdParse(undated), /^Error: openai deprecations table has no announcement date$/)
+  strictAssert.deepEqual(openaiMdRecords(undated.replace('## Upcoming deprecations', '## 2026-04-22: Upcoming deprecations')), [['m-1', '2026-04-22', '2027-01-06', 'gpt-next']])
+  const nested = undated.replace('## Upcoming deprecations', '## 2026-04-22: Legacy snapshots\n\n```\n## 2026-05-01: Fenced\n```\n\n<!--\n### 2026-05-02: Commented\n-->\n\n### July shutdown')
+  strictAssert.deepEqual(openaiMdRecords(nested), [['m-1', '2026-04-22', '2027-01-06', 'gpt-next']])
+})
+reviewTest('Markdown source: an OpenAI row whose cells do not line up with its header stops the run naming the line', () => {
+  const row = ['Jan 6, 2027', '`m-1`', 'Deprecated', '`gpt-next`', 'Oct 1, 2026']
+  strictAssert.throws(() => openaiMdParse(openaiMdTable(undefined, [row, [...row.slice(0, 4), 'Updated Nov 1, 2026', 'Oct 1, 2026']])), /^Error: openai deprecations page: line 8: table row has 6 cells; the header has 5$/)
+  strictAssert.throws(() => openaiMdParse(openaiMdTable(undefined, [row.slice(0, 4)])), /^Error: openai deprecations page: line 7: table row has 4 cells; the header has 5$/)
+  const missingNotice = openaiMdRow(openaiMdCyber, cells => cells.slice(0, 4))
+  const line = missingNotice.split('\n').findIndex(text => text.includes(openaiMdCyber)) + 1
+  strictAssert.throws(() => openaiMdParse(missingNotice), new RegExp(`^Error: openai deprecations page: line ${line}: table row has 4 cells; the header has 5$`))
+  strictAssert.deepEqual(openaiMdRecords(openaiMdTable(undefined, [row.with(3, '`gpt-next` \\| `gpt-other`')])), [['m-1', '2026-10-01', '2027-01-06', ['gpt-next', 'gpt-other']]])
+})
+reviewTest('Markdown source: OpenAI feature, endpoint, and product rows produce no records, and a model ID beside one stops the run', () => {
+  const ids = openaiMdParse(openaiMarkdown).flatMap(record => [record.id, ...(record.aliases ?? [])])
+  for (const token of ['/v1/prompts', '/v1/audio/translations', '/v1/realtime/translations', 'Agent Builder', 'Videos API', 'Assistants API', 'OpenAI-Beta: realtime=v1', '/v1/edits']) {
+    strictAssert.ok(!ids.includes(token), token)
+  }
+  strictAssert.ok(openaiMdParse(openaiMarkdown).every(record => record.shutdown !== '2026-11-30' && record.announced !== '2026-05-07'))
+  const features = openaiMdTable(openaiMdHeaders.with(1, 'Affected feature or endpoint'), [['Nov 30, 2026', '`/v1/prompts` and reusable prompt objects', 'Deprecated', 'Move prompt content into your application code.', 'Jun 3, 2026']])
+  strictAssert.throws(() => openaiMdParse(features), /has no recognisable deprecations content: endpoint-or-product-deprecation-table$/)
+  const mixed = openaiMdTable(undefined, [['Jan 6, 2027', '`m-1`, `/v1/m-1`', 'Deprecated', '`gpt-next`', 'Oct 1, 2026']])
+  strictAssert.throws(() => openaiMdParse(mixed), /refused row: model ids beside endpoint-or-product tokens: m-1, \/v1\/m-1$/)
+})
+reviewTest('Markdown source: an OpenAI page that is empty, has no pipe table, or carries an HTML table fails closed', () => {
+  strictAssert.throws(() => openaiMdParse(''), /^Error: openai deprecations page is empty$/)
+  strictAssert.throws(() => openaiMdParse('# Deprecations\n\nNo tables here.\n'), /^Error: openai deprecations page has no recognisable deprecations content$/)
+  strictAssert.throws(() => openaiMdParse('```\n| Shutdown date | Affected model | Recommended replacement |\n| --- | --- | --- |\n| Jan 6, 2027 | `m-1` | `gpt-next` |\n```\n'), /^Error: openai deprecations page has no recognisable deprecations content$/)
+  strictAssert.throws(() => openaiMdParse(`${openaiMdTable()}\n<table><tr><th>Shutdown date</th></tr></table>\n`), /^Error: openai deprecations page: line 9: HTML table in the Markdown source$/)
+  strictAssert.throws(() => openaiMdParse(noticeDateHtml), /^Error: openai deprecations page/)
+})
+{
+  const requested = []
+  const sources = await loadProviderSources(PROVIDERS.openai, { env: {}, notice: () => {}, fetchImpl: async url => { requested.push(url); return responseFor(openaiMarkdown) } })
+  assert(
+    PROVIDERS.openai.deprecationsFetchUrl === `${PROVIDERS.openai.deprecationsUrl}.md`
+      && JSON.stringify(requested) === JSON.stringify([PROVIDERS.openai.deprecationsFetchUrl])
+      && sources.deprecations.length === openaiMdParse(openaiMarkdown).length
+      && sources.deprecations.every(record => record.source === PROVIDERS.openai.deprecationsUrl),
+    'OpenAI deprecations are fetched from the Markdown copy and cite the human page',
+  )
+}
+const anthropicAnnouncement = `## 2026-01-01\n${mdTable(anthropicAnnouncementColumns, [['2027-01-01', '`claude-y-20250101`', '`claude-next`']])}`
+const anthropicStatusRows = rows => mdTable(anthropicStatusColumns, rows)
+const anthropicAliasMerge = (markdown, reverse = false, models = [{ id: 'claude-y-20250101', aliases: ['claude-y'] }]) => {
+  const deprecations = parseAnthropicDeprecations(markdown)
   return mergeFeed({ spec: 'model-eol/0.1', publisher: 'anthropic', models }, { deprecations: reverse ? deprecations.reverse() : deprecations, currentIds: null, provider: PROVIDERS.anthropic, notice: () => {} })
 }
 reviewTest('Issue 135 round 3: an Anthropic status row reaching an entry through an alias follows the rules for naming it directly, in either order', () => {
@@ -4375,10 +5053,16 @@ reviewTest('Google Markdown: emphasis and inline Markdoc tags in prose still car
   for (const note of [
     'Note: The shutdown dates indicate the *earliest*\n  possible dates on which a model might be retired.',
     'Note: The shutdown dates indicate the **earliest** possible dates.',
-    'Note: The shutdown dates indicate the _earliest_ ~~possible~~ possible dates.',
+    'Note: The shutdown dates indicate the _earliest_ possible dates.',
     '{% callout type="note" %}Note: The shutdown dates indicate the earliest possible dates.{% /callout %}',
   ]) {
     strictAssert.deepEqual(googleMarkdownPrecisions(googleMarkdocPage(table, note)), { 'gemini-a': 'earliest' }, note)
+  }
+})
+reviewTest('Google Markdown: struck-through prose stops the run instead of being read with the struck words', () => {
+  const table = googleMarkdocTable([googleMarkdocRow('gemini-a', 'May 7, 2027')])
+  for (const note of ['Note: The shutdown dates indicate the _earliest_ ~~possible~~ possible dates.', 'Note: The shutdown dates are ~not~ the earliest possible dates.']) {
+    strictAssert.throws(() => parseGoogleDeprecations(googleMarkdocPage(table, note)), /struck-through text in Markdown is refused/, note)
   }
 })
 reviewTest('Google Markdown: reworded earliest wording stops the run instead of turning dates exact', () => {
@@ -4489,6 +5173,102 @@ reviewTest('PR 126 review: a table with no heading above it reads the whole root
   const lifecycle = precisionVertexTable(['gemini-z', 'October 20, 2026'])
   strictAssert.deepEqual(vertexPrecisions(`${lifecycle}<p>Retirement timelines may be extended, but they will not be moved to an earlier date.</p>`), { 'gemini-z': 'earliest' })
   strictAssert.deepEqual(vertexPrecisions(`${lifecycle}<h2>Quotas</h2><p>Quotas rise for projects created on or later than 2026.</p>`), { 'gemini-z': 'exact' })
+})
+
+const reviewNow = new Date('2026-11-17T12:00:00Z')
+const reviewMistralHeader = '| Model | API name | Status | Context | Summary | Deprecation | Retirement | Replacement |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n'
+const reviewMistralRow = (id, deprecation, retirement) => `| X | \`${id}\` | Deprecated | 1k | s | ${deprecation} | ${retirement} | Y |\n`
+const reviewMistral = markdown => parseMistralDeprecationsMarkdown(markdown, undefined, { now: reviewNow }).records.map(record => [record.id, record.announced, record.shutdown])
+const reviewOpenAIHeader = '| Shutdown date | Affected model | Status | Recommended replacement | Notice date |\n| --- | --- | --- | --- | --- |\n'
+const reviewOpenAIRow = (shutdown, id = 'gpt-x') => `| ${shutdown} | \`${id}\` | Deprecated | \`gpt-y\` | Jun 2, 2026 |\n`
+const reviewOpenAI = markdown => parseOpenAIDeprecationsMarkdown(markdown, undefined, { now: reviewNow }).map(record => [record.id, record.announced, record.shutdown, record.date_precision])
+const reviewOpenAIDated = '| Shutdown date | Model | Recommended replacement |\n| --- | --- | --- |\n'
+const reviewAnthropicStatus = '## Model status\n\n| API model name | Current state | Deprecated | Tentative retirement date |\n| :-- | :-- | :-- | :-- |\n| claude-a-1 | Deprecated | September 30, 2026 | November 30, 2026 |\n\n## Deprecation history\n\n'
+const reviewAnthropicTable = '| Retirement date | Deprecated model | Recommended replacement |\n| --- | --- | --- |\n'
+const reviewAnthropicA = `### 2026-09-30: A\n\n${reviewAnthropicTable}| November 30, 2026 | \`claude-a-1\` | \`claude-b\` |\n`
+const reviewCohere = body => parseCohereDeprecationsMarkdown(`# Deprecations\n\n## Deprecation History\n\n${body}\n# Best Practices\n\n1. x\n`)
+const reviewCohereTable = '| Shutdown Date | Deprecated Model | Recommended Replacement |\n| --- | --- | --- |\n'
+const reviewCohereRetirement = ids => `### 2026-04-04: Embed v2.0\n\nEffective April 4th, 2026, the following models will be retired:\n\n${ids}\nWe encourage you to migrate:\n\n* Chat tasks alternatives:\n  * \`command-a-03-2025\`\n`
+
+reviewTest('S1: a lone trailing * footnote marker on a date is refused by every Markdown provider instead of publishing the date as exact', () => {
+  strictAssert.throws(() => reviewMistral(`${reviewMistralHeader}${reviewMistralRow('mistral-a-1', '2026-01-01', '2027-06-01*')}\n\\* Tentative: the retirement date may move.\n`), /mistral deprecations row mistral-a-1 has an invalid retirement date: 2027-06-01\*/)
+  strictAssert.deepEqual(reviewMistral(`${reviewMistralHeader}${reviewMistralRow('mistral-a-1', '2026-01-01', '**2027-06-01**')}`), [['mistral-a-1', '2026-01-01', '2027-06-01']])
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus.replace('| November 30, 2026 |', '| November 30, 2026* |')}${reviewAnthropicA}\n\\* Subject to change.\n`), /claude-a-1 has an unrecognised retirement date: November 30, 2026\*/)
+  strictAssert.throws(() => reviewCohere(`### 2024-12-02: Rerank v2.0\n\n${reviewCohereTable}| 2025-04-30* | \`rerank-english-v2.0\` | \`rerank-v3.5\` |\n\n\\* Earliest date.\n`), /invalid date: 2025-04-30\*/)
+  strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026*')}`), /^Error: openai deprecations entry gpt-x has an unrecognised shutdown date: Dec 1, 2026\*$/)
+})
+reviewTest('S1: an OpenAI shutdown cell holds exactly one date, and the page\'s own "Earliest estimate" label makes it earliest', () => {
+  for (const cell of ['Dec 1, 2026 (tentative)', 'Dec 1, 2026 or later', 'Dec 1, 2026 / Jan 5, 2027', 'Dec 1, 2026 Earliest estimates']) {
+    strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow(cell)}`), /has an unrecognised shutdown date/, cell)
+  }
+  strictAssert.deepEqual(reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('**Dec 1, 2026** Earliest estimate')}`), [['gpt-x', '2026-06-02', '2026-12-01', 'earliest']])
+  strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('**Dec 1, 2026** Earliest estimate')}${reviewOpenAIRow('Dec 1, 2026')}`), /openai deprecations page has conflicting rows for gpt-x$/)
+})
+reviewTest('S2: struck-through dates in OpenAI, Anthropic, Mistral, and Cohere tables and prose stop the run', () => {
+  for (const [label, parse] of [
+    ['openai double tilde', () => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('~~Jan 5, 2027~~ **Dec 1, 2026**')}`)],
+    ['openai single tilde', () => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('~Jan 5, 2027~ Dec 1, 2026')}`)],
+    ['openai <s>', () => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('<s>Jan 5, 2027</s> Dec 1, 2026')}`)],
+    ['anthropic', () => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\n### 2026-08-01: Z\n\n${reviewAnthropicTable}| ~~November 15, 2026~~ December 30, 2026 | \`claude-z-1\` | \`claude-b\` |\n`)],
+    ['mistral', () => reviewMistral(`${reviewMistralHeader}${reviewMistralRow('mistral-a-1', '2026-01-01', '~~2026-10-31~~')}`)],
+    ['cohere table', () => reviewCohere(`### 2024-12-02: Rerank v2.0\n\n${reviewCohereTable}| ~~2025-04-30~~ | \`rerank-english-v2.0\` | \`rerank-v3.5\` |\n`)],
+    ['cohere prose', () => reviewCohere(reviewCohereRetirement('* `embed-english-v2.0`\n').replace('April 4th, 2026', '~~March 1, 2026~~ April 4th, 2026'))],
+  ]) strictAssert.throws(parse, /struck-through text in Markdown is refused/, label)
+})
+reviewTest('S3: tables that render as code or are hidden by a comment stop the Mistral, OpenAI, Anthropic, and Cohere readers', () => {
+  const real = `${reviewMistralHeader}${reviewMistralRow('mistral-a-1', '2026-01-01', '2026-06-01')}`
+  const hiddenTable = `${reviewMistralHeader}${reviewMistralRow('mistral-b-1', '2026-02-01', '2026-03-01')}`
+  strictAssert.throws(() => reviewMistral(`${real}\n<!-- draft below, not published\n\n${hiddenTable}`), /line 5: unbalanced comment marker: an unclosed HTML comment hides the rest of the page/)
+  strictAssert.throws(() => reviewMistral(`${real}\nExample:\n\n${hiddenTable.split('\n').map(line => line && `    ${line}`).join('\n')}`), /table indented 4 or more spaces renders as code/)
+  strictAssert.throws(() => reviewMistral(`${real.replace('| Y |', '| `<!--` |')}\nText\n\n${hiddenTable}\nmore \`-->\`\n`), /line 3: HTML comment marker inside a code span/)
+  const fake = '| Jan 1, 2028 | `gpt-x` | Deprecated | `gpt-z` | Jul 1, 2026 |'
+  const quoted = text => text.split('\n').map(line => line ? `> ${line}` : '>').join('\n')
+  strictAssert.deepEqual(reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026')}\nExample:\n\n${quoted(`\`\`\`\n${reviewOpenAIHeader}${fake}\n\n\`\`\``)}\n`), [['gpt-x', '2026-06-02', '2026-12-01', undefined]])
+  strictAssert.deepEqual(reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026')}\n\`\`\`\nexample\n    \`\`\`\n${reviewOpenAIHeader}${fake}\n\`\`\`\n`), [['gpt-x', '2026-06-02', '2026-12-01', undefined]])
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\nOld example:\n\n    ${reviewAnthropicTable.replace('\n', '\n    ')}    | January 1, 2020 | \`claude-z-1\` | \`claude-b\` |\n`), /table indented 4 or more spaces/)
+  strictAssert.throws(() => reviewCohere(`### 2024-12-02: Rerank v2.0\n\nSee:\n\n    ${reviewCohereTable.replace('\n', '\n    ')}    | 2025-04-30 | \`rerank-english-v2.0\` | \`rerank-v3.5\` |\n`), /table indented 4 or more spaces/)
+})
+reviewTest('S3: an indented code block stops the Cohere run even when its first line is a table header', () => {
+  const lines = ['# Deprecations', '', '    | Shutdown Date | Model |', '| --- | --- |']
+  strictAssert.throws(() => cohereMarkdownToHtml(lines.join('\n')), /^Error: cohere deprecations page: line 3: (?:indented code block|table indented 4 or more spaces renders as code or inside a list item)$/)
+})
+reviewTest('S4: an OpenAI table row that starts with inline HTML stops the run instead of being dropped', () => {
+  strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026')}<s>Jan 1, 2027</s> Dec 2, 2026 | \`gpt-q\` | Deprecated | \`gpt-y\` | Jun 2, 2026 |\n`), /line 6: table row starts with block or HTML markup/)
+  strictAssert.throws(() => reviewOpenAI(`## Upcoming\n\n${reviewOpenAIHeader}${reviewOpenAIRow('Dec 1, 2026')}<b>Jan 1, 2027</b> | \`gpt-q\` | Deprecated | \`gpt-y\` | Jun 2, 2026 |\n`), /line 6: table row starts with block or HTML markup/)
+})
+reviewTest('P1: an OpenAI setext heading, raw HTML heading, or heading in a list item stops the run instead of leaving a table under an older date', () => {
+  const page = heading => `## 2025-01-01: old\n\n${reviewOpenAIDated}| 2025-06-01 | \`a-1\` | \`b-1\` |\n\n${heading}\n\n${reviewOpenAIDated}| 2026-09-01 | \`c-1\` | \`d-1\` |\n`
+  for (const [heading, message] of [
+    ['2026-03-01: newer\n---', 'line 8: setext heading; headings must use #'],
+    ['2026-03-01: newer\n=', 'line 8: setext heading; headings must use #'],
+    ['2026-03-01: newer\n-', 'line 8: setext heading; headings must use #'],
+    ['<h2>2026-03-01: newer</h2>', 'line 7: HTML heading in the Markdown source'],
+    ['- ## 2026-03-01: newer', 'line 7: heading inside a list item'],
+    ['1. - ### 2026-03-01: newer', 'line 7: heading inside a list item'],
+  ]) strictAssert.throws(() => reviewOpenAI(page(heading)), new RegExp(`^Error: openai deprecations page: ${message}$`), heading)
+  strictAssert.deepEqual(reviewOpenAI(page('## 2026-03-01: newer\n\n---')).map(record => record[1]), ['2025-01-01', '2026-03-01'])
+})
+reviewTest('P2: an Anthropic one-dash setext underline or a heading inside a list item stops the run', () => {
+  const later = `\n${reviewAnthropicTable}| December 30, 2026 | \`claude-z-1\` | \`claude-b\` |\n`
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\n2026-10-15: Claude Z model\n-\n${later}`), /has a setext heading under "2026-09-30: A": 2026-10-15: Claude Z model/)
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\n- ### 2026-10-15: Claude Z model\n${later}`), /has a heading inside a list item under "2026-09-30: A": - ### 2026-10-15: Claude Z model/)
+})
+reviewTest('P3: an Anthropic section whose only date sits in a <Note> stops the run instead of using it as the announcement', () => {
+  const table = `${reviewAnthropicTable}| December 30, 2026 | \`claude-z-1\` | \`claude-b\` |\n`
+  for (const note of ['<Note>\n  Retired 2026-12-30.\n</Note>', '<Note>Retired 2026-12-30.</Note>', '<Warning>\nNotice\n\nRetired 2026-12-30.\n</Warning>']) {
+    strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}### Claude Z model\n\n${note}\n\n${table}`), /table under "Claude Z model" takes its only announcement date from a <Note> or other callout/, note)
+  }
+  strictAssert.throws(() => parseAnthropicDeprecations(`${reviewAnthropicStatus}${reviewAnthropicA}\n<Note>\n### 2026-10-15: Claude Z model\n</Note>\n\n${table}`), /has a heading inside a <Note> or other callout/)
+  strictAssert.deepEqual(parseAnthropicDeprecations(`${reviewAnthropicStatus}### 2026-10-01: Claude Z model\n\n<Note>\n  Retired 2026-12-30.\n</Note>\n\n${table}`).find(record => record.id === 'claude-z-1').announced, '2026-10-01')
+  strictAssert.deepEqual(parseAnthropicDeprecations(`${reviewAnthropicStatus}### Claude Z model\n\n<Note>See the guide.</Note>\n\nOn October 1, 2026 we notified developers.\n\n${table}`).find(record => record.id === 'claude-z-1').announced, '2026-10-01')
+})
+reviewTest('P4: a Cohere list whose bullet character changes is two lists in GFM, so the run stops', () => {
+  strictAssert.throws(() => reviewCohere(reviewCohereRetirement('* `embed-english-v2.0`\n- `c4ai-aya-expanse-8b`\n')), /line 10: list marker changes, which starts a new list/)
+  strictAssert.throws(() => reviewCohere(reviewCohereRetirement('1. `embed-english-v2.0`\n2) `c4ai-aya-expanse-8b`\n')), /line 10: list marker changes, which starts a new list/)
+  strictAssert.deepEqual(reviewCohere(reviewCohereRetirement('* `embed-english-v2.0`\n* `c4ai-aya-expanse-8b`\n')).map(record => record.id), ['embed-english-v2.0', 'c4ai-aya-expanse-8b'])
+})
+reviewTest('P1 for Cohere: a heading inside a list item stops the run', () => {
+  strictAssert.throws(() => reviewCohere(`${reviewCohereRetirement('* `embed-english-v2.0`\n')}\n* ### 2026-05-01: Something\n\n### 2024-12-02: Rerank v2.0\n\n${reviewCohereTable}| 2025-04-30 | \`rerank-english-v2.0\` | \`rerank-v3.5\` |\n`), /heading inside a list item/)
 })
 
 fs.rmSync(outputDir, { recursive: true, force: true })

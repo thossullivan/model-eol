@@ -2,7 +2,7 @@
   "version": 1,
   "sources": {
     "anthropic": {
-      "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+      "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations.md",
       "tables": [
         "api model name | current state | deprecated | tentative retirement date [4 cols]",
         "parameter | status | behavior | recommended replacement [4 cols]",
@@ -10,9 +10,10 @@
       ]
     },
     "aws-bedrock": {
-      "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+      "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.md",
       "tables": [
-        "model provider | model name | model id | regions | legacy date | eol date | public extended access start date [7 cols]"
+        "labelled list: model name | model id | regions / legacy date / eol date / public extended access start date",
+        "labelled list: model name | model id | regions | legacy date | eol date | public extended access start date"
       ]
     },
     "azure-ai-foundry": {
@@ -23,7 +24,7 @@
       ]
     },
     "cohere": {
-      "url": "https://docs.cohere.com/docs/deprecations",
+      "url": "https://docs.cohere.com/docs/deprecations.md",
       "tables": [
         "shutdown date | deprecated model | deprecated model price | recommended replacement [4 cols]"
       ]
@@ -36,14 +37,14 @@
       ]
     },
     "mistral": {
-      "url": "https://docs.mistral.ai/models",
+      "url": "https://docs.mistral.ai/models.md",
       "tables": [
-        "(no header row) [5 cols]",
-        "model | version | api | deprecation retirement | alternative [5 cols]"
+        "model | api name | status | context | summary [5 cols]",
+        "model | api name | status | context | summary | deprecation | retirement | replacement [8 cols]"
       ]
     },
     "openai": {
-      "url": "https://developers.openai.com/api/docs/deprecations",
+      "url": "https://developers.openai.com/api/docs/deprecations.md",
       "tables": [
         "date | update [2 cols]",
         "shutdown date | affected feature or endpoint | status | recommended replacement | notice date [5 cols]",
@@ -52,7 +53,7 @@
       ]
     },
     "vertex-ai": {
-      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions.md.txt",
       "tables": [
         "model id | release date | retirement date | recommended upgrade [4 cols]",
         "model id | release date | retirement date | replacement model id [4 cols]"

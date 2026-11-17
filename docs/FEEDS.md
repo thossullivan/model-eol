@@ -10,7 +10,7 @@ have no source to point to.
 | Feed | Dates come from | Current models come from |
 |---|---|---|
 | `openai.json` | [OpenAI deprecations](https://developers.openai.com/api/docs/deprecations) | the models endpoint (needs `OPENAI_API_KEY`) |
-| `anthropic.json` | [Anthropic model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations), including "not sooner than" dates for active models | the model overview pages listed in `llms.txt` (no key needed), and the models endpoint when `ANTHROPIC_API_KEY` is set |
+| `anthropic.json` | [Anthropic model deprecations](https://platform.claude.com/docs/en/about-claude/model-deprecations), read from its Markdown copy, including "not sooner than" dates for active models | the model overview pages listed in `llms.txt` (no key needed), and the models endpoint when `ANTHROPIC_API_KEY` is set. The endpoint's lifecycle fields are compared with the deprecations page, and disagreements are reported, not applied. |
 | `google.json` | [Gemini API deprecations](https://aistudio.google.com/docs/deprecations) | the models endpoint (`GEMINI_API_KEY`; locally `GOOGLE_API_KEY` also works) |
 | `mistral.json` | [Mistral models](https://docs.mistral.ai/models) | the models endpoint (`MISTRAL_API_KEY`) |
 | `cohere.json` | [Cohere deprecations](https://docs.cohere.com/docs/deprecations) | the models endpoint (`COHERE_API_KEY`) |
@@ -21,15 +21,29 @@ Distributor dates are added to the publisher feeds as `distributions` entries:
 - **Amazon Bedrock**: the [legacy lifecycle table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html)
   for models launched before AWS changed its policy on 2026-09-07, and the
   individual [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
-  for newer ones. A card's "EOL no sooner than" date becomes a tentative date,
-  and an exact Model EOL date stays exact.
-- **Vertex AI**: the [model versions page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions).
+  for newer ones, both read from their Markdown copies (the same pages ending
+  in `.md`). The feed cites the pages themselves. A card's "EOL no sooner than"
+  date becomes a tentative date, and an exact Model EOL date stays exact. When
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set, the refresh also
+  calls the Bedrock `ListFoundationModels` API in 17 Regions and lists every
+  model and Region where its lifecycle state or dates disagree with the page
+  under "Source conflicts". The pages stay the source of every Bedrock date.
+- **Vertex AI**: the [model versions page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions),
+  read from its Markdown copy (`model-versions.md.txt`). The feed cites the page
+  itself.
 - **Azure AI Foundry**: the [model retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule),
-  matched to the OpenAI, Anthropic, Mistral, and Cohere feeds.
+  read as Markdown (the page returns its Markdown source for
+  `Accept: text/markdown`) and matched to the OpenAI, Anthropic, Mistral, and
+  Cohere feeds. The feed cites the page itself. When `AZURE_MANAGEMENT_TOKEN`
+  and `AZURE_SUBSCRIPTION_ID` are set, the refresh also reads the Azure models
+  API and lists every date on which it disagrees with the page under "Source
+  conflicts", with the differences of exactly one day grouped under one line.
+  The page stays the source of every Azure date.
 
 API keys are optional. Without them the refresh still reads every page and keeps
 the current models already in the feeds, but it can't add new ones from the
-OpenAI, Google, Mistral, or Cohere models endpoints. xAI isn't covered:
+OpenAI, Google, Mistral, or Cohere models endpoints. Without the Azure or AWS
+credentials it skips the Azure or Bedrock models API cross-check with a notice. xAI isn't covered:
 it has no lifecycle index, and its models API has no deprecation fields.
 
 How each page is parsed, and what makes a parser stop, is in
@@ -52,6 +66,54 @@ with the committed ones.
 - **Parse failure:** the run fails and opens or updates one issue. It never
   writes a partial or guessed feed, and its error names every source that
   failed, not only the first. The next successful run closes the issue.
+
+Both workflows sign in to Azure with OpenID Connect (`azure/login`, pinned to
+the v3.1.0 commit, using the `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
+`AZURE_SUBSCRIPTION_ID` secrets) and pass a management token for the Azure
+models API only to the distributor refresh. The job signs out of Azure and
+deletes `~/.azure` right after the last distributor refresh. On `main` both
+jobs run in the `model-apis` GitHub environment, which only `main` may use, and
+the federated credential trusts only that environment, so no other workflow on
+`main` can obtain the Azure token. A manual run on another branch runs outside
+the environment, skips the login and the models API with a notice, and still
+checks the pages.
+
+The Bedrock cross-check signs its requests with an access key for an IAM user
+whose only permissions are `bedrock:ListFoundationModels` and
+`bedrock:GetFoundationModel`. GitHub OIDC isn't possible in that AWS account,
+because its organization's service control policy denies creating an OpenID
+Connect provider (issue 149). The key is stored as the `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` secrets of the `model-apis` environment, so only jobs
+on `main` can read it. Both workflows run every distributor refresh in a step
+of its own, and only that step's environment carries the AWS key and the
+Azure token. The provider refresh, `npm test`, and the PR step run in other
+steps, so no process they start can read either one, not even through its
+parent's environment. On another branch the secrets are empty and the Bedrock
+cross-check is skipped with a notice.
+
+Three checks only compare the pages with an API and never change feed data:
+the Azure models API cross-check, the Bedrock `ListFoundationModels`
+cross-check, and the lifecycle fields (`lifecycle`, `deprecated_at`,
+`retires_at`) of the Anthropic models API. The two workflows treat a broken
+cross-check differently:
+
+- The weekly refresh leaves `MODEL_EOL_CROSS_CHECKS` unset. A failed Azure
+  login, or a missing AWS key, on `main` prints a warning and the refresh runs
+  without that cross-check. A cross-check that fails (for Azure or Bedrock an
+  HTTP error, a response it can't read, or half-configured credentials; for
+  Anthropic a missing or unrecognised lifecycle field) prints `warning: ...
+  cross-check failed: ...`, adds a line under "Source conflicts" in the
+  refresh PR, and the feeds are still regenerated from the pages.
+- The daily source check sets `MODEL_EOL_CROSS_CHECKS=strict` for both refresh
+  checks. A failed login or a missing AWS key on `main`, or a failed
+  cross-check, fails the check, and it is reported through the "Source check
+  failed" issue like any unreadable source.
+
+The Anthropic models API also supplies the current model IDs, which add new
+models to the feed and clear stale dates, like the OpenAI, Google, Mistral, and
+Cohere models endpoints. A failure to list those IDs (an HTTP or network
+error, a body that isn't the documented list, an invalid or repeated ID) fails
+both workflows, whatever the setting, and so does a page that can't be read.
 
 ## The daily source check
 
@@ -122,7 +184,8 @@ health. Each feed is at
 The CLI uses the feeds bundled in its npm package, or a local directory passed
 with `--feeds DIR`. The bot can download hosted feeds instead, with
 `model-eol-bot --feeds-url URL[,URL...]`. Each download has a 30-second
-deadline over the request and body and an 8 MiB body limit. A download that
+deadline over the request and body and an 8 MiB body limit, and follows at
+most 5 redirects, each to an `https` URL. A download that
 exceeds either, or returns a feed that fails validation, has failed. A failed
 download stops the bot unless `feeds.allow_vendored_fallback` is set (see
 [CONFIGURATION.md](CONFIGURATION.md#keys)).

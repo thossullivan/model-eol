@@ -1614,6 +1614,19 @@ for (const [label, respond] of [
   const reason = await feedDownloadError(async url => respond(url))
   assert(reason.startsWith('feed download failed: '), `--feeds-url rejects ${label} below status 400`)
 }
+const feedRedirectRequests = []
+const feedRedirectReason = await feedDownloadError(async (url, options) => {
+  feedRedirectRequests.push([url, options.redirect])
+  if (feedRedirectRequests.length === 1) return new Response('', { status: 302, headers: { location: 'http://feeds.invalid/plain.json' } })
+  return new Response(boundedFeedJson(url))
+})
+assert(feedRedirectReason === 'feed download failed: --feeds-url fetch failed for https://feeds.invalid/bounded.json: redirected to a http: URL' && JSON.stringify(feedRedirectRequests) === JSON.stringify([['https://feeds.invalid/bounded.json', 'manual']]), '--feeds-url refuses a redirect hop to http before requesting it')
+const feedHttpsRedirects = []
+const feedHttpsRedirectReason = await feedDownloadError(async url => {
+  feedHttpsRedirects.push(url)
+  return feedHttpsRedirects.length === 1 ? new Response('', { status: 301, headers: { location: '/moved.json' } }) : new Response(boundedFeedJson(url))
+})
+assert(feedHttpsRedirectReason === '' && JSON.stringify(feedHttpsRedirects) === JSON.stringify(['https://feeds.invalid/bounded.json', 'https://feeds.invalid/moved.json']), '--feeds-url follows a relative https redirect')
 let errorChunks = 0
 const streamedErrorReason = await feedDownloadError(async () => ({
   status: 500,

@@ -6,14 +6,13 @@ import { fileURLToPath } from 'node:url'
 import { parseCliArgs } from '../lib/cli.mjs'
 import { DISTRIBUTORS, findDistributorFixture } from './distributors.mjs'
 import { fetchBoundedBody } from './fetch.mjs'
+import { isHtmlBody, markdownCellHtml, markdownInlineText, markdownPipeTables, stripFencedCodeBlocks } from './markdown.mjs'
 import {
   PROVIDERS,
   findFixture,
-  googleInlineText,
   googleMarkdocRows,
   plainText,
   stripComments,
-  stripFencedCodeBlocks,
 } from './providers.mjs'
 
 const THIS_FILE = fileURLToPath(import.meta.url)
@@ -25,10 +24,10 @@ export const SNAPSHOT_VERSION = 1
 export function shapeSources() {
   const providers = Object.entries(PROVIDERS).map(([name, config]) => {
     const url = config.deprecationsFetchUrl ?? config.deprecationsUrl
-    return { name, kind: 'provider', url, format: /\.md$/i.test(new URL(url).pathname) ? 'markdoc' : 'html' }
+    return { name, kind: 'provider', url, headers: { ...config.deprecationsFetchHeaders } }
   })
   const distributors = Object.entries(DISTRIBUTORS).map(([name, config]) => (
-    { name, kind: 'distributor', url: config.sourceUrl, format: 'html' }
+    { name, kind: 'distributor', url: config.sourceFetchUrl ?? config.sourceUrl, headers: { ...config.sourceHeaders } }
   ))
   return [...providers, ...distributors].sort((left, right) => left.name.localeCompare(right.name))
 }
@@ -92,7 +91,7 @@ export function htmlTableShapes(html) {
   return [...shapes].sort()
 }
 
-const markdocHeaderText = cell => normalizeHeaderText(googleInlineText(stripSup(cell).replace(/\[([^\]]*)\]\([^()\s]*\)/g, '$1')))
+const markdocHeaderText = cell => normalizeHeaderText(markdownInlineText(stripSup(cell).replace(/\[([^\]]*)\]\([^()\s]*\)/g, '$1')))
 
 /** Distinct header-row signatures of every Markdoc {% table %} block. */
 export function markdocTableShapes(markdown) {
@@ -122,8 +121,48 @@ export function markdocTableShapes(markdown) {
   return [...shapes].sort()
 }
 
-export function extractShapes(body, format) {
-  const shapes = format === 'markdoc' ? markdocTableShapes(body) : htmlTableShapes(body)
+const pipeHeaderText = cell => normalizeHeaderText(plainText(markdownCellHtml(stripSup(cell).replace(/\^[^^\s]+\^|\[\^[^\]]+\]/g, ' '))))
+
+/** Distinct header-row signatures of every GFM pipe table. */
+export function pipeTableShapes(markdown) {
+  const tables = markdownPipeTables(String(markdown))
+  return [...new Set(tables.map(table => signature([table.header.map(pipeHeaderText)], table.header.length)))].sort()
+}
+
+/** Distinct shapes of nested labelled lists: each run of indented `**Label:** value` items, as its distinct item labels in order. */
+export function labelledListShapes(markdown) {
+  const shapes = new Set()
+  let items = []
+  const flush = () => {
+    if (items.length) shapes.add(`labelled list: ${[...new Set(items)].join(' | ')}`)
+    items = []
+  }
+  for (const line of stripFencedCodeBlocks(stripComments(String(markdown))).split('\n')) {
+    const item = line.match(/^[ \t]+[-*+][ \t]+(\*\*[^*]+?:\*\*.*)$/)
+    if (!item) {
+      flush()
+      continue
+    }
+    items.push([...item[1].matchAll(/(?:^|\s\/\s)\*\*([^*]+?):\*\*/g)].map(match => normalizeHeaderText(match[1])).join(' / '))
+  }
+  flush()
+  return [...shapes].sort()
+}
+
+/** A body is HTML when its first markup, after any leading comments, is a tag; anything else is Markdown. */
+export function sourceFormat(body) {
+  return isHtmlBody(body) ? 'html' : 'markdown'
+}
+
+/** Markdown bodies may mix Markdoc, pipe, and raw HTML tables, so their shapes are pooled. */
+export function extractShapes(body) {
+  let shapes
+  if (sourceFormat(body) === 'html') {
+    shapes = htmlTableShapes(body)
+  } else {
+    const unfenced = stripFencedCodeBlocks(String(body))
+    shapes = [...new Set([...markdocTableShapes(body), ...pipeTableShapes(body), ...htmlTableShapes(unfenced), ...labelledListShapes(body)])].sort()
+  }
   if (!shapes.length) throw new Error('no tables found')
   return shapes
 }
@@ -138,8 +177,8 @@ function readFixture(source, dir) {
 /** Fetch every source concurrently; returns { shapes, failures } so one bad source never hides another. */
 export async function collectShapes(sources = shapeSources(), { fixtures, fetchImpl = globalThis.fetch } = {}) {
   const results = await Promise.allSettled(sources.map(async source => {
-    const body = fixtures ? readFixture(source, fixtures) : await fetchBoundedBody(source.url, source.name, fetchImpl)
-    return extractShapes(body, source.format)
+    const body = fixtures ? readFixture(source, fixtures) : await fetchBoundedBody(source.url, source.name, fetchImpl, { headers: source.headers ?? {} })
+    return extractShapes(body)
   }))
   const shapes = {}
   const failures = []

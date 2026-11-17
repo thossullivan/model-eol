@@ -1,7 +1,9 @@
 // Semantic feed diffing for the refresh job. Feed metadata such as generated
 // timestamps is intentionally excluded from the comparison.
 
+import { sourceConflictLines } from './azure-models-api.mjs'
 import { skippedModelCardSummary, sourceConflictSummary } from './distributors.mjs'
+import { providerSourceConflictSummary } from './providers.mjs'
 
 const value = item => item === undefined || item === null || item === '' ? 'not set' : item
 
@@ -315,7 +317,7 @@ function renderResult(result, publisher) {
     result.newlyAnnounced.map(model => `- ${code(model.id)} - ${dateLine(model)}; ${replacementSummary(model)}`),
   ))
   pushSection(section('Distribution changes', renderDistributionChanges(result)))
-  pushSection(section('Source conflicts', (result.sourceConflicts ?? []).map(conflict => `- ${sourceConflictSummary(conflict)}`)))
+  pushSection(section('Source conflicts', sourceConflictLines(result.sourceConflicts ?? [], conflict => conflict.via === 'models-api' ? providerSourceConflictSummary(conflict) : sourceConflictSummary(conflict))))
   pushSection(section('Model cards without lifecycle fields', (result.skippedModelCards ?? []).map(card => `- ${skippedModelCardSummary(card)}`)))
   pushSection(section(
     'Unconfirmed entries',
