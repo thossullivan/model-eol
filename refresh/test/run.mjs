@@ -56,7 +56,7 @@ import {
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
 import { SOURCE_FETCH_DEADLINE_MS, fetchBoundedBody } from '../fetch.mjs'
-import { parseRefreshArgs, usage, validateGeneratedFeeds } from '../refresh.mjs'
+import { parseRefreshArgs, sourceFailureError, usage, validateGeneratedFeeds } from '../refresh.mjs'
 import { validateFeed } from '../../lib/validate-feed.mjs'
 import { lifecycleFor } from '../../lib/feeds.mjs'
 import { classifyFeedReleasePaths } from '../../scripts/feed-release-guard.mjs'
@@ -3510,6 +3510,49 @@ const corruptOpenAIOut = path.join(corruptOpenAIDir, 'out')
 const corruptOpenAIRun = run(['--provider', 'openai', '--out', corruptOpenAIOut, '--fixtures', corruptOpenAIDir])
 assert(corruptOpenAIRun.code === 1, 'corrupted OpenAI fixture exits nonzero')
 assert(!fs.existsSync(corruptOpenAIOut), 'corrupted OpenAI fixture produces no output directory')
+const corruptOpenAIHtml = fs.readFileSync(path.join(corruptOpenAIDir, 'openai-deprecations.html'), 'utf8')
+let corruptOpenAIMessage
+try {
+  parseOpenAIDeprecations(corruptOpenAIHtml)
+} catch (error) {
+  corruptOpenAIMessage = error.message
+}
+assert(corruptOpenAIMessage && corruptOpenAIRun.err.includes(`- openai: ${corruptOpenAIMessage}`) && corruptOpenAIRun.err.includes('refresh failed for 1 source:'), 'a single failing source keeps its original error message')
+assert(!corruptOpenAIRun.err.includes('refresh failed: refresh failed'), 'a source failure is not printed with a doubled prefix')
+
+const multiFailureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-multi-failure-'))
+try {
+  const sources = path.join(multiFailureDir, 'sources')
+  fs.cpSync(fixtures, sources, { recursive: true })
+  fs.writeFileSync(path.join(sources, 'openai-deprecations.html'), corruptOpenAIHtml)
+  fs.writeFileSync(path.join(sources, 'google-deprecations.md'), '# Gemini deprecations\n\nNo lifecycle table here.\n')
+  fs.writeFileSync(path.join(sources, 'bedrock-lifecycle.html'), '<html><body><table><tr><th>Model ID</th><th>Legacy date</th></tr></table></body></html>')
+  fs.writeFileSync(path.join(sources, 'azure-model-retirement-schedule.html'), '<html><body><h1>Retirements</h1><p>corrupt</p></body></html>')
+  const out = path.join(multiFailureDir, 'out')
+  fs.mkdirSync(out)
+  const sourceLines = text => text.split('\n').filter(line => line.startsWith('- ')).map(line => line.slice(2, line.indexOf(':')))
+
+  const providersRun = run(['--provider', 'all', '--out', out, '--fixtures', sources])
+  assert(providersRun.code === 1 && providersRun.err.includes('refresh failed for 2 sources:') && JSON.stringify(sourceLines(providersRun.err)) === JSON.stringify(['openai', 'google']), 'refresh reports every failing provider in one run')
+  assert(fs.readdirSync(out).length === 0 && providersRun.out === '', 'failing providers write no feed and print no diff')
+
+  const providersCheck = run(['--provider', 'all', '--check', '--out', out, '--fixtures', sources])
+  assert(providersCheck.code === 1 && sourceLines(providersCheck.err).length === 2 && providersCheck.out === '' && fs.readdirSync(out).length === 0, 'failing providers under --check exit 1, write nothing, and print no diff')
+
+  const mixedRun = run(['--provider', 'openai', '--distributor', 'aws-bedrock,vertex-ai,azure-ai-foundry', '--out', out, '--fixtures', sources])
+  assert(mixedRun.code === 1 && mixedRun.err.includes('refresh failed for 3 sources:') && JSON.stringify(sourceLines(mixedRun.err)) === JSON.stringify(['openai', 'aws-bedrock', 'azure-ai-foundry']), 'refresh reports a failing provider and every failing distributor in source order')
+  assert(fs.readdirSync(out).length === 0 && mixedRun.out === '', 'a provider and distributor failure write no feed and print no diff')
+
+  const distributorsRun = run(['--distributor', 'aws-bedrock,vertex-ai,azure-ai-foundry', '--check', '--out', out, '--fixtures', sources])
+  assert(distributorsRun.code === 1 && JSON.stringify(sourceLines(distributorsRun.err)) === JSON.stringify(['aws-bedrock', 'azure-ai-foundry']) && distributorsRun.out === '', 'a failing distributor does not stop the next distributor')
+} finally {
+  fs.rmSync(multiFailureDir, { recursive: true, force: true })
+}
+
+const exitCoded = (message, exitCode) => Object.assign(new Error(message), { exitCode })
+const sameCodeError = sourceFailureError([{ source: 'openai', error: exitCoded('first', 2) }, { source: 'google', error: exitCoded('second', 2) }])
+assert(sameCodeError.message === 'refresh failed for 2 sources:\n- openai: first\n- google: second' && sameCodeError.exitCode === 2, 'source failures that share an exit code keep it')
+assert(sourceFailureError([{ source: 'openai', error: exitCoded('first', 2) }, { source: 'google', error: new Error('second') }]).exitCode === 1, 'source failures with mixed exit codes exit 1')
 
 const corruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-corrupt-'))
 for (const file of ['openai-models.json', 'anthropic-models.json', 'openai-deprecations.html']) {

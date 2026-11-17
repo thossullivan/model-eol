@@ -170,20 +170,41 @@ function writeGenerated(items, out) {
   }
 }
 
+export function sourceFailureError(failures) {
+  const lines = failures.map(({ source, error }) => `- ${source}: ${error?.message ?? error}`)
+  const error = new Error(`refresh failed for ${failures.length} source${failures.length === 1 ? '' : 's'}:\n${lines.join('\n')}`)
+  const codes = new Set(failures.map(failure => failure.error?.exitCode ?? 1))
+  error.exitCode = codes.size === 1 ? [...codes][0] : 1
+  error.failures = failures
+  return error
+}
+
 export async function run(options) {
   const generated = []
   const generatedTimestamp = process.env.MODEL_EOL_GENERATED
   const refreshClock = generatedTimestamp ? new Date(generatedTimestamp) : new Date()
   const distributorNames = options.distributors ?? (options.distributor ? String(options.distributor).split(',') : [])
   const shouldRefreshProviders = !distributorNames.length || options.providerSpecified
+  const failures = []
   for (const name of options.providers) {
-    generated.push(shouldRefreshProviders
-      ? await generateProviderFeed(name, {
+    if (!shouldRefreshProviders) {
+      generated.push(generateCommittedFeed(name, { generated: generatedTimestamp }))
+      continue
+    }
+    try {
+      generated.push(await generateProviderFeed(name, {
         fixtures: options.fixtures,
         generated: generatedTimestamp,
         now: refreshClock,
-      })
-      : generateCommittedFeed(name, { generated: generatedTimestamp }))
+      }))
+    } catch (error) {
+      failures.push({ source: name, error })
+      try {
+        generated.push(generateCommittedFeed(name, { generated: generatedTimestamp }))
+      } catch {
+        // The failure is already recorded; without a committed feed the distributor pass skips this publisher.
+      }
+    }
   }
 
   let distributorState
@@ -196,12 +217,19 @@ export async function run(options) {
     }
     distributorState = { unconfirmedDistributions: [], noPublisherFeed: [], sourceConflicts: [], skippedModelCards: [] }
     for (const distributor of distributorNames) {
-      const source = await loadDistributorSource(distributor, { fixtures: options.fixtures, now: refreshClock })
-      const state = mergeDistributions(generated, {
-        records: source.records,
-        sourceUrl: source.sourceUrl,
-        via: distributor,
-      })
+      let source
+      let state
+      try {
+        source = await loadDistributorSource(distributor, { fixtures: options.fixtures, now: refreshClock })
+        state = mergeDistributions(generated, {
+          records: source.records,
+          sourceUrl: source.sourceUrl,
+          via: distributor,
+        })
+      } catch (error) {
+        failures.push({ source: distributor, error })
+        continue
+      }
       for (const [index, item] of generated.entries()) item.feed = state.feeds[index]
       distributorState.unconfirmedDistributions.push(...state.unconfirmedDistributions)
       distributorState.noPublisherFeed.push(...state.noPublisherFeed)
@@ -211,6 +239,7 @@ export async function run(options) {
     }
   }
 
+  if (failures.length) throw sourceFailureError(failures)
   validateGeneratedFeeds(generated)
 
   const diffs = generated.map((item, index) => {
@@ -259,7 +288,7 @@ if (invoked) {
   try {
     process.exitCode = await main()
   } catch (error) {
-    console.error(`refresh failed: ${error.message}`)
+    console.error(error.failures ? error.message : `refresh failed: ${error.message}`)
     process.exitCode = error.exitCode ?? 1
   }
 }

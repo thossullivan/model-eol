@@ -107,7 +107,7 @@ function decodeEntities(text) {
     .replace(/&([a-z]+);/gi, (match, name) => named.get(name.toLowerCase()) ?? match)
 }
 
-function plainText(fragment) {
+export function plainText(fragment) {
   return decodeEntities(stripComments(fragment)
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<[^>]*>/g, ' '))
@@ -950,7 +950,7 @@ export function parseAnthropicModelsIndex(markdown, url = PROVIDERS.anthropic.al
   return [...urls]
 }
 
-function stripFencedCodeBlocks(markdown) {
+export function stripFencedCodeBlocks(markdown) {
   let fence
   return markdown.split(/\r?\n/).map(line => {
     if (fence) {
@@ -1078,7 +1078,7 @@ const MARKDOWN_ESCAPABLE = /[!-/:-@[-`{-~]/
 const unescapeMarkdown = text => text.replace(/\\([!-/:-@[-`{-~])/g, '$1')
 
 // Drops Markdown emphasis and backslash escapes; an underscore inside a word is kept.
-function googleInlineText(text) {
+export function googleInlineText(text) {
   let output = ''
   for (let index = 0; index < text.length; index++) {
     const char = text[index]
@@ -1113,7 +1113,8 @@ function googleCellHtml(markdown, where) {
 
 const GOOGLE_MODEL_CELL = /^(?:`[^`]+`|\[`[^`]+`\]\([^()\s]*\))$/
 
-function googleMarkdocTable(lines, where) {
+/** Split the lines inside one Markdoc table tag into rows of cell source text. */
+export function googleMarkdocRows(lines, where) {
   const rows = [[]]
   let indent
   let cell
@@ -1141,7 +1142,11 @@ function googleMarkdocTable(lines, where) {
     cell.push(line)
   }
   if (!rows.at(-1).length) throw new Error(`google deprecations table ${where} ends with an empty row`)
-  const [header, ...body] = rows.map(row => row.map(parts => parts.map(part => part.trim()).join(' ').trim()))
+  return rows.map(row => row.map(parts => parts.map(part => part.trim()).join(' ').trim()))
+}
+
+function googleMarkdocTable(lines, where) {
+  const [header, ...body] = googleMarkdocRows(lines, where)
   const labels = header.map(label => label.toLowerCase().replace(/\s+/g, ' '))
   const expected = GOOGLE_TABLE_HEADER.slice(1).map(label => label.toLowerCase())
   if (labels.length !== GOOGLE_TABLE_HEADER.length || !['model', 'agent'].includes(labels[0]) || labels.slice(1).join('|') !== expected.join('|')) {

@@ -11,6 +11,7 @@ the weekly workflow uses this code, see [docs/FEEDS.md](../docs/FEEDS.md).
 | `distributors.mjs` | Distributor parsers: Bedrock, Vertex AI, Azure AI Foundry. |
 | `fetch.mjs` | Bounded HTTP fetches (30-second deadline, 8 MiB limit) for Anthropic model pages and distributor pages. It re-exports `lib/fetch-bounded.mjs`, which the bot's `--feeds-url` download also uses. |
 | `diff.mjs` | The semantic diff used for `--check` and for refresh PR bodies. |
+| `shapes.mjs` | The source structure check. Records the table header shapes of every source page in `source-shapes.json`. |
 | `test/` | Offline tests and recorded pages under `test/fixture/`. |
 
 ## The rule every parser follows
@@ -28,6 +29,10 @@ nothing:
   snapshots (below).
 - A page on which no lifecycle table is recognized stops the run.
 - A missing fixture page stops an offline run. It is never treated as empty.
+
+A failed source doesn't hide the others. The run still reads every selected
+publisher and distributor, then fails with one error that lists each failed
+source and its message, and writes no feed and no diff.
 
 A few rows are skipped rather than stopping the run, and the sections below
 say which: OpenAI endpoint and product rows, Gemini cells without a usable ID,
@@ -51,6 +56,33 @@ read in one request.
 A change that makes a parser accept more input has to show that the new input
 can't produce a row bound to the wrong model. Add a fixture that would have
 produced a misaligned row and assert that it is refused.
+
+## Source structure check
+
+A parser that finds columns by label can keep working while it ignores a new
+column or a new kind of table. `shapes.mjs` catches that. It reads each
+provider deprecations page and each distributor lifecycle page, and records
+every distinct table header in `source-shapes.json`. The Anthropic model pages,
+the Bedrock model cards, and the models endpoints aren't checked.
+
+- A header shape is the header cells of one table in column order, lowercased,
+  with whitespace collapsed and invisible characters removed. HTML tables use
+  their `thead` rows, or else their leading rows of `th` cells. A table with
+  neither is recorded as its column count only. Google's Markdoc tables use
+  their first row.
+- Each source keeps only distinct shapes, so a new dated section with a
+  familiar table doesn't change the snapshot. Headings and dates aren't
+  recorded.
+- `node refresh/shapes.mjs --check` exits 0 when every page matches the
+  snapshot, 3 when any differs (it prints the shapes added and removed per
+  source), and 1 when a page can't be fetched, has no tables, or has a
+  malformed table. It names every failing page, not only the first.
+- `node refresh/shapes.mjs --write` regenerates the snapshot from the live
+  pages. With `--fixtures DIR` it reads the recorded pages instead, and then
+  needs `--snapshot FILE` so it never overwrites the committed snapshot.
+
+The daily `source-check` workflow runs this check; see
+[docs/FEEDS.md](../docs/FEEDS.md#the-daily-source-check).
 
 ## Anthropic
 
@@ -386,7 +418,10 @@ the way the parser expects.
 1. Record the live page as a fixture under `test/fixture/`.
 2. Write tests against the fixture. `node refresh/test/run.mjs` runs only the
    refresh tests.
-3. Regenerate the feeds from the live pages with `node refresh/refresh.mjs`
+3. Run `node refresh/shapes.mjs --write` so the structure snapshot covers the
+   new page. The check reads every provider's deprecations URL and every
+   distributor's `sourceUrl`, and the tests fail until the snapshot matches.
+4. Regenerate the feeds from the live pages with `node refresh/refresh.mjs`
    (add `--distributor ...` for a distributor parser), and include the semantic
    diff in the PR description. Don't commit feeds
    generated with `--fixtures`.
