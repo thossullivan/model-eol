@@ -1,7 +1,7 @@
 {
   "spec": "model-eol/0.1",
   "publisher": "mistral",
-  "generated": "2026-10-24T17:31:21.230Z",
+  "generated": "2026-11-17T05:01:30.499Z",
   "source": "https://docs.mistral.ai/models",
   "models": [
     {
@@ -337,6 +337,41 @@
       "announced": "2026-09-29",
       "shutdown": "2026-09-30",
       "replacement_note": "Mistral lists OCR 4.1 as the alternative"
+    },
+    {
+      "id": "mistral-medium-3-5",
+      "announced": "2026-10-31",
+      "shutdown": "2027-04-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Large 4 as the alternative"
+    },
+    {
+      "id": "voxtral-mini-tts-2603",
+      "announced": "2026-10-31",
+      "shutdown": "2027-04-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Voxtral TTS 3 as the alternative"
+    },
+    {
+      "id": "mistral-large-2512",
+      "announced": "2026-10-31",
+      "shutdown": "2027-04-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Mistral Large 4 as the alternative"
+    },
+    {
+      "id": "voxtral-mini-2602",
+      "announced": "2026-10-31",
+      "shutdown": "2027-04-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Voxtral Mini Transcribe 3 as the alternative"
+    },
+    {
+      "id": "voxtral-mini-transcribe-realtime-2602",
+      "announced": "2026-10-31",
+      "shutdown": "2027-04-30",
+      "source": "https://docs.mistral.ai/models",
+      "replacement_note": "Mistral lists Voxtral Mini Transcribe Realtime 3 as the alternative"
     }
   ]
 }
