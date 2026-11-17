@@ -52,7 +52,7 @@
       ]
     },
     "vertex-ai": {
-      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions.md.txt",
       "tables": [
         "model id | release date | retirement date | recommended upgrade [4 cols]",
         "model id | release date | retirement date | replacement model id [4 cols]"

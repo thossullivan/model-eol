@@ -27,7 +27,7 @@ export function shapeSources() {
     return { name, kind: 'provider', url, headers: { ...config.deprecationsFetchHeaders } }
   })
   const distributors = Object.entries(DISTRIBUTORS).map(([name, config]) => (
-    { name, kind: 'distributor', url: config.sourceUrl, headers: { ...config.sourceHeaders } }
+    { name, kind: 'distributor', url: config.sourceFetchUrl ?? config.sourceUrl, headers: { ...config.sourceHeaders } }
   ))
   return [...providers, ...distributors].sort((left, right) => left.name.localeCompare(right.name))
 }

@@ -373,11 +373,26 @@ Offline runs read `bedrock-lifecycle.html`, `bedrock-model-cards.html`, and
 
 ## Vertex AI
 
-The refresh reads the
-[Vertex AI model versions page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions)
-and expects tables with a Model ID column and a retirement date column. It runs
-only with `--distributor vertex-ai`.
+The refresh reads the Markdown copy of the
+[Vertex AI model versions page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions),
+fetched from `sourceFetchUrl`
+(`https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions.md.txt`,
+which the page advertises as its `text/markdown` alternate). Records and the
+feed cite the human page (`sourceUrl`). It expects tables with a Model ID column
+and a retirement date column, and runs only with `--distributor vertex-ai`.
 
+The Markdown is rendered as HTML and read by the HTML page parser, so both
+sources follow the rules below. Each pipe table is read with
+[`markdown.mjs`](#markdown-pipe-tables) and rendered with
+`markdownPipeTableToHtml`; ATX headings and prose lines become headings and
+paragraphs so the section rules see the same text as on the HTML page.
+
+- The body must be Markdown. An HTML page, a raw HTML `<table>` outside fenced
+  code, a setext heading, or a misaligned pipe table stops the run. Fenced
+  code, HTML comments, and front matter add no prose.
+- Google escapes punctuation inside code spans (`` `textembedding-gecko@003\*` ``),
+  so a backslash before ASCII punctuation in a code span is dropped. Model IDs
+  never contain a backslash.
 - Row and column spans are expanded before columns are indexed.
 - The header is the first row with a "model ID" or "model identifier" label and
   a retirement or discontinuation date label. Other tables are skipped and extra
@@ -407,7 +422,9 @@ only with `--distributor vertex-ai`.
   entries the page no longer confirms are kept and reported as unconfirmed. The
   merge may change only `vertex-ai` distributions; any other change stops the
   run.
-- Offline runs read `test/fixture/vertex-model-versions.html`.
+- Offline runs read `test/fixture/vertex-model-versions.md`, or `vertex-ai.md`
+  or `vertex-ai-lifecycle.md` in the fixtures directory. The recorded HTML page
+  `test/fixture/vertex-model-versions.html` is kept for the HTML parser tests.
 
 ## Azure AI Foundry
 
@@ -464,7 +481,8 @@ the way the parser expects.
    refresh tests.
 3. Run `node refresh/shapes.mjs --write` so the structure snapshot covers the
    new page. The check reads every provider's deprecations URL and every
-   distributor's `sourceUrl`, and the tests fail until the snapshot matches.
+   distributor's `sourceFetchUrl` (or `sourceUrl` when it has none), and the
+   tests fail until the snapshot matches.
 4. Regenerate the feeds from the live pages with `node refresh/refresh.mjs`
    (add `--distributor ...` for a distributor parser), and include the semantic
    diff in the PR description. Don't commit feeds

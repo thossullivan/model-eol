@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
+import { markdownCellHtml, markdownPipeTables, markdownPipeTableToHtml, stripFencedCodeBlocks } from './markdown.mjs'
 
 import { assertIsoDate, dateCandidates, dateFromText, MODEL_ID_PATTERN, rowLifecycleLabel, sectionProse, stripComments } from './providers.mjs'
 
@@ -11,6 +12,7 @@ export const BEDROCK_MODEL_CARDS_URL = 'https://docs.aws.amazon.com/bedrock/late
 export const MAX_BEDROCK_MODEL_CARDS = 400
 export const VERTEX_MODEL_VERSIONS_URL = 'https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions'
 export const VERTEX_LIFECYCLE_URL = VERTEX_MODEL_VERSIONS_URL
+export const VERTEX_MODEL_VERSIONS_MARKDOWN_URL = `${VERTEX_MODEL_VERSIONS_URL}.md.txt`
 export const AZURE_MODEL_RETIREMENT_SCHEDULE_URL = 'https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule'
 export const AZURE_PUBLISHER_BY_SECTION = new Map([
   ['Azure OpenAI', 'openai'],
@@ -31,7 +33,8 @@ export const DISTRIBUTORS = {
   'vertex-ai': {
     name: 'vertex-ai',
     sourceUrl: VERTEX_MODEL_VERSIONS_URL,
-    fixture: 'vertex-model-versions.html',
+    sourceFetchUrl: VERTEX_MODEL_VERSIONS_MARKDOWN_URL,
+    fixture: 'vertex-model-versions.md',
   },
   'azure-ai-foundry': {
     name: 'azure-ai-foundry',
@@ -625,6 +628,49 @@ export const parseVertexLifecycleHtml = parseVertexModelVersionsHtml
 export const parseVertexModelLifecycle = parseVertexModelVersionsHtml
 export const parseVertexModelVersions = parseVertexModelVersionsHtml
 
+const MARKDOWN_ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
+const blankKeepingLines = text => text.replace(/[^\n]/g, '')
+
+// Google's Markdown generator backslash-escapes punctuation even inside code spans, where CommonMark keeps it literal.
+const vertexCellHtml = text => markdownCellHtml(text).replace(/<code>([\s\S]*?)<\/code>/g, (_, code) => `<code>${code.replace(/\\([!-/:-@[-`{-~])/g, '$1')}</code>`)
+
+/** Render the Vertex Markdown copy as the headings, prose, and tables that parseVertexModelVersionsHtml reads. */
+export function vertexMarkdownToHtml(markdown) {
+  if (typeof markdown !== 'string') throw new Error('vertex-ai lifecycle page must be a string')
+  if (/^\s*<(?:!doctype|html)\b/i.test(markdown.replace(/^\uFEFF/, ''))) throw new Error('vertex-ai lifecycle source is HTML, not Markdown')
+  const tables = markdownPipeTables(markdown)
+  let source = stripFencedCodeBlocks(markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+    .replace(/^---[ \t]*\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?=\n|$)/, blankKeepingLines))
+  while (/<!--[\s\S]*?--!?>/.test(source)) source = source.replace(/<!--[\s\S]*?--!?>/g, blankKeepingLines)
+  if (/<table\b/i.test(source)) throw new Error('vertex-ai lifecycle page has a raw HTML table, which the Markdown reader does not parse')
+  const tableAt = new Map(tables.map(table => [table.line - 1, table]))
+  const lines = source.split('\n').map(line => line.replace(/^\s*(?:>\s?)+/, ''))
+  const html = []
+  let paragraph = false
+  for (let index = 0; index < lines.length; index++) {
+    const table = tableAt.get(index)
+    const line = lines[index]
+    if (table) {
+      html.push(markdownPipeTableToHtml(table, { cellHtml: vertexCellHtml }))
+      index += table.rows.length + 1
+    } else if (paragraph && /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)) {
+      throw new Error(`vertex-ai lifecycle page line ${index + 1}: setext heading; section headings must use #`)
+    } else if (line.trim()) {
+      const heading = line.match(MARKDOWN_ATX_HEADING)
+      html.push(heading ? `<h${heading[1].length}>${vertexCellHtml(heading[2] ?? '')}</h${heading[1].length}>` : `<p>${vertexCellHtml(line)}</p>`)
+      paragraph = !heading
+      continue
+    }
+    paragraph = false
+  }
+  return html.join('\n')
+}
+
+/** Parse the Markdown copy of the Vertex model versions page with the same rules as the HTML page. */
+export function parseVertexModelVersionsMarkdown(markdown) {
+  return parseVertexModelVersionsHtml(vertexMarkdownToHtml(markdown))
+}
+
 const AZURE_LIFECYCLE_STATUSES = new Map([
   ['GA', 'active'],
   ['Preview', 'active'],
@@ -1203,7 +1249,8 @@ export function findDistributorFixture(dir, distributor = 'aws-bedrock') {
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
     throw new Error(`fixtures directory does not exist: ${dir}`)
   }
-  const candidates = [config.fixture, `${distributor}.html`, `${distributor}-lifecycle.html`]
+  const extension = path.extname(config.fixture)
+  const candidates = [config.fixture, `${distributor}${extension}`, `${distributor}-lifecycle${extension}`]
   for (const filename of candidates) {
     const candidate = path.join(root, filename)
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate
@@ -1246,11 +1293,11 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
     html = fs.readFileSync(fixturePath, 'utf8')
     ;(options.notice ?? console.error)(`notice: ${distributor} lifecycle fixture: ${path.relative(process.cwd(), fixturePath)}`)
   } else {
-    html = await fetchBody(config.sourceUrl, distributor, options.fetchImpl)
+    html = await fetchBody(config.sourceFetchUrl ?? config.sourceUrl, distributor, options.fetchImpl)
   }
   let parsed = distributor === 'azure-ai-foundry'
     ? parseAzureModelRetirementScheduleHtml(html, { now: options.now ?? new Date() })
-    : { records: distributor === 'aws-bedrock' ? parseBedrockLifecycleHtml(html) : parseVertexModelVersionsHtml(html) }
+    : { records: distributor === 'aws-bedrock' ? parseBedrockLifecycleHtml(html) : parseVertexModelVersionsMarkdown(html) }
   if (distributor === 'aws-bedrock') {
     const cards = await loadBedrockCards(config, options)
     parsed = { ...mergeBedrockSources(parsed.records, cards.records), skipped: cards.skipped }

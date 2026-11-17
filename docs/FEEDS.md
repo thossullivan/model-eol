@@ -23,7 +23,9 @@ Distributor dates are added to the publisher feeds as `distributions` entries:
   individual [model cards](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
   for newer ones. A card's "EOL no sooner than" date becomes a tentative date,
   and an exact Model EOL date stays exact.
-- **Vertex AI**: the [model versions page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions).
+- **Vertex AI**: the [model versions page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions),
+  read from its Markdown copy (`model-versions.md.txt`). The feed cites the page
+  itself.
 - **Azure AI Foundry**: the [model retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule),
   matched to the OpenAI, Anthropic, Mistral, and Cohere feeds.
 

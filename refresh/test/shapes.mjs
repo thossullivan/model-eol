@@ -207,7 +207,7 @@ const fixtureFiles = {
   'mistral-deprecations.html': htmlTable(['Model', 'Version', 'API', 'Deprecation', 'Alternative']),
   'cohere-deprecations.html': `<h3>2026-09-01</h3>${htmlTable(cohereHeaders)}<h3>2026-10-01</h3>${htmlTable(cohereHeaders)}`,
   'bedrock-lifecycle.html': htmlTable(['Model ID', 'Legacy date', 'EOL date']),
-  'vertex-model-versions.html': htmlTable(['Model ID', 'Release date', 'Retirement date']),
+  'vertex-model-versions.md': '## Models\n\n| Model ID | Release date | Retirement date |\n|---|---|---|\n| `gemini-a` | a | b |\n',
   'azure-model-retirement-schedule.html': htmlTable(['Model', 'Version', 'Retirement date']),
 }
 const writeFixtures = (overrides = {}) => {
@@ -265,7 +265,7 @@ test('a new column makes --check exit 3 with a diff naming the source and both s
 test('failing sources make --check exit 1 and every failing source is named', () => {
   writeFixtures({
     'mistral-deprecations.html': '<p>No tables here.</p>',
-    'vertex-model-versions.html': null,
+    'vertex-model-versions.md': null,
     'google-deprecations.md': '## Models\n{% table %}\n  * Model\n',
     'cohere-deprecations.html': htmlTable([...cohereHeaders, 'Notice Date']),
   })

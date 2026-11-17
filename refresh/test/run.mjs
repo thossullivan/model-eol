@@ -2816,7 +2816,7 @@ for (const page of ['deprecations', 'models']) {
   assert(deadlines.includes(SOURCE_FETCH_DEADLINE_MS) && reason.includes(`exceeded the ${SOURCE_FETCH_DEADLINE_MS} ms deadline`), `a stalled ${page} request fails at the source fetch deadline`)
 }
 const vertexRequests = []
-await loadDistributorSource('vertex-ai', { fetchImpl: async (url, options) => { vertexRequests.push(options); return new Response(vertexHtml) }, notice: () => {} })
+await loadDistributorSource('vertex-ai', { fetchImpl: async (url, options) => { vertexRequests.push(options); return new Response(fs.readFileSync(path.join(fixtures, 'vertex-model-versions.md'), 'utf8')) }, notice: () => {} })
 assert(vertexRequests.length === 1 && vertexRequests[0].redirect === 'follow', 'uncredentialed distributor pages still follow redirects')
 let redirectReason = ''
 try {
