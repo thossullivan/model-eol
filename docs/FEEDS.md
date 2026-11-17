@@ -67,9 +67,12 @@ Both workflows sign in to Azure with OpenID Connect (`azure/login`, pinned to
 the v3.1.0 commit, using the `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
 `AZURE_SUBSCRIPTION_ID` secrets) and pass a management token for the Azure
 models API only to the distributor refresh. The job signs out of Azure and
-deletes `~/.azure` right after the last distributor refresh. The federated
-credential trusts only `main`. A manual run on another branch skips the login
-and the models API with a notice and still checks the pages.
+deletes `~/.azure` right after the last distributor refresh. On `main` both
+jobs run in the `model-apis` GitHub environment, which only `main` may use, and
+the federated credential trusts only that environment, so no other workflow on
+`main` can obtain the Azure token. A manual run on another branch runs outside
+the environment, skips the login and the models API with a notice, and still
+checks the pages.
 
 The models APIs (Azure's and Anthropic's) only cross-check the pages and never
 change feed data, so the two workflows treat a broken cross-check differently:

@@ -350,6 +350,7 @@ for (const name of ['source-check.yml', 'feed-refresh.yml']) {
     const workflow = workflowFile(name)
     strictAssert.ok(/^ {4}permissions:\n(?: {6}\S.*\n)*? {6}id-token: write\n/m.test(workflow), 'OIDC token permission on the job')
     strictAssert.equal(workflow.match(/id-token: write/g)?.length, 1, 'no workflow-level OIDC token permission')
+    strictAssert.ok(workflow.includes("    environment: ${{ github.ref == 'refs/heads/main' && 'model-apis' || '' }}\n"), 'the job runs in the model-apis environment on main only')
     const login = workflow.match(/ {6}- name: Sign in to Azure for the models API\n((?: {8}.*\n)+)/)?.[1] ?? ''
     for (const line of ["id: azure-login", "if: github.ref == 'refs/heads/main'", 'continue-on-error: true', 'uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0', 'client-id: ${{ secrets.AZURE_CLIENT_ID }}', 'tenant-id: ${{ secrets.AZURE_TENANT_ID }}', 'subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}']) {
       strictAssert.ok(login.includes(`        ${line}\n`), line)

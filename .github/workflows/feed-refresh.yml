@@ -30,6 +30,7 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'model-apis' || '' }}
     permissions:
       contents: write
       id-token: write
