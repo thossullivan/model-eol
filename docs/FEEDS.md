@@ -60,7 +60,8 @@ with the committed ones.
 Monday refresh. It runs the same two `--check` commands as the weekly refresh
 and then `node refresh/shapes.mjs --check`. A check that fails is retried
 once after a minute, and the second result counts. It writes nothing to the
-repository, and a cancelled run reports nothing.
+repository. A check that runs too long fails and is reported like any other
+failure, and a cancelled run reports nothing.
 
 - **A check can't read a source:** the run fails and opens or updates the
   "Source check failed" issue. The next run in which every check reads every

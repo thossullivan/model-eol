@@ -91,6 +91,8 @@ test('custom elements whose names start with table or a cell tag are not read as
   const custom = '<table><thead><tr><th>Model</th><th-sort>ignored</th-sort></tr></thead><tr-group></tr-group><tr><td>m</td></tr></table>'
   strictAssert.deepEqual(htmlTableShapes(custom), ['model [1 cols]'])
   strictAssert.throws(() => htmlTableShapes('<table-wrapper><table><tr><th>Open</th></tr></table-wrapper>'), /unbalanced <table> tag/)
+  strictAssert.deepEqual(htmlTableShapes('<table><thead><tr><th>Model</th><th-sort>x</th-sort><th>Date</th></tr></thead><tr><td>m</td><td>d</td></tr></table>'), ['model | date [2 cols]'])
+  strictAssert.deepEqual(htmlTableShapes('<table><tr><th>A</th><th>B</th></tr><tr-group><td>1</td></tr-group><tr><td>x</td><td>y</td></tr></table>'), ['a | b [2 cols]'])
 })
 
 test('Markdoc header rows are read with emphasis, links, and escapes removed, and model and agent tables stay distinct', () => {
@@ -224,7 +226,7 @@ test('the daily source-check workflow runs both refresh checks and the structure
   strictAssert.ok(!/git (push|commit)|gh pr /.test(workflow) && workflow.includes('persist-credentials: false'), 'writes nothing to the repository')
   strictAssert.ok(workflow.includes('check_once_more provider node refresh/refresh.mjs --check\n') && workflow.includes('check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check\n'), 'both refresh checks')
   strictAssert.ok(workflow.match(/sleep 60/g)?.length === 2 && workflow.match(/node refresh\/shapes\.mjs --check > shapes-diff\.md 2> shapes-err\.txt/g)?.length === 2, 'an unhealthy check is retried once')
-  strictAssert.ok(/^    timeout-minutes: 30$/m.test(workflow) && !workflow.includes('always()') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 2, 'a cancelled run reports nothing')
+  strictAssert.ok(/^    timeout-minutes: 60$/m.test(workflow) && /^        timeout-minutes: 40$/m.test(workflow) && /^        timeout-minutes: 10$/m.test(workflow) && !workflow.includes('always()') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 2, 'a cancelled run reports nothing')
   strictAssert.ok(workflow.includes("case \"$1\" in 0|3) echo ok ;;") && workflow.includes("s/(HTTP [0-9]{3}).*/\\1/"), 'failure state ignores healthy exit-code flips and HTTP response bodies')
   strictAssert.ok(workflow.includes('if [ "${REFRESH_HEALTHY:-}" != true ]; then') && workflow.includes('the weekly feed refresh is not affected'), 'a structure-check-only failure does not claim the weekly refresh will fail')
   strictAssert.ok(workflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && workflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]'), 'refresh exit 0 and 3 are healthy')
