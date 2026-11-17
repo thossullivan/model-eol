@@ -67,7 +67,7 @@ import {
   stripComments,
 } from '../providers.mjs'
 import { compareFeeds, renderSemanticDiff } from '../diff.mjs'
-import { SOURCE_FETCH_DEADLINE_MS, fetchBoundedBody } from '../fetch.mjs'
+import { SOURCE_FETCH_DEADLINE_MS, credentialHeaderNames, fetchBoundedBody } from '../fetch.mjs'
 import { parseRefreshArgs, sourceFailureError, usage, validateGeneratedFeeds } from '../refresh.mjs'
 import { validateFeed } from '../../lib/validate-feed.mjs'
 import { lifecycleFor } from '../../lib/feeds.mjs'
@@ -1231,6 +1231,20 @@ for (const [name, markdown, pattern] of [
   ['a lifecycle pipe table', `| Model ID | Legacy date | EOL date |\n| --- | --- | --- |\n| amazon.table-v1:0 | March 1, 2026 | September 1, 2026 |\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /line \d+: lifecycle table where labelled lists are expected/],
   ['a raw HTML table', `<table><tr><th>Model ID</th></tr></table>\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /raw HTML table/],
   ['a misaligned pipe table', `| Region | Note |\n| --- | --- |\n| us-east-1 |\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /line \d+: table row has 1 cells; the header has 2/],
+  ['an EOL date with no sooner than', bedrockEntry(bedrockFields('amazon.floor-v1:0', 'March 1, 2026', 'No sooner than January 8, 2027')), /amazon\.floor-v1:0 has an unrecognised EOL date: No sooner than January 8, 2027/],
+  ['an EOL date with or later', bedrockEntry(bedrockFields('amazon.later-v1:0', 'March 1, 2026', 'January 8, 2027 or later')), /amazon\.later-v1:0 has an unrecognised EOL date: January 8, 2027 or later/],
+  ['a tentative EOL date', bedrockEntry(bedrockFields('amazon.tentative-v1:0', 'March 1, 2026', 'January 8, 2027 (tentative)')), /unrecognised EOL date: January 8, 2027 \(tentative\)/],
+  ['an EOL value with two dates', bedrockEntry(bedrockFields('amazon.two-dates-v1:0', 'March 1, 2026', 'March 8, 2027 (us-gov-west-1); January 8, 2027 elsewhere')), /unrecognised EOL date: March 8, 2027 \(us-gov-west-1\); January 8, 2027 elsewhere/],
+  ['a struck-through EOL date', bedrockEntry(bedrockFields('amazon.struck-v1:0', 'March 1, 2026', '~~January 8, 2027~~ March 8, 2027')), /unrecognised EOL date: January 8, 2027 March 8, 2027/],
+  ['a Legacy date with a qualifier', bedrockEntry(bedrockFields('amazon.legacy-floor-v1:0', 'No earlier than March 1, 2026')), /unrecognised legacy date: No earlier than March 1, 2026/],
+  ['an extended access date with a qualifier', bedrockEntry(bedrockFields('amazon.extended-floor-v1:0', 'March 1, 2026', 'September 1, 2026', 'June 1, 2026 or later')), /unrecognised public extended access date: June 1, 2026 or later/],
+  ['a labelled sub-bullet one level deeper', bedrockEntry(bedrockFields('amazon.deeper-v1:0')).replace('  - **Regions:** us-east-1\n', '').replace(/(\*\*Public extended access start date:\*\* .*\n)/, '$1    - **Regions:** us-gov-west-1\n'), /labelled item at a different list depth in the Example entry: - \*\*Regions:\*\* us-gov-west-1/],
+  ['a labelled sub-bullet at the content column of a deeper list', bedrockEntry(bedrockFields('amazon.deep-start-v1:0')).replace('  - **Model name:**', '        - **Model name:**'), /labelled item at a different list depth/],
+  ['an HTML bold label outside an entry', `${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}\n<b>EOL date:</b> June 1, 2026 for amazon.listed-v1:0 in all Regions\n`, /line \d+: the label EOL date outside a model entry/],
+  ['an underscore bold label outside an entry', `${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}\n__EOL date:__ June 1, 2026\n`, /the label EOL date outside a model entry/],
+  ['a strong label outside an entry', `<strong>Model ID:</strong> amazon.prose-v1:0\n\n${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}`, /the label Model ID outside a model entry/],
+  ['a plain label outside an entry', `${bedrockEntry(bedrockFields('amazon.listed-v1:0'))}\nPublic extended access start date: June 1, 2026\n`, /the label Public extended access start date outside a model entry/],
+  ['a second label inside a value', bedrockEntry(bedrockFields('amazon.listed-v1:0')).replace('**Regions:** us-east-1', '**Regions:** us-east-1 <b>EOL date:</b> June 1, 2026'), /the Regions value holds another label: EOL date/],
   ['a display name as Model ID', bedrockEntry(bedrockFields('DeepSeek V3')), /invalid model id: DeepSeek V3/],
   ['an empty Model ID', bedrockEntry(bedrockFields('')), /invalid model id: \(empty\)/],
 ]) {
@@ -1244,6 +1258,13 @@ reviewTest('Markdown lifecycle: Bedrock ignores unrelated lists and tables', () 
   const extras = '+ Create a new custom model deployment for on-demand inference.\n+ Continue using any existing on-demand deployments.\n  - nested detail\n\n| Region | Note |\n| --- | --- |\n| us-east-1 | ok |\n'
   strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(live, extras)), expected)
   strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(live, '**Regions** column notes and **EOL** prose do not count as labels.\n')), expected)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage('**For models with EOL dates after February 1, 2026: ** After a minimum of 3 months in the Legacy state, a model enters public extended access.\n\n', live)), expected)
+})
+reviewTest('Markdown lifecycle: Bedrock reads entry fields at any one consistent list depth', () => {
+  const expected = parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry(bedrockFields('amazon.live-v1:0'))))
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry(bedrockFields('amazon.live-v1:0')).replace(/^ {2}-/gm, '    -'))), expected)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry(bedrockFields('amazon.live-v1:0')).replace(/^ {2}-/gm, '\t-'))), expected)
+  strictAssert.deepEqual(parseBedrockLifecycleMarkdown(bedrockPage(bedrockEntry(bedrockFields('amazon.live-v1:0', 'March 1, 2026 ', 'Sept 1, 2026')))), expected)
 })
 
 const cardIndexMarkdown = fs.readFileSync(path.join(fixtures, 'bedrock-model-cards.md'), 'utf8')
@@ -2556,8 +2577,8 @@ const footnotedError = (html, now = footnoteNow) => {
 }
 const footnotedRecord = parseFootnoted(footnotedTable([footnotedRow(), azureRow('plain-row')]) + offerFootnote(3) + '<p>Provisioned deployments are not upgraded automatically; move your traffic before retirement.</p>').records[0]
 assert(footnotedRecord.azureId === 'footnoted-2025-04-14' && footnotedRecord.shutdown === '2027-04-14' && !Object.hasOwn(footnotedRecord, 'date_precision'), 'Azure parses a retirement date carrying an offer-scoping footnote marker')
-assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Cohere', [azureRow('other-section')]) + offerFootnote(3, 'No earlier than 2027-04-14.')).records[0].shutdown === '2027-04-14', 'Azure reads a retirement footnote only from its own table')
-assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Azure OpenAI', [azureRow('second-table')]) + '<p>Dates are subject to change.</p>').records[0].shutdown === '2027-04-14', 'Azure ends a footnote region at the next table in the same section')
+assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Cohere', [azureRow('other-section')]) + offerFootnote(3, 'April 1, 2027 applies to other offers.')).records[0].shutdown === '2027-04-14', 'Azure reads a retirement footnote only from its own table')
+assert(parseFootnoted(footnotedTable() + offerFootnote(3) + azureTable('Azure OpenAI', [azureRow('second-table', '1', 'GA', '-')]) + '<p>Dates are subject to change.</p>').records[0].shutdown === '2027-04-14', 'Azure ends a footnote region at the next table in the same section')
 assert(footnotedError(footnotedTable() + azureTable('Azure OpenAI', [azureRow('second-table')]) + offerFootnote(3)).includes('footnote 3, which the table does not define'), 'Azure does not read a footnote placed after a second table in the same section')
 for (const phrase of [
   'No earlier than April 14, 2027', 'Retires at the earliest on April 14, 2027', 'April 14, 2027 or later', 'Not before April 14, 2027',
@@ -3184,6 +3205,28 @@ try {
   }, { headers: { authorization: 'Bearer sk-test-secret-value\nabc' } })
 } catch (error) { rejectedHeaderReason = error.message }
 assert(rejectedHeaderReason.includes('[redacted]') && !rejectedHeaderReason.includes('sk-test-secret-value') && !/[\r\n]/.test(rejectedHeaderReason), 'a rejected credential header is redacted and the error stays on one line')
+const redirectModes = []
+for (const headers of [{}, { Accept: 'text/markdown' }, { 'anthropic-version': '2023-06-01', accept: 'application/json' }, { Authorization: 'Bearer x' }, { 'x-api-key': 'k' }, { 'X-Goog-Api-Key': 'k' }, { 'X-Custom-Token': 't' }, { Cookie: 'c' }]) {
+  await fetchBoundedBody('https://docs.example.test/page.md', 'example', async (url, options) => { redirectModes.push(options.redirect); return new Response('body') }, { headers })
+}
+await fetchBoundedBody('https://docs.example.test/page.md', 'example', async (url, options) => { redirectModes.push(options.redirect); return new Response('body') }, { headers: { 'X-Tenant': 'acme' }, secretHeaders: ['x-tenant'] })
+assert(JSON.stringify(redirectModes) === JSON.stringify(['follow', 'follow', 'follow', 'error', 'error', 'error', 'error', 'error', 'error']), 'only credential headers, including ones the caller marks secret, make a fetch refuse redirects')
+assert(JSON.stringify(credentialHeaderNames({ Accept: 'text/markdown', 'anthropic-version': '2023-06-01', 'x-api-key': 'k', Authorization: 'a', 'X-Tenant': 't' }, ['X-TENANT'])) === JSON.stringify(['x-api-key', 'Authorization', 'X-Tenant']), 'credentialHeaderNames separates credential headers from ordinary ones')
+let ordinaryHeaderReason = ''
+try {
+  await fetchBoundedBody('https://api.example.test/v1/models', 'anthropic', async () => {
+    throw new TypeError('request with accept text/markdown and anthropic-version 2023-06-01 failed for key sk-ant-test-secret and token tok-secret-value')
+  }, { headers: { accept: 'text/markdown', 'anthropic-version': '2023-06-01', 'x-api-key': 'sk-ant-test-secret', Authorization: 'Bearer tok-secret-value' } })
+} catch (error) { ordinaryHeaderReason = error.message }
+assert(ordinaryHeaderReason.includes('accept text/markdown and anthropic-version 2023-06-01') && !ordinaryHeaderReason.includes('sk-ant-test-secret') && !ordinaryHeaderReason.includes('tok-secret-value') && ordinaryHeaderReason.split('[redacted]').length === 3, 'only credential header values are redacted, including a bearer token echoed without its scheme')
+let downgradeReason = ''
+try {
+  await fetchBoundedBody('https://docs.example.test/page.md', 'example', async () => Object.defineProperty(new Response('body'), 'url', { value: 'http://docs.example.test/page.md' }), { headers: { Accept: 'text/markdown' } })
+} catch (error) { downgradeReason = error.message }
+assert(downgradeReason === 'example fetch failed for https://docs.example.test/page.md: redirected to a http: URL', 'a followed redirect from https to http is refused')
+const httpsLanding = await fetchBoundedBody('https://docs.example.test/page.md', 'example', async () => Object.defineProperty(new Response('moved body'), 'url', { value: 'https://docs.example.test/moved.md' }), { headers: { Accept: 'text/markdown' } })
+const plainHttp = await fetchBoundedBody('http://127.0.0.1:1/feed.json', '--feeds-url', async () => Object.defineProperty(new Response('local body'), 'url', { value: 'http://127.0.0.1:1/feed.json' }))
+assert(httpsLanding === 'moved body' && plainHttp === 'local body', 'an https redirect target and a caller-chosen http URL still load')
 let bomModels = null
 try {
   bomModels = await loadBounded('openai', async url => isModelsUrl('openai', url)

@@ -7,7 +7,8 @@
 # the models endpoints so current-model entries (and policy-floor horizons)
 # populate. AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID sign in to
 # Azure through OIDC on main for the Azure models API cross-check; a failed
-# login fails the run, and other refs skip the cross-check with a notice.
+# login or a failed cross-check is a warning, because the cross-check never
+# changes feed data, and other refs skip the cross-check with a notice.
 # Note: PRs opened with GITHUB_TOKEN do not trigger this repo's CI - add a
 # fine-grained PAT as MODEL_EOL_BOT_TOKEN if feed PRs should run checks.
 # Failures open or update one durable issue; the next successful check closes it.
@@ -23,13 +24,17 @@ concurrency: feed-refresh
 
 permissions:
   contents: write
-  id-token: write
   issues: write
   pull-requests: write
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      issues: write
+      pull-requests: write
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -43,7 +48,7 @@ jobs:
         id: azure-login
         if: github.ref == 'refs/heads/main'
         continue-on-error: true
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -60,7 +65,7 @@ jobs:
           AZURE_LOGIN: ${{ steps.azure-login.outcome }}
           AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
-          # Exports the models API credentials; without a token the subscription alone makes the Azure source fail, never skip.
+          # Exports the models API credentials; without a token it exports nothing, so the refresh skips the cross-check after a warning.
           azure_api_env() {
             if [ "$AZURE_LOGIN" = skipped ]; then
               echo "::notice::Azure login runs only on main; the distributor check skips the Azure models API on $GITHUB_REF."
@@ -70,13 +75,13 @@ jobs:
             if [ "$AZURE_LOGIN" = success ]; then
               token=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv) || token=''
             fi
-            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
-            if [ -n "$token" ]; then
-              echo "::add-mask::$token"
-              export AZURE_MANAGEMENT_TOKEN="$token"
-            else
-              echo "::error::No Azure management token (azure/login outcome: $AZURE_LOGIN); the Azure models API check fails."
+            if [ -z "$token" ]; then
+              echo "::warning::No Azure management token (azure/login outcome: $AZURE_LOGIN); the distributor check runs without the Azure models API cross-check."
+              return 0
             fi
+            echo "::add-mask::$token"
+            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
+            export AZURE_MANAGEMENT_TOKEN="$token"
           }
           set +e
           node refresh/refresh.mjs --check > provider-diff.md 2> provider-err.txt
@@ -116,7 +121,7 @@ jobs:
           AZURE_LOGIN: ${{ steps.azure-login.outcome }}
           AZURE_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
-          # Exports the models API credentials; without a token the subscription alone makes the Azure source fail, never skip.
+          # Exports the models API credentials; without a token it exports nothing, so the refresh skips the cross-check after a warning.
           azure_api_env() {
             if [ "$AZURE_LOGIN" = skipped ]; then
               echo "::notice::Azure login runs only on main; the distributor refresh skips the Azure models API on $GITHUB_REF."
@@ -126,21 +131,31 @@ jobs:
             if [ "$AZURE_LOGIN" = success ]; then
               token=$(az account get-access-token --resource https://management.azure.com --query accessToken -o tsv) || token=''
             fi
-            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
-            if [ -n "$token" ]; then
-              echo "::add-mask::$token"
-              export AZURE_MANAGEMENT_TOKEN="$token"
-            else
-              echo "::error::No Azure management token (azure/login outcome: $AZURE_LOGIN); the Azure models API check fails."
+            if [ -z "$token" ]; then
+              echo "::warning::No Azure management token (azure/login outcome: $AZURE_LOGIN); the distributor refresh runs without the Azure models API cross-check."
+              return 0
             fi
+            echo "::add-mask::$token"
+            export AZURE_SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION:-secret-AZURE_SUBSCRIPTION_ID-is-empty}"
+            export AZURE_MANAGEMENT_TOKEN="$token"
           }
           node refresh/refresh.mjs
           (
             azure_api_env
             node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry
           )
+          az logout > /dev/null 2>&1 || true
           node scripts/update-readme-freshness.mjs
           npm test
+
+      # The az session in ~/.azure outlives its step, and nothing after the last distributor refresh needs it.
+      - name: Sign out of Azure
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          az logout > /dev/null 2>&1 || true
+          rm -rf "${AZURE_CONFIG_DIR:-$HOME/.azure}" || true
 
       - name: Open feed refresh PR
         if: steps.check.outputs.changed == 'true'

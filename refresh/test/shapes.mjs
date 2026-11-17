@@ -326,7 +326,7 @@ test('the daily source-check workflow runs both refresh checks and the structure
   strictAssert.ok(!/git (push|commit)|gh pr /.test(workflow) && workflow.includes('persist-credentials: false'), 'writes nothing to the repository')
   strictAssert.ok(workflow.includes('check_once_more provider node refresh/refresh.mjs --check\n') && workflow.includes('check_once_more distributor node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry --check\n'), 'both refresh checks')
   strictAssert.ok(workflow.match(/sleep 60/g)?.length === 2 && workflow.match(/node refresh\/shapes\.mjs --check > shapes-diff\.md 2> shapes-err\.txt/g)?.length === 2, 'an unhealthy check is retried once')
-  strictAssert.ok(/^    timeout-minutes: 60$/m.test(workflow) && /^        timeout-minutes: 40$/m.test(workflow) && /^        timeout-minutes: 10$/m.test(workflow) && !workflow.includes('always()') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 2, 'a cancelled run reports nothing')
+  strictAssert.ok(/^    timeout-minutes: 60$/m.test(workflow) && /^        timeout-minutes: 40$/m.test(workflow) && /^        timeout-minutes: 10$/m.test(workflow) && workflow.match(/always\(\)/g)?.length === 1 && workflow.includes('      - name: Sign out of Azure\n        if: always()\n') && workflow.match(/if: success\(\) \|\| failure\(\)/g)?.length === 2, 'a cancelled run reports nothing; only the Azure sign-out always runs')
   strictAssert.ok(workflow.includes("case \"$1\" in 0|3) echo ok ;;") && workflow.includes("s/(HTTP [0-9]{3}).*/\\1/"), 'failure state ignores healthy exit-code flips and HTTP response bodies')
   strictAssert.ok(workflow.includes('if [ "${REFRESH_HEALTHY:-}" != true ]; then') && workflow.includes('the weekly feed refresh is not affected'), 'a structure-check-only failure does not claim the weekly refresh will fail')
   strictAssert.ok(workflow.includes('[ "$providers" -ne 0 ] && [ "$providers" -ne 3 ]') && workflow.includes('[ "$distributors" -ne 0 ] && [ "$distributors" -ne 3 ]'), 'refresh exit 0 and 3 are healthy')
@@ -348,9 +348,10 @@ const azureHelper = workflow => {
 for (const name of ['source-check.yml', 'feed-refresh.yml']) {
   test(`${name} signs in to Azure on main only and gives the models API token only to the distributor refresh`, () => {
     const workflow = workflowFile(name)
-    strictAssert.ok(/^permissions:\n(?: {2}\S.*\n)*? {2}id-token: write\n/m.test(workflow), 'OIDC token permission')
+    strictAssert.ok(/^ {4}permissions:\n(?: {6}\S.*\n)*? {6}id-token: write\n/m.test(workflow), 'OIDC token permission on the job')
+    strictAssert.equal(workflow.match(/id-token: write/g)?.length, 1, 'no workflow-level OIDC token permission')
     const login = workflow.match(/ {6}- name: Sign in to Azure for the models API\n((?: {8}.*\n)+)/)?.[1] ?? ''
-    for (const line of ["id: azure-login", "if: github.ref == 'refs/heads/main'", 'continue-on-error: true', 'uses: azure/login@v3', 'client-id: ${{ secrets.AZURE_CLIENT_ID }}', 'tenant-id: ${{ secrets.AZURE_TENANT_ID }}', 'subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}']) {
+    for (const line of ["id: azure-login", "if: github.ref == 'refs/heads/main'", 'continue-on-error: true', 'uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0', 'client-id: ${{ secrets.AZURE_CLIENT_ID }}', 'tenant-id: ${{ secrets.AZURE_TENANT_ID }}', 'subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}']) {
       strictAssert.ok(login.includes(`        ${line}\n`), line)
     }
     strictAssert.equal(workflow.match(/uses: azure\/login@/g)?.length, 1)
@@ -362,9 +363,17 @@ for (const name of ['source-check.yml', 'feed-refresh.yml']) {
     const helper = azureHelper(workflow)
     strictAssert.ok(helper.indexOf('echo "::add-mask::$token"') < helper.indexOf('export AZURE_MANAGEMENT_TOKEN="$token"'), 'the token is masked before it is exported')
     strictAssert.ok(helper.includes('az account get-access-token --resource https://management.azure.com --query accessToken -o tsv'))
+    strictAssert.ok(!/uses: [^\n@]+@(?![0-9a-f]{40}\b)/.test(workflow.match(/uses: azure\/login@[^\n]*/)[0]), 'azure/login is pinned to a commit')
+    const signOut = workflow.match(/ {6}- name: Sign out of Azure\n((?: {8}.*\n)+)/)?.[1] ?? ''
+    for (const line of ['if: always()', 'continue-on-error: true', 'az logout > /dev/null 2>&1 || true', 'rm -rf "${AZURE_CONFIG_DIR:-$HOME/.azure}" || true']) strictAssert.ok(signOut.includes(line), line)
+    const lastDistributor = workflow.lastIndexOf('node refresh/refresh.mjs --distributor aws-bedrock,vertex-ai,azure-ai-foundry')
+    const signOutAt = workflow.indexOf('      - name: Sign out of Azure\n')
+    strictAssert.ok(lastDistributor < signOutAt && workflow.indexOf('      - name:', lastDistributor) === signOutAt, 'the sign-out is the step right after the last distributor refresh')
+    strictAssert.equal(workflow.includes('MODEL_EOL_CROSS_CHECKS: strict'), name === 'source-check.yml', 'only the daily check makes a broken cross-check fail the run')
+    if (name === 'source-check.yml') strictAssert.equal(workflow.match(/^ {10}MODEL_EOL_CROSS_CHECKS: strict\n/gm)?.length, 1, 'the strict policy is set on the step that runs both refresh checks')
   })
 
-  test(`${name} fails the Azure source after a failed login and skips it with a notice off main`, () => {
+  test(`${name} ${name === 'source-check.yml' ? 'fails' : 'warns about'} the Azure source after a failed login and skips it with a notice off main`, () => {
     const helper = azureHelper(workflowFile(name))
     const bin = fs.mkdtempSync(path.join(tempRoot, 'az-'))
     const az = path.join(bin, 'az')
@@ -381,8 +390,13 @@ for (const name of ['source-check.yml', 'feed-refresh.yml']) {
     strictAssert.match(ok, /subscription=sub-from-secret token=fake-token\n$/)
     for (const [login, azBody, subscription] of [['failure', 'exit 1'], ['success', 'exit 1'], ['success', 'echo ""'], ['failure', 'exit 1', '']]) {
       const out = runHelper(login, azBody, subscription)
-      strictAssert.match(out, /::error::No Azure management token/, `${login} ${azBody}`)
-      strictAssert.match(out, /subscription=\S+ token=unset\n$/, 'the subscription alone makes the refresh fail as half-configured')
+      if (name === 'source-check.yml') {
+        strictAssert.match(out, /::error::No Azure management token/, `${login} ${azBody}`)
+        strictAssert.match(out, /subscription=\S+ token=unset\n$/, 'the subscription alone makes the strict check fail as half-configured')
+      } else {
+        strictAssert.match(out, /::warning::No Azure management token .* runs without the Azure models API cross-check\.\n/, `${login} ${azBody}`)
+        strictAssert.match(out, /subscription=unset token=unset\n$/, 'the feed refresh exports nothing and skips the cross-check')
+      }
     }
     const skipped = runHelper('skipped', 'echo should-not-run')
     strictAssert.match(skipped, /::notice::Azure login runs only on main; .* on refs\/heads\/topic\.\nsubscription=unset token=unset\n$/)

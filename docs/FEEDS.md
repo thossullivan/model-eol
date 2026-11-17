@@ -33,7 +33,8 @@ Distributor dates are added to the publisher feeds as `distributions` entries:
   Cohere feeds. The feed cites the page itself. When `AZURE_MANAGEMENT_TOKEN`
   and `AZURE_SUBSCRIPTION_ID` are set, the refresh also reads the Azure models
   API and lists every date on which it disagrees with the page under "Source
-  conflicts". The page stays the source of every Azure date.
+  conflicts", with the differences of exactly one day grouped under one line.
+  The page stays the source of every Azure date.
 
 API keys are optional. Without them the refresh still reads every page and keeps
 the current models already in the feeds, but it can't add new ones from the
@@ -62,13 +63,29 @@ with the committed ones.
   writes a partial or guessed feed, and its error names every source that
   failed, not only the first. The next successful run closes the issue.
 
-Both workflows sign in to Azure with OpenID Connect (`azure/login`, using the
-`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` secrets) and
-pass a management token for the Azure models API only to the distributor
-refresh. The federated credential trusts only `main`. On `main` a failed login
-fails the Azure source, so the weekly refresh fails and the daily check reports
-it like any unreadable source. A manual run on another branch skips the login
+Both workflows sign in to Azure with OpenID Connect (`azure/login`, pinned to
+the v3.1.0 commit, using the `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
+`AZURE_SUBSCRIPTION_ID` secrets) and pass a management token for the Azure
+models API only to the distributor refresh. The job signs out of Azure and
+deletes `~/.azure` right after the last distributor refresh. The federated
+credential trusts only `main`. A manual run on another branch skips the login
 and the models API with a notice and still checks the pages.
+
+The models APIs (Azure's and Anthropic's) only cross-check the pages and never
+change feed data, so the two workflows treat a broken cross-check differently:
+
+- The weekly refresh leaves `MODEL_EOL_CROSS_CHECKS` unset. A failed Azure
+  login on `main` prints a warning and the refresh runs without the Azure
+  cross-check. A cross-check that fails (an HTTP error, a response it can't
+  read, or half-configured credentials) prints
+  `warning: ... cross-check failed: ...`, adds a line under "Source conflicts"
+  in the refresh PR, and the feeds are still regenerated from the pages.
+- The daily source check sets `MODEL_EOL_CROSS_CHECKS=strict` for both refresh
+  checks. A failed login on `main` or a failed cross-check fails the check, and
+  it is reported through the "Source check failed" issue like any unreadable
+  source.
+
+A page that can't be read fails both workflows, whatever the setting.
 
 ## The daily source check
 

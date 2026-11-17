@@ -49,11 +49,17 @@ Bedrock legacy page has no tables in its Markdown copy; each model is a labelled
 list, and an unknown label stops the run.
 
 Every fetch has a 30-second deadline over the request and body, and an 8 MiB
-body limit (`fetch.mjs`). Requests that carry an API key (the models endpoints)
-refuse redirects, so a key never follows a redirect to another origin. So does
-any request with extra headers, such as the Azure page's `Accept:
-text/markdown`; other page fetches follow redirects. Error messages include at most 300 characters of the
-error body on one line, with request header values redacted. Paged models
+body limit (`fetch.mjs`). Requests that carry a credential header refuse
+redirects, so a key never follows a redirect to another origin. Credential
+headers are `Authorization`, `Proxy-Authorization`, `Cookie`, `x-api-key`,
+`api-key`, `x-goog-api-key`, any name containing auth, key, token, secret,
+session, cookie, password, signature, or credential, and any name the caller
+lists in `secretHeaders`. Other headers, such as the Azure page's `Accept:
+text/markdown` or `anthropic-version`, don't stop a fetch from following
+redirects, but a followed redirect from `https` to another scheme stops the
+run. Error messages include at most 300 characters of the error body on one
+line, with credential header values (and each word of them, such as a bearer
+token without its scheme) redacted. Paged models
 endpoints stop the run if they still have more pages after 20; Mistral's is
 read in one request.
 
@@ -451,8 +457,11 @@ Legacy page parsing:
   (`Status`, `Model status`, or `Lifecycle status`). Any other label, a label
   given twice, an entry without a Model ID, Legacy date, EOL date, or Public
   extended access start date, an unlabelled line inside an entry, a labelled
-  item outside an entry, or one of these labels anywhere else on the page stops
-  the run. So does a pipe table whose header mentions a model ID, legacy, or
+  item outside an entry, a labelled item at a different list depth from the
+  entry's first one (a deeper sub-bullet is a note on the item above it, not an
+  entry field), or one of these labels followed by a colon anywhere else on the
+  page or inside another label's value stops the run. Bold, underscore,
+  `<b>`, and `<strong>` emphasis, or none, all count as the same label. So does a pipe table whose header mentions a model ID, legacy, or
   EOL, a raw HTML table, or a page with no entries.
 - A model whose dates differ by Region has one regional line per Region group:
   `**Regions:** ... / **Legacy date:** ... / **EOL date:** ... / **Public
@@ -462,8 +471,11 @@ Legacy page parsing:
 - A Model ID is one Bedrock ID, or a list of IDs each qualified by its endpoint
   (`deepseek.v3-v1:0 (bedrock-runtime), deepseek.v3.1 (bedrock-mantle)`), which
   gives one record per ID. Anything else stops the run.
-- Empty, dash, and `N/A` dates give no date; "To be announced" is accepted only
-  for the extended access start. EOL before Legacy, or an extended access start
+- Each date value must be exactly one day-precision date (`January 8, 2027`).
+  A qualifier ("No sooner than", "or later", "(tentative)"), a second date, or
+  a struck-through date stops the run; the live page uses none of them, so
+  there is no precision rule for them yet. Empty, dash, and `N/A` dates give
+  no date; "To be announced" is accepted only for the extended access start. EOL before Legacy, or an extended access start
   outside the Legacy period, stops the run.
 - Status is `extended-access` when an extended access start date is given and
   `legacy` otherwise, unless a status label says otherwise. An extended access
@@ -545,12 +557,20 @@ paragraphs so the section rules see the same text as on the HTML page.
   `none`, "not available", "not applicable", and "no shutdown (or retirement)
   date announced" cells give no date. Any other
   text must contain a date or the run stops.
-- `date_precision` is `earliest` under the same section-scoped test as the
-  Gemini API, plus "retirement timelines may be extended". The walk up the
-  sections stops at the retired-models archive (an `id` of `retired-models`, or
-  a heading reading "Retired models" or "The following table lists the retired
-  models"), so archive rows keep plain dates. Any other heading mentioning
-  retirement beneath a qualifier stops the run.
+- `date_precision` is `earliest` when the retirement cell has a qualifier
+  phrase (the Gemini API's list plus "retirement timelines may be extended").
+  Otherwise the sections are walked from the table's own heading up, and the
+  first section whose own prose speaks about its dates decides: a qualifier
+  phrase gives `earliest`, and "fixed date" or "fixed retirement dates", not
+  negated in the 40 characters before it, gives an exact date even beneath a
+  qualified parent. "Models available for shorter availability periods" ("we
+  post a fixed date") is exact this way although "Latest available models"
+  above it is qualified. A section stating both stops the run. The page intro
+  before the first heading can only add a qualifier. The walk stops at the
+  retired-models archive (an `id` of `retired-models`, or a heading reading
+  "Retired models" or "The following table lists the retired models"), so
+  archive rows keep plain dates. Any other heading mentioning retirement
+  beneath a qualifier stops the run.
 - A model listed with the same date in an available table and the archive keeps
   the available row's precision. Any other conflict stops the run and names
   both rows.
@@ -573,8 +593,9 @@ The refresh reads the
 [Azure retirement schedule](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule)
 with `Accept: text/markdown` (`sourceHeaders`), which makes Microsoft Learn
 return the page's Markdown source instead of HTML. This content negotiation is
-undocumented. The URL answers without a redirect, which matters because a fetch
-with extra headers refuses redirects. Records and the feed cite the same URL.
+undocumented. `Accept` is not a credential, so the fetch follows a redirect,
+but only to another `https` URL, and the body must still be Markdown. Records
+and the feed cite the same URL.
 It runs only with `--distributor azure-ai-foundry`.
 
 The Markdown is rendered as HTML and read by the HTML page parser, so the
@@ -626,9 +647,15 @@ Page rules:
   UTC date of `MODEL_EOL_GENERATED` when it is set, and of the current time
   otherwise. The run stops on a later date, an earlier date that isn't past
   yet, a year outside a recognised date ("Q3 2027", "05/01/2027"), a missing or
-  repeated footnote, any other text after the cell's date, and wording anywhere
-  in the notes after the table that makes a date approximate ("no earlier
-  than", "or later", "planned", "TBD", "until further notice").
+  repeated footnote, and any other text after the cell's date.
+- Any dated row, with or without a footnote, stops the run when wording that
+  makes a date approximate ("no earlier than", "or later", "planned", "TBD",
+  "until further notice", "tentative") appears in the notes after its table
+  (up to the next heading or table) or in the section prose before it: the
+  table's own section up to the table, and the intro of each enclosing section
+  down from the `##` level. The page intro under the `#` title is not read,
+  because it says the Replacement column is "the target for automatic
+  upgrades". Rows without a date are not affected.
 - Footnote markers in the version and lifecycle columns stop the run, and so do
   model-column markers in publisher sections.
 - Fine-tuning tables and other unrelated tables are skipped. Header drift in a
@@ -647,32 +674,58 @@ entry seen in twelve sampled locations; `eastus` alone missed 37 of them.
 Fixture runs never read the API.
 
 - Neither variable set: the cross-check is skipped with a notice and the run is
-  unchanged. Only one set, a subscription that isn't a GUID, or a token with
-  whitespace stops the Azure source, and so does any HTTP error, including 401
-  and 403. Error messages show the subscription as `{subscriptionId}` and never
-  include the token.
+  unchanged.
+- The cross-check can't change feed data, so its failure is not fatal by
+  default: only one variable set, a subscription that isn't a GUID, a token
+  with whitespace, any HTTP error (including 401 and 403), and any response the
+  rules below reject print `warning: azure models API cross-check failed:
+  <message>`, add a `cross-check-failed` source conflict to "Source conflicts",
+  and the page is used without the cross-check. With
+  `MODEL_EOL_CROSS_CHECKS=strict` the same failures stop the Azure source. Any
+  value other than `strict`, `warn`, or empty stops the run. A failure to read
+  the page always stops the run.
+- An HTTP error reports only `HTTP <status> <error.code>`; the error body,
+  which names the caller's client, object, and tenant IDs, is never printed.
+  Every message from the cross-check shows the subscription as
+  `{subscriptionId}`, any other GUID as `{guid}`, in any letter case, and never
+  includes the token.
 - Requests carry the token and refuse redirects. `nextLink` is followed up to
   20 pages per location; a link that leaves the models endpoint for that
-  location, a repeated link, or a 21st page stops the run.
+  location, carries a username or password, repeats, or asks for a 21st page
+  stops the run.
 - A response without a `value` array, an entry without `model.format`, `name`,
   or `version`, a `lifecycleStatus` other than GenerallyAvailable, Preview,
   Deprecating, Deprecated, or Legacy, or a `deprecation.inference` that isn't a
   date at midnight UTC stops the run. OpenAI, Anthropic, Mistral AI, and Cohere
   entries must also have names and versions that pass the identifier grammar.
+  A `deprecation.inference` in 2099 or later is Azure's placeholder for "no
+  retirement date" and counts as no date.
 - Entries bind by `format` (OpenAI, Anthropic, Mistral AI, Cohere) and name the
   way page rows do: OpenAI dated and four-digit versions use the snapshot ID,
   and every other version and publisher uses the bare name, so hosting versions
   collapse. Names are compared case-sensitively. Other formats are counted but
-  not compared.
+  not compared. An entry is compared with the page row for its own version when
+  the page lists one (the page keeps only the earliest row per model, so
+  `claude-haiku-4-5` version 2 is compared with the version 2 row, not version
+  1), and with the kept record otherwise.
 - The page stays authoritative and the API creates no records. A source
   conflict is listed, with a notice, when an API date differs from the page
-  record's date (including a page record with no date), when the page has a date
-  and the API calls the model GenerallyAvailable or Preview with no date, or
-  when the API lists a Deprecating, Deprecated, or Legacy entry that the page
-  doesn't. Each distinct status and date is one conflict that names its
-  locations. Conflicts never fail the run.
+  row's date (including a page row with no date), when the page has a date and
+  the API calls the model GenerallyAvailable or Preview with no date, or when
+  the API lists an entry the page doesn't and that entry is Deprecating,
+  Deprecated, or Legacy, or has a date. Each distinct page row, status, and
+  date is one conflict that names its API versions and locations. Conflicts
+  never fail the run.
+- A date that differs from the page by exactly one day is still a conflict,
+  but these share one notice (`N entries differ from the retirement page by
+  exactly one day`) and one bullet in "Source conflicts" with a nested list of
+  the entries. In November 2026 six entries (`claude-sonnet-4-5` and five
+  Cohere models) were one day after the page's date, a steady offset that
+  would otherwise sit among the conflicts that need a look.
 - One summary notice follows: `azure models API: N entries in L locations; N
-  deprecating/deprecated/legacy; N conflicts with the retirement page`.
+  deprecating/deprecated/legacy; N conflicts with the retirement page; N
+  entries differ by exactly one day`. The conflict count excludes the one-day
+  differences.
 - The comparison is `reconcileAzureModelsApi` in `azure-models-api.mjs`. It
   returns the page records unchanged, so letting API dates win later is a
   change to that one function.

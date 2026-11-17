@@ -91,6 +91,26 @@ await test('the available-models statement applies to its sections but not to th
   strictAssert.deepEqual(precisions(markdown), { 'gemini-a': 'earliest', 'gemini-b': 'earliest', 'text-embedding-a': 'earliest', 'gemini-old': 'exact', 'gemini-old-floor': 'earliest' })
 })
 
+await test('a section that posts fixed dates is exact beneath the available-models qualifier', () => {
+  const shorter = 'Short-term availability models remain active until a replacement model is\nreleased and a retirement date is announced. When we schedule a model for\nretirement, we post a fixed date in the following table that gives you at least\n45 days to migrate.\n\nThe following table lists models available for shorter terms:\n\n'
+  const page = section => `${qualifier}### Models available for at least 12 months after release\n\n### Gemini models\n\n${table(['gemini-long', 'May 19, 2027 or later'], ['gemini-long-plain', 'May 19, 2027'])}\n### Models available for shorter availability periods\n\n${section}${table(['gemini-short', 'January 28, 2027'], ['gemini-short-floor', 'January 28, 2027 or later'], ['gemini-short-open', 'No retirement date announced'])}\n### Retired models\n\n${table(['gemini-old', 'April 21, 2025'])}`
+  strictAssert.deepEqual(precisions(page(shorter)), { 'gemini-long': 'earliest', 'gemini-long-plain': 'earliest', 'gemini-short': 'exact', 'gemini-short-floor': 'earliest', 'gemini-short-open': 'exact', 'gemini-old': 'exact' })
+  strictAssert.ok(!Object.hasOwn(byId(parseVertexModelVersionsMarkdown(page(shorter))).get('gemini-short-open'), 'shutdown'))
+  for (const negated of ["we don't post a fixed date", 'we do not post a fixed date', 'there is no fixed date', 'we never post fixed dates']) {
+    strictAssert.equal(precisions(page(`When we schedule a model for retirement, ${negated} in the following table.\n\n`))['gemini-short'], 'earliest', negated)
+  }
+  strictAssert.equal(precisions(page('The following table lists models available for shorter terms:\n\n'))['gemini-short'], 'earliest')
+  strictAssert.throws(() => parseVertexModelVersionsMarkdown(page(`${shorter}Retirement timelines may be extended.\n\n`)), /section "Models available for shorter availability periods" states both fixed and earliest-possible retirement dates/)
+  const nested = `${qualifier}### Models available for shorter availability periods\n\n${shorter}#### Gemini models\n\n${table(['gemini-nested', 'January 28, 2027'])}`
+  strictAssert.deepEqual(precisions(nested), { 'gemini-nested': 'exact' })
+  const introFixed = `We post a fixed date for every model.\n\n## Models\n\n${table(['gemini-intro', 'January 28, 2027'])}`
+  strictAssert.deepEqual(precisions(introFixed), { 'gemini-intro': 'exact' })
+  const introQualified = `Retirement timelines may be extended.\n\n## Models\n\n${table(['gemini-intro', 'January 28, 2027'])}`
+  strictAssert.deepEqual(precisions(introQualified), { 'gemini-intro': 'earliest' })
+  const introFixedUnderQualifier = `We post a fixed date for every model.\n\n${qualifier}${table(['gemini-intro', 'January 28, 2027'])}`
+  strictAssert.deepEqual(precisions(introFixedUnderQualifier), { 'gemini-intro': 'earliest' })
+})
+
 await test('a precision phrase in another section, a comment, or a code block does not apply', () => {
   const sibling = `## Latest available models\n\n### Gemini models\n\n${table(['gemini-a', 'May 19, 2027 or later'])}\n### Embeddings models\n\n${table(['gemini-b', 'October 20, 2026'])}\n## What's next\n\nQuotas may be raised for projects created on or later than 2026.\n`
   strictAssert.deepEqual(precisions(sibling), { 'gemini-a': 'earliest', 'gemini-b': 'exact' })

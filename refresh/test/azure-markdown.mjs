@@ -101,7 +101,27 @@ await test('a missing, repeated, commented-out, or misplaced footnote fails clos
   strictAssert.match(failure(footnoted() + '### Cohere\n\n' + offer(3)), /footnote 3, which the table does not define/)
   strictAssert.match(failure(footnoted() + table('Azure OpenAI', [row('second-table')]) + offer(3)), /footnote 3, which the table does not define/)
   strictAssert.match(failure(footnoted() + '- ^3^ April 14, 2027 applies to all offers.\n'), /footnote 3, which the table does not define/)
-  strictAssert.equal(parse(footnoted() + offer(3) + table('Cohere', [row('other-section')]) + offer(3, 'No earlier than 2027-04-14.')).records[0].shutdown, '2027-04-14')
+  strictAssert.equal(parse(footnoted() + offer(3) + table('Cohere', [row('other-section')]) + offer(3, 'April 1, 2027 applies to other offers.')).records[0].shutdown, '2027-04-14')
+})
+
+await test('wording that loosens dates before or after a table fails every dated row, footnoted or not', () => {
+  const plain = table('Azure OpenAI', [row('plain-dated', '2025-04-14', 'Deprecated', '2027-04-14')])
+  strictAssert.equal(parse(plain + 'Provisioned deployments are not upgraded automatically.\n').records[0].shutdown, '2027-04-14')
+  for (const note of ['Retirement dates are no earlier than listed.\n', '- Dates are tentative and may change.\n', '> [!NOTE]\n> Retirement dates are estimates.\n']) {
+    strictAssert.match(failure(plain + note), /plain-dated version 2025-04-14 retirement is dated, and the notes after the table make dates approximate/, note)
+  }
+  const sectionNote = '### Azure OpenAI\n\nRetirement dates listed are the earliest possible dates.\n\n'
+  strictAssert.match(failure(sectionNote + plain.replace('### Azure OpenAI\n\n', '')), /plain-dated version 2025-04-14 retirement is dated, and the section before the table makes dates approximate \("earliest"\)/)
+  const groupNote = '## Foundry Models sold by Azure\n\nRetirement dates are planned and may change.\n\n'
+  strictAssert.match(failure(groupNote + plain), /plain-dated version 2025-04-14 retirement is dated, and the section before the table makes dates approximate \("planned"\)/)
+  strictAssert.match(failure(footnoted() + offer(3) + table('Cohere', [row('other-section')]) + offer(3, 'No earlier than 2027-04-14.')), /Cohere\/other-section version 1 retirement is dated, and the notes after the table make dates approximate \("No earlier than"\)/)
+  strictAssert.match(failure(groupNote.replace('## Foundry Models sold by Azure', '### Azure OpenAI') + footnoted().replace('### Azure OpenAI\n\n', '') + offer(3)), /footnoted version 2025-04-14 retirement cites footnote 3, and the section before the table makes dates approximate \("planned"\)/)
+  const undated = table('Azure OpenAI', [row('undated', '1', 'GA', '-')])
+  strictAssert.deepEqual(parse(groupNote + undated + 'Dates are tentative.\n').records.map(record => [record.azureId, record.shutdown]), [['undated', undefined]])
+  const otherSection = table('Cohere', [row('cohere-dated')]) + 'Cohere dates are tentative.\n\n' + plain
+  strictAssert.match(failure(otherSection), /Cohere\/cohere-dated version 1 retirement is dated, and the notes after the table/)
+  strictAssert.equal(parse(table('Cohere', [row('cohere-undated', '1', 'GA', '-')]) + 'Cohere dates are tentative.\n\n' + plain).records.at(-1).shutdown, '2027-04-14')
+  strictAssert.equal(parse('# Retirement schedule\n\nThe Replacement column is the target for automatic upgrades.\n\n## Foundry Models sold by Azure\n\n' + plain).records[0].shutdown, '2027-04-14')
 })
 
 await test('markers outside the retirement column, escaped markers, and markers in code stop the run', () => {
@@ -147,7 +167,7 @@ await test('a misaligned row, an HTML body, a raw HTML table, a setext heading, 
   strictAssert.equal(parse(`Intro.\n\n---\n\n${table('Azure OpenAI', [row('model-a')])}`).records.length, 1)
 })
 
-await test('the refresh asks for Markdown, refuses redirects, and cites the human page', async () => {
+await test('the refresh asks for Markdown, follows redirects only to https, and cites the human page', async () => {
   const config = DISTRIBUTORS['azure-ai-foundry']
   strictAssert.deepEqual(config.sourceHeaders, { Accept: 'text/markdown' })
   strictAssert.equal(config.sourceUrl, AZURE_MODEL_RETIREMENT_SCHEDULE_URL)
@@ -160,7 +180,12 @@ await test('the refresh asks for Markdown, refuses redirects, and cites the huma
   strictAssert.equal(requests.length, 1)
   strictAssert.equal(requests[0].url, AZURE_MODEL_RETIREMENT_SCHEDULE_URL)
   strictAssert.equal(requests[0].init.headers.Accept, 'text/markdown')
-  strictAssert.equal(requests[0].init.redirect, 'error')
+  strictAssert.equal(requests[0].init.redirect, 'follow')
+  const downgraded = async () => Object.defineProperty(new Response(markdownFixture), 'url', { value: 'http://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule' })
+  const refused = await loadDistributorSource('azure-ai-foundry', { fetchImpl: downgraded, now, env: {}, notice: () => {} }).then(() => '', error => error.message)
+  strictAssert.match(refused, /azure-ai-foundry fetch failed for .*: redirected to a http: URL/)
+  const moved = async () => Object.defineProperty(new Response(markdownFixture), 'url', { value: 'https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule-moved' })
+  strictAssert.deepEqual((await loadDistributorSource('azure-ai-foundry', { fetchImpl: moved, now, env: {}, notice: () => {} })).records, parse(markdownFixture).records)
   strictAssert.deepEqual(source.records, parse(markdownFixture).records)
   const merged = mergeDistributions([{ publisher: 'openai', models: [{ id: 'whisper' }] }], { records: source.records, sourceUrl: source.sourceUrl, via: 'azure-ai-foundry' })
   strictAssert.equal(merged.feeds[0].models[0].distributions[0].source, AZURE_MODEL_RETIREMENT_SCHEDULE_URL)

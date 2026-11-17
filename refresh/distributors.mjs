@@ -3,9 +3,12 @@ import path from 'node:path'
 import {
   azureModelsApiConflictSummary,
   azureModelsApiCredentials,
+  azureModelsApiOneDaySummary,
   azureModelsApiSummary,
   fetchAzureModelsApi,
+  isAzureModelsApiOneDay,
   reconcileAzureModelsApi,
+  redactAzureModelsApiMessage,
 } from './azure-models-api.mjs'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
 import {
@@ -154,9 +157,10 @@ function missingDate(text) {
   return !text || /^(?:-+|n\/?a|none|not\s+(?:available|applicable)|no\s+(?:shutdown|retirement)\s+date\s+announced)$/i.test(text)
 }
 
+// The whole value must be one day-precision date, so a qualifier, a second date, or a struck date stops the run.
 function lifecycleDate(cell, field, bedrockId, allowAnnouncement = false) {
   if (!cell || missingDate(cell.text) || (allowAnnouncement && /^to be announced$/i.test(cell.text.trim()))) return undefined
-  const parsed = dateFromText(cell.text)
+  const parsed = BEDROCK_CARD_DAY.test(cell.text.trim()) ? dateFromText(cell.text) : undefined
   if (!parsed) throw new Error(`aws-bedrock lifecycle entry ${bedrockId} has an unrecognised ${field} date: ${cell.text}`)
   return parsed
 }
@@ -257,6 +261,9 @@ const BEDROCK_LIFECYCLE_FIELDS = new Map([
 const BEDROCK_ENTRY_FIELDS = new Set(['name', 'model'])
 const BEDROCK_REQUIRED_ROW_FIELDS = [['legacy', 'Legacy date'], ['eol', 'EOL date'], ['extendedAccess', 'Public extended access start date']]
 const BEDROCK_STATUS_LABEL = /^(?:(?:model|lifecycle)\s+)*status$/i
+const BEDROCK_LABEL_TEXT = new RegExp(`(?:^|[^a-z])(${[...BEDROCK_LIFECYCLE_FIELDS.keys()].map(label => label.replace(/ /g, '\\s+')).join('|')})\\s*:`, 'i')
+// Bold, underscore, and HTML emphasis all read as the same label, so emphasis markers and tags are dropped.
+const bedrockLooseText = text => markdownText(text.replace(MARKDOWN_INLINE_TAG, ' ')).replace(/[*_`~\\]/g, '')
 
 // A regional line holds several "**Label:** value" segments separated by " / ".
 function bedrockLabelledSegments(content, line) {
@@ -270,25 +277,35 @@ function bedrockLabelledSegments(content, line) {
     const label = match[1].trim()
     const key = BEDROCK_LIFECYCLE_FIELDS.get(label) ?? (BEDROCK_STATUS_LABEL.test(label) ? 'status' : undefined)
     if (!key) throw new Error(`aws-bedrock lifecycle page line ${line}: unrecognised label: ${label}`)
+    const nestedLabel = bedrockLooseText(match[2]).match(BEDROCK_LABEL_TEXT)
+    if (nestedLabel) throw new Error(`aws-bedrock lifecycle page line ${line}: the ${label} value holds another label: ${nestedLabel[1]}`)
     segments.push({ label, key, value: markdownText(match[2]) })
   }
   return segments
 }
+
+const indentWidth = text => [...text].reduce((width, character) => character === '\t' ? width + 4 - (width % 4) : width + 1, 0)
 
 function bedrockLifecycleEntries(source) {
   const entries = []
   let entry
   for (const [index, line] of source.split('\n').entries()) {
     const number = index + 1
-    const top = line.match(/^[-*+][ \t]+(.*)$/)
-    const nested = line.match(/^[ \t]+[-*+][ \t]+(.*)$/)
-    const segments = nested && bedrockLabelledSegments(nested[1], number)
+    const top = line.match(/^[-*+]([ \t]+)(.*)$/)
+    const nested = line.match(/^([ \t]+)[-*+][ \t]+(.*)$/)
+    const segments = nested && bedrockLabelledSegments(nested[2], number)
     if (top) {
-      const provider = top[1].trim().match(/^\*\*([^*]+)\*\*$/)
-      entry = provider ? { provider: markdownText(provider[1]), line: number, items: [] } : undefined
+      const provider = top[2].trim().match(/^\*\*([^*]+)\*\*$/)
+      entry = provider ? { provider: markdownText(provider[1]), line: number, items: [], content: 1 + indentWidth(top[1]) } : undefined
       if (entry) entries.push(entry)
     } else if (segments) {
       if (!entry) throw new Error(`aws-bedrock lifecycle page line ${number}: labelled item outside a model entry: ${line.trim()}`)
+      // A field belongs to the entry only one list level down; a deeper item is a note on the item above it.
+      const indent = indentWidth(nested[1])
+      entry.indent ??= indent
+      if (indent !== entry.indent || indent < entry.content || indent >= entry.content + 4) {
+        throw new Error(`aws-bedrock lifecycle page line ${number}: labelled item at a different list depth in the ${entry.provider} entry: ${line.trim()}`)
+      }
       entry.items.push({ line: number, segments })
     } else if (entry && line.trim()) {
       throw new Error(`aws-bedrock lifecycle page line ${number}: unrecognised line in the ${entry.provider} entry: ${line.trim()}`)
@@ -385,6 +402,11 @@ export function parseBedrockLifecycleMarkdown(markdown) {
   for (const label of BEDROCK_LIFECYCLE_FIELDS.keys()) {
     const count = [...source.matchAll(new RegExp(`\\*\\*\\s*${label}\\s*(?::\\s*\\*\\*|\\*\\*\\s*:)`, 'gi'))].length
     if (count !== (consumed.get(label) ?? 0)) throw new Error(`aws-bedrock lifecycle page has the label ${label} outside a model entry`)
+  }
+  const entryLines = new Set(entries.flatMap(entry => entry.items.map(item => item.line)))
+  for (const [index, line] of source.split('\n').entries()) {
+    const label = !entryLines.has(index + 1) && bedrockLooseText(line).match(BEDROCK_LABEL_TEXT)
+    if (label) throw new Error(`aws-bedrock lifecycle page line ${index + 1}: the label ${label[1]} outside a model entry`)
   }
 
   const unique = new Map()
@@ -633,8 +655,68 @@ function vertexDate(cell, modelId) {
 
 const VERTEX_PRECISION_PATTERN = /earliest\s+possible|retirement\s+timelines?\s+may\s+be\s+extended|not\s+(?:be\s+)?moved\s+to\s+an\s+earlier\s+date|or\s+later|no\s+sooner\s+than/i
 
-function vertexDatePrecision(sectionText, text) {
-  return VERTEX_PRECISION_PATTERN.test(`${sectionText} ${text}`) ? 'earliest' : undefined
+const VERTEX_FIXED_DATE_PATTERN = /\bfixed\s+(?:retirement\s+)?dates?\b/i
+const VERTEX_NEGATION = /\b(?:no|not|never|without|nor)\b|n't\b/i
+
+function vertexStatesFixedDates(text) {
+  for (const match of text.matchAll(new RegExp(VERTEX_FIXED_DATE_PATTERN.source, 'gi'))) {
+    if (!VERTEX_NEGATION.test(text.slice(Math.max(0, match.index - 40), match.index))) return true
+  }
+  return false
+}
+
+function blankOutermostTables(html) {
+  let out = ''
+  let cursor = 0
+  let depth = 0
+  let start = 0
+  for (const tag of html.matchAll(/<(\/?)table\b[^>]*>/gi)) {
+    if (!tag[1]) {
+      if (!depth++) start = tag.index
+    } else if (depth && !--depth) {
+      out += html.slice(cursor, start) + ' '.repeat(tag.index + tag[0].length - start)
+      cursor = tag.index + tag[0].length
+    }
+  }
+  if (depth) return out + html.slice(cursor, start) + ' '.repeat(html.length - start)
+  return out + html.slice(cursor)
+}
+
+/** For a table offset, its enclosing sections nearest first with the prose each owns, up to an archive heading or else the page intro. */
+function vertexSectionChains(html) {
+  const blank = match => ' '.repeat(match.length)
+  const outside = blankOutermostTables(String(html).replace(/<!--[\s\S]*?--!?>/g, blank).replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, blank))
+  const headings = [...outside.matchAll(/<h([1-6])\b([^>]*)>([\s\S]*?)<\/h\1>/gi)]
+    .map(match => ({ start: match.index, end: match.index + match[0].length, level: Number(match[1]), attrs: match[2], text: plainText(match[3]) }))
+  const own = headings.map((heading, index) => plainText(outside.slice(heading.end, headings[index + 1]?.start ?? outside.length)))
+  const intro = { heading: '(page intro)', own: plainText(outside.slice(0, headings[0]?.start ?? outside.length)), intro: true }
+  const archive = heading => /\bid\s*=\s*["']retired-models["']/i.test(heading.attrs) ||
+    /^(?:retired models|the following table lists the retired models\b.*)$/i.test(heading.text)
+  return tableStart => {
+    const chain = []
+    let level = 7
+    for (let index = headings.findLastIndex(heading => heading.end <= tableStart); index >= 0; index--) {
+      if (headings[index].level >= level) continue
+      level = headings[index].level
+      chain.push({ heading: headings[index].text, own: own[index] })
+      if (archive(headings[index])) return chain
+    }
+    return [...chain, intro]
+  }
+}
+
+// The nearest section that speaks about its dates decides: "we post a fixed date" is exact even under an earliest-date parent.
+function vertexDatePrecision(chain, text) {
+  if (VERTEX_PRECISION_PATTERN.test(text)) return 'earliest'
+  for (const section of chain) {
+    const qualified = VERTEX_PRECISION_PATTERN.test(section.own)
+    if (section.intro) return qualified ? 'earliest' : undefined
+    const fixed = vertexStatesFixedDates(section.own)
+    if (qualified && fixed) throw new Error(`vertex-ai section "${section.heading}" states both fixed and earliest-possible retirement dates`)
+    if (fixed) return undefined
+    if (qualified) return 'earliest'
+  }
+  return undefined
 }
 
 /** Parse Vertex model versions and lifecycle tables. */
@@ -643,6 +725,7 @@ export function parseVertexModelVersionsHtml(html) {
 
   const tables = [...html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
   const governingProse = sectionProse(html, VERTEX_PRECISION_PATTERN)
+  const sectionChain = vertexSectionChains(html)
   const records = []
   const archived = new WeakSet()
   let recognisedTables = 0
@@ -652,6 +735,7 @@ export function parseVertexModelVersionsHtml(html) {
     if (!headers) continue
     recognisedTables++
     const section = governingProse(table.index)
+    const chain = sectionChain(table.index)
     for (const row of rows.slice(headers.row + 1)) {
       const modelCell = row.cells[headers.model]
       if (!modelCell || !modelCell.text) continue
@@ -663,7 +747,7 @@ export function parseVertexModelVersionsHtml(html) {
       const record = { vertexId: modelId }
       if (shutdown) {
         record.shutdown = shutdown
-        const precision = vertexDatePrecision(section.text, retirementCell.text)
+        const precision = vertexDatePrecision(chain, retirementCell.text)
         if (precision) record.date_precision = precision
       }
       if (section.archived) archived.add(record)
@@ -880,20 +964,51 @@ function azureCheckOtherDates(dates, date, where, now) {
   }
 }
 
+/** For a table offset, the prose of its own section before it and the intro of each enclosing section below the page title. */
+function azureSectionPrologues(html) {
+  const blank = match => ' '.repeat(match.length)
+  const outside = blankOutermostTables(String(html).replace(/<!--[\s\S]*?--!?>/g, blank))
+  const headings = [...outside.matchAll(/<h([1-6])\b[^>]*>[\s\S]*?<\/h\1>/gi)]
+    .map(match => ({ start: match.index, end: match.index + match[0].length, level: Number(match[1]) }))
+  return tableStart => {
+    const nearest = headings.findLastIndex(heading => heading.end <= tableStart)
+    if (nearest < 0) return azureProseVariants(outside.slice(0, tableStart))
+    const parts = [outside.slice(headings[nearest].end, tableStart)]
+    let level = headings[nearest].level
+    for (let index = nearest - 1; index >= 0 && level > 2; index--) {
+      if (headings[index].level >= level) continue
+      level = headings[index].level
+      if (level > 1) parts.push(outside.slice(headings[index].end, headings[index + 1].start))
+    }
+    return azureProseVariants(parts.join(' '))
+  }
+}
+
 function azureRetirementDate(cell, label, region, now) {
   const marked = cell.html.match(/^\s*(\d{4}-\d{2}-\d{2})\s*<sup>(\d+)<\/sup>\s*$/i)
-  if (!marked) return cell.text === '-' ? undefined : azureIsoDate(cell.text, `${label} retirement`)
+  const prefix = `azure-ai-foundry lifecycle entry ${label} retirement`
+  const proseCheck = () => {
+    const cites = marked ? `cites footnote ${marked[2]}` : 'is dated'
+    const before = azurePrecisionPhrase(region().before)
+    if (before) throw new Error(`${prefix} ${cites}, and the section before the table makes dates approximate ("${before}")`)
+    const after = azurePrecisionPhrase(region().variants)
+    if (after) throw new Error(`${prefix} ${cites}, and the notes after the table make dates approximate ("${after}")`)
+  }
+  if (!marked) {
+    if (cell.text === '-') return undefined
+    const date = azureIsoDate(cell.text, `${label} retirement`)
+    proseCheck()
+    return date
+  }
   const date = azureIsoDate(marked[1], `${label} retirement`)
   const number = marked[2]
-  const prefix = `azure-ai-foundry lifecycle entry ${label} retirement`
   const where = `${prefix} footnote ${number}`
   const footnote = region().footnotes.get(number)
   if (footnote === undefined) throw new Error(`${prefix} cites footnote ${number}, which the table does not define`)
   if (footnote === null) throw new Error(`${prefix} cites footnote ${number}, which the table defines more than once`)
   const phrase = azurePrecisionPhrase(footnote.span)
   if (phrase) throw new Error(`${where} makes the date approximate ("${phrase}"): ${footnote.span[0]}`)
-  const notePhrase = azurePrecisionPhrase(region().variants)
-  if (notePhrase) throw new Error(`${prefix} cites footnote ${number}, and the notes after the table make dates approximate ("${notePhrase}")`)
+  proseCheck()
   if (!azureDateScan(footnote.own, where).has(date)) throw new Error(`${where} does not state the retirement date ${date}`)
   azureCheckOtherDates(azureDateScan(footnote.span, where), date, where, now)
   const notes = `${prefix} cites footnote ${number}, and the notes before the first footnote`
@@ -911,6 +1026,8 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
   const unique = new Map()
   const conflicts = []
   const modelRowCounts = new Map()
+  const pageRows = []
+  const prologues = azureSectionPrologues(html)
   const blocks = html.matchAll(/<(h[123]|table)\b[^>]*>([\s\S]*?)<\/\1>/gi)
   for (const block of blocks) {
     const tag = block[1].toLowerCase()
@@ -928,7 +1045,7 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
     recognisedTables++
     let tableRecords = 0
     let tableRegion
-    const region = () => (tableRegion ??= azureFootnoteRegion(html, block.index + block[0].length))
+    const region = () => (tableRegion ??= { ...azureFootnoteRegion(html, block.index + block[0].length), before: prologues(block.index) })
     for (const row of rows.slice(headers.row + 1)) {
       if (!row.cells.some(cell => cell.text)) continue
       const [modelCell, versionCell, lifecycleCell, retirementCell] = headers.indexes.map(index => row.cells[index])
@@ -961,6 +1078,7 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
       if (publisher) record.publisher = publisher
       if (!validId) record.reason = 'invalid model id'
       if (shutdown !== undefined) record.shutdown = shutdown
+      pageRows.push(record)
       const key = JSON.stringify(publisher ? [section, azureId] : [group, section, azureId, version])
       const previous = unique.get(key)
       if (!previous) unique.set(key, record)
@@ -982,7 +1100,7 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
   for (const record of unique.values()) {
     if (record.publisher === 'openai') record.modelRowCount = modelRowCounts.get(record.modelId.trim().toLowerCase())
   }
-  return { records: [...unique.values()], conflicts }
+  return { records: [...unique.values()], conflicts, rows: pageRows }
 }
 
 const MARKDOWN_LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/
@@ -1424,6 +1542,14 @@ async function loadBedrockCards(config, options) {
   return { records, skipped }
 }
 
+/** MODEL_EOL_CROSS_CHECKS=strict makes a failed cross-check fail the run; unset, empty, or warn reports it and goes on. */
+export function crossChecksStrict(env = process.env) {
+  const value = env.MODEL_EOL_CROSS_CHECKS ?? ''
+  if (value === 'strict') return true
+  if (value === '' || value === 'warn') return false
+  throw new Error(`MODEL_EOL_CROSS_CHECKS must be strict, warn, or unset, not ${JSON.stringify(value)}`)
+}
+
 export async function loadDistributorSource(distributor = 'aws-bedrock', options = {}) {
   const config = DISTRIBUTORS[distributor]
   if (!config) throw new Error(`unknown distributor ${distributor}`)
@@ -1446,17 +1572,30 @@ export async function loadDistributorSource(distributor = 'aws-bedrock', options
   }
   let apiSummary
   if (distributor === 'azure-ai-foundry') {
-    const credentials = options.fixtures ? undefined : azureModelsApiCredentials(options.env ?? process.env)
-    if (options.fixtures) notice('notice: azure models API not read in a fixture run')
-    else if (!credentials) notice('notice: azure models API skipped: AZURE_MANAGEMENT_TOKEN and AZURE_SUBSCRIPTION_ID are not set')
-    else {
-      const api = await fetchAzureModelsApi(credentials, { fetchImpl: options.fetchImpl, locations: options.azureLocations })
-      const reconciled = reconcileAzureModelsApi(parsed.records, api.entries)
-      parsed = { ...parsed, records: reconciled.records, conflicts: [...parsed.conflicts, ...reconciled.conflicts] }
-      apiSummary = azureModelsApiSummary(api, reconciled.conflicts)
+    const env = options.env ?? process.env
+    const strict = crossChecksStrict(env)
+    let credentials
+    try {
+      credentials = options.fixtures ? undefined : azureModelsApiCredentials(env)
+      if (options.fixtures) notice('notice: azure models API not read in a fixture run')
+      else if (!credentials) notice('notice: azure models API skipped: AZURE_MANAGEMENT_TOKEN and AZURE_SUBSCRIPTION_ID are not set')
+      else {
+        const api = await fetchAzureModelsApi(credentials, { fetchImpl: options.fetchImpl, locations: options.azureLocations })
+        const reconciled = reconcileAzureModelsApi(parsed.records, api.entries, { rows: parsed.rows })
+        parsed = { ...parsed, records: reconciled.records, conflicts: [...parsed.conflicts, ...reconciled.conflicts] }
+        apiSummary = azureModelsApiSummary(api, reconciled.conflicts)
+      }
+    } catch (error) {
+      if (strict) throw error
+      // The API only cross-checks the page and never changes feed data, so by default its failure is reported, not fatal.
+      const message = redactAzureModelsApiMessage(error.message, credentials).replace(/\s+/g, ' ')
+      notice(`warning: azure models API cross-check failed: ${message}`)
+      parsed = { ...parsed, conflicts: [...parsed.conflicts, { via: 'azure-ai-foundry', source: 'models-api', reason: 'cross-check-failed', message }] }
     }
   }
-  for (const conflict of parsed.conflicts ?? []) notice(`notice: ${sourceConflictSummary(conflict)}`)
+  const conflicts = parsed.conflicts ?? []
+  for (const conflict of conflicts) if (!isAzureModelsApiOneDay(conflict)) notice(`notice: ${sourceConflictSummary(conflict)}`)
+  if (conflicts.some(isAzureModelsApiOneDay)) notice(`notice: ${azureModelsApiOneDaySummary(conflicts)}`)
   if (apiSummary) notice(`notice: ${apiSummary}`)
   for (const card of parsed.skipped ?? []) notice(`notice: ${skippedModelCardSummary(card)}`)
   return {
