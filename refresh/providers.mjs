@@ -51,6 +51,7 @@ export const PROVIDERS = {
     feedFile: 'mistral.json',
     modelsUrl: 'https://api.mistral.ai/v1/models',
     deprecationsUrl: 'https://docs.mistral.ai/models',
+    deprecationsFetchUrl: 'https://docs.mistral.ai/models.md',
     keyEnv: 'MISTRAL_API_KEY',
     headers: {},
   },
@@ -59,6 +60,7 @@ export const PROVIDERS = {
     feedFile: 'cohere.json',
     modelsUrl: 'https://api.cohere.com/v1/models?page_size=1000',
     deprecationsUrl: 'https://docs.cohere.com/docs/deprecations',
+    deprecationsFetchUrl: 'https://docs.cohere.com/docs/deprecations.md',
     keyEnv: 'COHERE_API_KEY',
     headers: {},
   },
@@ -1411,82 +1413,86 @@ export function parseGoogleDeprecationsHtml(html, sourceUrl = PROVIDERS.google.d
   return [...unique.values()]
 }
 
-function mistralHeaderIndexes(rows, pendingHeaders) {
-  const hasHeaderCells = rows.some(row => row.cells.some(cell => cell.kind === 'th'))
-  for (const [index, row] of rows.entries()) {
-    if (!row.cells.some(cell => cell.kind === 'th') && (hasHeaderCells || index > 0 || pendingHeaders)) continue
-    const labels = row.cells.map(cell => cell.text.trim().toLowerCase())
-    const required = { model: 'model', version: 'version', api: 'api', dates: 'deprecation retirement', alternative: 'alternative' }
-    const lifecycle = labels.some(label => /deprecation|retirement/.test(label)) ||
-      labels.filter(label => ['model', 'version', 'api', 'alternative'].includes(label)).length >= 2
-    if (!lifecycle) continue
-    if (row.cells.some(cell => cell.kind !== 'th') || labels.length !== Object.keys(required).length || Object.values(required).some(label => labels.filter(value => value === label).length !== 1)) {
-      throw new Error(`mistral deprecations table has unrecognised or ambiguous header: ${row.cells.map(cell => cell.text).join(' | ')}`)
-    }
-    return { row: index, width: labels.length, ...Object.fromEntries(Object.entries(required).map(([key, label]) => [key, labels.indexOf(label)])) }
+const MISTRAL_OVERVIEW_HEADER = ['model', 'api name', 'status', 'context', 'summary']
+const MISTRAL_LIFECYCLE_HEADER = [...MISTRAL_OVERVIEW_HEADER, 'deprecation', 'retirement', 'replacement']
+const MISTRAL_LIFECYCLE_STATUSES = ['deprecated', 'retired']
+const MISTRAL_HUMAN_DATE = new RegExp(`^(?:${HUMAN_DATE_PATTERN.source})$`, 'i')
+const isHtmlBody = text => /^\s*(?:<!--[\s\S]*?--!?>\s*)*</.test(text.replace(/^\uFEFF/, ''))
+
+const markdownCellPlainText = cell => plainText(markdownCellHtml(cell))
+
+function mistralDate(text, id, field) {
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  let date
+  try {
+    date = iso ? validDate(iso[1], iso[2], iso[3]) : MISTRAL_HUMAN_DATE.test(text) ? dateFromText(text) : undefined
+  } catch {
+    date = undefined
   }
+  if (!date) throw new Error(`mistral deprecations row ${id} has an invalid ${field} date: ${text || '(empty)'}`)
+  return date
+}
+
+function mistralTableKind(table) {
+  const labels = table.header.map(cell => markdownCellPlainText(cell).toLowerCase())
+  if (labels.join('|') === MISTRAL_LIFECYCLE_HEADER.join('|')) return 'lifecycle'
+  if (labels.join('|') === MISTRAL_OVERVIEW_HEADER.join('|')) return 'overview'
+  const lifecycle = labels.some(label => /deprecat|retire|replacement|alternative/.test(label)) ||
+    labels.filter(label => ['model', 'version', 'api', 'api name', 'status'].includes(label)).length >= 2
+  if (lifecycle) throw new Error(`mistral deprecations table has unrecognised or ambiguous header: ${table.header.join(' | ')}`)
   return undefined
 }
 
-function mistralUsDate(text, id) {
-  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
-  if (match) {
-    const date = validDate(match[3], match[1], match[2])
-    if (date) return date
-  }
-  throw new Error(`mistral deprecations row ${id} has an invalid M/D/YYYY date: ${text}`)
-}
-
-export function parseMistralDeprecations(html, sourceUrl = PROVIDERS.mistral.deprecationsUrl) {
-  if (typeof html !== 'string' || !html.trim()) throw new Error('mistral deprecations page is empty')
+/** Parse the Markdown copy of Mistral's models page; records cite sourceUrl, the human page. */
+export function parseMistralDeprecationsMarkdown(markdown, sourceUrl = PROVIDERS.mistral.deprecationsUrl, { now = new Date() } = {}) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('mistral deprecations page is empty')
   try {
     new URL(sourceUrl)
   } catch {
     throw new Error(`mistral deprecations source is not a URL: ${sourceUrl}`)
   }
-
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new Error('mistral deprecations refresh clock is not a valid date')
+  if (isHtmlBody(markdown)) throw new Error('mistral deprecations page is HTML, not Markdown')
+  if (/<table\b/i.test(stripFencedCodeBlocks(stripComments(markdown)))) throw new Error('mistral deprecations page has an HTML table, which the Markdown reader does not parse')
+  let tables
+  try {
+    tables = markdownPipeTables(markdown)
+  } catch (error) {
+    throw new Error(`mistral deprecations page: ${error.message}`)
+  }
+  const today = now.toISOString().slice(0, 10)
   const records = new Map()
   const skipped = []
-  let pendingHeaders
   let recognisedTables = 0
-  for (const table of html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)) {
-    const rows = tableRows(table[1])
-    const ownHeaders = mistralHeaderIndexes(rows, pendingHeaders)
-    if (pendingHeaders && (/<h[1-6]\b/i.test(html.slice(pendingHeaders.end, table.index)) ||
-      ownHeaders || !rows.length || rows.some(row => !row.cells.length || row.cells.some(cell => cell.kind !== 'td')))) {
-      throw new Error('mistral deprecations table has a dangling header without an immediately following body table')
+  for (const table of tables) {
+    const kind = mistralTableKind(table)
+    if (kind === 'overview') {
+      for (const cells of table.rows) {
+        const status = markdownCellPlainText(cells[2])
+        if (/deprecat|retire/i.test(status)) {
+          throw new Error(`mistral models overview lists ${markdownCellPlainText(cells[1]) || markdownCellPlainText(cells[0])} as ${status} without lifecycle dates`)
+        }
+      }
     }
-    const headers = ownHeaders ?? pendingHeaders?.headers
-    const dataRows = ownHeaders ? rows.slice(ownHeaders.row + 1) : rows
-    pendingHeaders = undefined
-    if (!headers) continue
-    if (!dataRows.length) {
-      pendingHeaders = { headers, end: table.index + table[0].length }
-      continue
-    }
+    if (kind !== 'lifecycle' || !table.rows.length) continue
     recognisedTables++
-    for (const [index, row] of dataRows.entries()) {
-      const model = (row.cells[headers.model]?.text ?? '').replace(/\s*↗\s*$/, '')
-      const version = row.cells[headers.version]?.text ?? ''
-      const id = row.cells[headers.api]?.text ?? ''
-      const label = id || `${model || '(unnamed model)'} ${version} (row ${index + 1})`.trim()
-      if (row.cells.length !== headers.width || row.cells.some(cell => cell.kind !== 'td')) {
-        throw new Error(`mistral deprecations row ${label} has unexpected cells`)
+    for (const [index, cells] of table.rows.entries()) {
+      const [model, id, status, , , deprecation, retirement, alternative] = cells.map(markdownCellPlainText)
+      const label = id || `${model || '(unnamed model)'} (row ${index + 1})`
+      if (!MISTRAL_LIFECYCLE_STATUSES.includes(status.toLowerCase())) {
+        throw new Error(`mistral deprecations row ${label} has an unrecognised status: ${status || '(empty)'}`)
       }
       if (!id) {
-        skipped.push({ model, version })
+        skipped.push({ model, version: '' })
         continue
       }
-      if (!MODEL_ID_PATTERN.test(id)) {
-        throw new Error(`mistral deprecations table refused row: invalid-model-id: ${id}`)
-      }
-      const dates = row.cells[headers.dates].text
-      const match = dates.match(/^(\d{1,2}\/\d{1,2}\/\d{4}) (\d{1,2}\/\d{1,2}\/\d{4})$/)
-      if (!match) throw new Error(`mistral deprecations row ${id} must contain exactly two M/D/YYYY dates: ${dates || '(empty)'}`)
-      const announced = mistralUsDate(match[1], id)
-      const shutdown = mistralUsDate(match[2], id)
+      if (!MODEL_ID_PATTERN.test(id)) throw new Error(`mistral deprecations table refused row: invalid-model-id: ${id}`)
+      const announced = mistralDate(deprecation, id, 'deprecation')
+      const shutdown = mistralDate(retirement, id, 'retirement')
       if (shutdown < announced) throw new Error(`mistral deprecations row ${id} has shutdown before announcement`)
-      const alternative = row.cells[headers.alternative].text
+      if (status.toLowerCase() === 'retired' && shutdown > today) {
+        throw new Error(`mistral deprecations row ${id} is Retired but its retirement date ${shutdown} is after ${today}`)
+      }
       const record = { id, announced, shutdown, source: sourceUrl }
       if (alternative) record.replacement_note = `Mistral lists ${alternative} as the alternative`
       const previous = records.get(id)
@@ -1496,7 +1502,6 @@ export function parseMistralDeprecations(html, sourceUrl = PROVIDERS.mistral.dep
       if (!previous) records.set(id, record)
     }
   }
-  if (pendingHeaders) throw new Error('mistral deprecations table has a dangling header without a following body table')
   if (!recognisedTables) throw new Error('mistral deprecations page has no recognised model tables with data rows')
   if (!records.size) throw new Error('mistral deprecations page has no model entries')
   return { records: [...records.values()], skipped }
@@ -1755,6 +1760,132 @@ export function parseCohereDeprecations(html, sourceUrl = PROVIDERS.cohere.depre
     }
   }
   return [...records.values()]
+}
+
+const MARKDOWN_LIST_ITEM = /^( *)([*+-]|\d{1,9}[.)])(?:( +)(.*))?$/
+const MARKDOWN_THEMATIC_BREAK = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/
+const MARKDOWN_HTML_BLOCK = /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)/
+
+/** Render Cohere's Markdown page as the headings, paragraphs, lists, and tables that parseCohereDeprecations reads. */
+export function cohereMarkdownToHtml(markdown) {
+  if (typeof markdown !== 'string') throw new Error('cohere deprecations page must be a string')
+  if (isHtmlBody(markdown)) throw new Error('cohere deprecations page is HTML, not Markdown')
+  let tables
+  try {
+    tables = markdownPipeTables(markdown)
+  } catch (error) {
+    throw new Error(`cohere deprecations page: ${error.message}`)
+  }
+  const lines = openAIMarkdownLines(markdown)
+  const fail = (index, message) => {
+    throw new Error(`cohere deprecations page: line ${index + 1}: ${message}`)
+  }
+  const rawTable = lines.findIndex(line => /<table\b/i.test(line))
+  if (rawTable >= 0) fail(rawTable, 'HTML table in the Markdown source')
+  const tableAt = new Map(tables.map(table => [table.line - 1, table]))
+  const html = []
+  const lists = []
+  let paragraph = []
+  let blank = false
+  const flushParagraph = () => {
+    if (paragraph.length) html.push(`<p>${markdownCellHtml(paragraph.join('\n'))}</p>`)
+    paragraph = []
+  }
+  const flushItem = () => {
+    const list = lists.at(-1)
+    if (list?.text.length) html.push(markdownCellHtml(list.text.join('\n')))
+    if (list) list.text = []
+  }
+  const closeLists = depth => {
+    while (lists.length > depth) {
+      flushItem()
+      html.push(`</li></${lists.pop().tag}>`)
+    }
+  }
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+    const indent = line.match(/^[ \t]*/)[0]
+    if (indent.includes('\t')) fail(index, 'tab indentation')
+    if (!line.trim()) {
+      flushParagraph()
+      blank = true
+      continue
+    }
+    const wasBlank = blank
+    blank = false
+    const table = tableAt.get(index)
+    if (table) {
+      if (lists.length && indent.length >= lists.at(-1).content) fail(index, 'table inside a list item')
+      flushParagraph()
+      closeLists(0)
+      html.push(markdownPipeTableToHtml(table))
+      index += table.rows.length + 1
+      continue
+    }
+    if (paragraph.length && /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)) fail(index, 'setext heading; headings must use #')
+    if (!lists.length && !paragraph.length && indent.length >= 4) fail(index, 'indented code block')
+    const item = MARKDOWN_THEMATIC_BREAK.test(line) ? undefined : line.match(MARKDOWN_LIST_ITEM)
+    if (item) {
+      if ((item[3]?.length ?? 0) > 4) fail(index, 'list item content is indented code')
+      const tag = /\d/.test(item[2]) ? 'ol' : 'ul'
+      const content = indent.length + item[2].length + (item[3]?.length ?? 1)
+      flushParagraph()
+      while (lists.length) {
+        const list = lists.at(-1)
+        if (indent.length >= list.content || (indent.length === list.indent && tag === list.tag)) break
+        if (indent.length > list.indent) fail(index, 'ambiguous list item indentation')
+        closeLists(lists.length - 1)
+      }
+      const list = lists.at(-1)
+      flushItem()
+      if (list && indent.length === list.indent && tag === list.tag) {
+        html.push('</li><li>')
+        list.content = content
+      } else {
+        html.push(`<${tag}><li>`)
+        lists.push({ indent: indent.length, content, tag, text: [] })
+      }
+      lists.at(-1).text.push(item[4] ?? '')
+      continue
+    }
+    if (lists.length && wasBlank) {
+      while (lists.length && indent.length < lists.at(-1).content) closeLists(lists.length - 1)
+    }
+    if (lists.length) {
+      const { content } = lists.at(-1)
+      const inner = indent.length >= content ? line.slice(content) : line
+      if ([OPENAI_MARKDOWN_HEADING, MARKDOWN_THEMATIC_BREAK, MARKDOWN_HTML_BLOCK].some(pattern => pattern.test(inner))) {
+        if (inner !== line) fail(index, 'unsupported block inside a list item')
+        closeLists(0)
+      } else {
+        lists.at(-1).text.push(line.trim())
+        continue
+      }
+    }
+    const heading = line.match(OPENAI_MARKDOWN_HEADING)
+    if (heading) {
+      flushParagraph()
+      html.push(`<h${heading[1].length}>${markdownCellHtml((heading[2] ?? '').trim())}</h${heading[1].length}>`)
+    } else if (MARKDOWN_THEMATIC_BREAK.test(line)) {
+      flushParagraph()
+      html.push('<hr>')
+    } else if (MARKDOWN_HTML_BLOCK.test(line)) {
+      fail(index, 'raw HTML block in the Markdown source')
+    } else if (!paragraph.length && indent.length >= 4) {
+      fail(index, 'indented code block')
+    } else {
+      paragraph.push(line.trim())
+    }
+  }
+  flushParagraph()
+  closeLists(0)
+  return html.join('\n')
+}
+
+/** Parse the Markdown copy of Cohere's deprecations page; the section rules stay in parseCohereDeprecations. */
+export function parseCohereDeprecationsMarkdown(markdown, sourceUrl = PROVIDERS.cohere.deprecationsUrl) {
+  if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('cohere deprecations page is empty')
+  return parseCohereDeprecations(cohereMarkdownToHtml(markdown), sourceUrl)
 }
 
 const MAX_MODEL_PAGES = 20
@@ -2490,7 +2621,7 @@ export async function loadProviderSources(config, options = {}) {
     html = await fetchBody(config.deprecationsFetchUrl ?? config.deprecationsUrl, {}, config.publisher, fetchImpl)
   }
 
-  const mistral = config.publisher === 'mistral' ? parseMistralDeprecations(html, config.deprecationsUrl) : undefined
+  const mistral = config.publisher === 'mistral' ? parseMistralDeprecationsMarkdown(html, config.deprecationsUrl, { now: options.now }) : undefined
   const deprecations = config.publisher === 'openai'
     ? parseOpenAIDeprecationsMarkdown(html, config.deprecationsUrl, { now: options.now })
     : config.publisher === 'google'
@@ -2500,7 +2631,7 @@ export async function loadProviderSources(config, options = {}) {
         : config.publisher === 'mistral'
           ? mistral.records
           : config.publisher === 'cohere'
-            ? parseCohereDeprecations(html, config.deprecationsUrl)
+            ? parseCohereDeprecationsMarkdown(html, config.deprecationsUrl)
             : parseDeprecationsHtml(html, config.deprecationsUrl, config.publisher)
   const skipped = mistral?.skipped ?? []
   for (const row of skipped) {

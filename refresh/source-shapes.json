@@ -23,7 +23,7 @@
       ]
     },
     "cohere": {
-      "url": "https://docs.cohere.com/docs/deprecations",
+      "url": "https://docs.cohere.com/docs/deprecations.md",
       "tables": [
         "shutdown date | deprecated model | deprecated model price | recommended replacement [4 cols]"
       ]
@@ -36,10 +36,10 @@
       ]
     },
     "mistral": {
-      "url": "https://docs.mistral.ai/models",
+      "url": "https://docs.mistral.ai/models.md",
       "tables": [
-        "(no header row) [5 cols]",
-        "model | version | api | deprecation retirement | alternative [5 cols]"
+        "model | api name | status | context | summary [5 cols]",
+        "model | api name | status | context | summary | deprecation | retirement | replacement [8 cols]"
       ]
     },
     "openai": {

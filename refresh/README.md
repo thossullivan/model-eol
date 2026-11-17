@@ -343,34 +343,52 @@ feed cite the human page as `source`. The page has no announcement dates.
 
 ## Mistral
 
-The refresh reads the [Mistral models page](https://docs.mistral.ai/models)
-and expects lifecycle tables whose header is exactly five `th` cells (Model,
-Version, API, Deprecation Retirement, Alternative), with each Deprecation
-Retirement cell holding two M/D/YYYY dates.
+The refresh reads the Markdown copy of the
+[Mistral models page](https://docs.mistral.ai/models), fetched from
+`https://docs.mistral.ai/models.md`. Records cite the page itself. It reads the
+page's pipe tables directly, following the
+[Markdown pipe table](#markdown-pipe-tables) rules, so a misaligned row stops
+the run with its line number.
 
-- A lifecycle header row that contains data cells or unexpected labels stops
-  the run.
-- Mistral sometimes puts the header row in one table and the data rows in the
-  next. A table with a valid header and no data rows holds its header for the
-  next table. That table must come before any heading, have no header of its
-  own, and contain only `td` cells, or the run stops. A held header that is
-  never used also stops the run.
-- A row counts as a lifecycle header when a label mentions deprecation or
-  retirement, or when two or more labels are exactly Model, Version, API, or
-  Alternative. In a table with `th` cells, every row with a `th` cell is
-  checked. In a table without `th` cells that isn't receiving a held header,
-  only the first row is checked, so a header written in `td` cells stops the
-  run.
+- The lifecycle table's header is exactly Model, API name, Status, Context,
+  Summary, Deprecation, Retirement, Replacement. The overview table's header is
+  exactly the first five of those. Any other table whose labels mention
+  deprecation, retirement, replacement, or alternative, or that has two or more
+  of the labels Model, Version, API, API name, or Status, stops the run.
+- A lifecycle row's Status is Deprecated or Retired. Any other status stops the
+  run, and so does a Retired row whose retirement date is after the run's date.
+  An overview row whose status mentions deprecation or retirement stops the
+  run, because it has no dates.
+- Deprecation and Retirement each hold one date, `YYYY-MM-DD` or a written
+  date such as `April 30, 2026`. The deprecation date is the announcement date
+  and the retirement date is the shutdown date.
+- The Replacement cell names a product, not an API ID, so it becomes a note:
+  "Mistral lists <name> as the alternative".
+- A row without an API name is skipped and reported as a notice and in the
+  diff. The page has no version column, so the version shows as not listed.
+- Identical rows for one API name collapse into one record. Rows that differ
+  in dates or replacement stop the run.
+- An HTML body, an HTML `<table>` in the Markdown, or a page without a
+  lifecycle table with rows stops the run.
 
 ## Cohere
 
-The refresh reads the
-[Cohere deprecations page](https://docs.cohere.com/docs/deprecations) and
-expects a `Deprecation History` heading whose subsections each start with a
-`YYYY-MM-DD:` date. A subsection holds an "Effective <date>, the following
-models will be retired:" list, a "Deprecated Models:" list, or tables headed
-Shutdown Date, Deprecated Model, and Recommended Replacement.
+The refresh reads the Markdown copy of the
+[Cohere deprecations page](https://docs.cohere.com/docs/deprecations), fetched
+from `https://docs.cohere.com/docs/deprecations.md`. Records cite the page
+itself. It expects a `Deprecation History` heading whose subsections each start
+with a `YYYY-MM-DD:` date. A subsection holds an "Effective <date>, the
+following models will be retired:" list, a "Deprecated Models:" list, or tables
+headed Shutdown Date, Deprecated Model, and Recommended Replacement.
 
+- The Markdown's ATX headings, paragraphs, bullet and numbered lists (nested
+  by indentation), and pipe tables are rendered as HTML in page order and read
+  by the HTML parser, so every rule here applies to both. Block quotes are read
+  as their contents.
+- A raw HTML block or `<table>`, a setext heading, an indented code block, tab
+  indentation, a list item indented between two list levels, a table or
+  heading inside a list item, an HTML body, and a misaligned pipe table row
+  each stop the run with a line number where there is one.
 - Identities and aliases are collected from every section first. Records are
   then merged in ascending order of the section's heading date.
 

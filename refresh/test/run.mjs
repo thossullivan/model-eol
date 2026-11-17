@@ -52,8 +52,10 @@ import {
   googleMarkdownToHtml,
   findFixture,
   parseGoogleModels,
-  parseMistralDeprecations,
+  parseMistralDeprecationsMarkdown,
+  cohereMarkdownToHtml,
   parseCohereDeprecations,
+  parseCohereDeprecationsMarkdown,
   parseCohereModelsResponse,
   parseModelsResponse,
   parseOpenAIDeprecations,
@@ -306,7 +308,8 @@ try {
   fs.rmSync(missingAnthropicPageDir, { recursive: true, force: true })
 }
 
-const cohereHtml = fs.readFileSync(path.join(fixtures, 'cohere-deprecations.html'), 'utf8')
+const cohereHtml = fs.readFileSync(path.join(fixtures, 'cohere-deprecations-page.html'), 'utf8')
+const cohereMarkdown = fs.readFileSync(path.join(fixtures, 'cohere-deprecations.md'), 'utf8')
 const cohereModels = fs.readFileSync(path.join(fixtures, 'cohere-models.json'), 'utf8')
 const cohereParsed = parseCohereDeprecations(cohereHtml)
 const cohereByDate = date => cohereParsed.filter(record => record.announced === date)
@@ -368,6 +371,78 @@ assert(JSON.stringify(parseCohereDeprecations(coherePlainModels)) === JSON.strin
 const cohereDuplicateRow = '<tr><td>2025-04-30</td><td><code>rerank-english-v2.0</code></td><td>$1.00 / 1K searches</td><td><code>rerank-v3.5</code></td></tr>'
 assert(parseCohereDeprecations(cohereHtml.replace(cohereDuplicateRow, cohereDuplicateRow.repeat(2))).length === 12, 'Cohere collapses identical duplicate rows')
 assert(cohereRefusal(cohereHtml.replace(cohereDuplicateRow, cohereDuplicateRow + cohereDuplicateRow.replace('2025-04-30', '2025-05-01'))).includes('conflicting rows for rerank-english-v2.0'), 'Cohere refuses conflicting duplicate lifecycle rows')
+const cohereMdParsed = parseCohereDeprecationsMarkdown(cohereMarkdown)
+const cohereMdRefusal = (markdown, source) => {
+  try {
+    parseCohereDeprecationsMarkdown(markdown, source)
+    return ''
+  } catch (error) {
+    return error.message
+  }
+}
+const cohereMdSections = cohereMarkdown.split(/^(?=#{1,3} )/m)
+const cohereMdSection = date => cohereMdSections.find(section => section.startsWith(`### ${date}:`))
+const cohereMdPage = section => `## Deprecation History\n\n${section}\n## Other content\n`
+assert(JSON.stringify(cohereMdParsed) === JSON.stringify(cohereParsed), 'Cohere Markdown yields exactly the records of the recorded HTML page')
+assert(cohereMdParsed.every(record => record.source === PROVIDERS.cohere.deprecationsUrl), 'Cohere Markdown records cite the human page')
+for (const date of ['2025-03-08', '2025-01-31']) {
+  assert(cohereMdSection(date) && parseCohereDeprecationsMarkdown(cohereMdPage(cohereMdSection(date))).length === 0, `Cohere Markdown skips the prose-only section without error: ${date}`)
+}
+assert(parseCohereDeprecationsMarkdown(`${cohereMarkdown}\n\n### 2099-01-01: Outside history\n\n* \`ignored-model\`\n`).length === 12, 'Cohere Markdown scopes parsing to Deprecation History')
+assert(cohereMdRefusal('').includes('page is empty') && cohereMdRefusal(cohereMarkdown, 'not-a-url').includes('source is not a URL') && cohereMdRefusal('### 2026-01-01: Unknown\n\n* `m`\n').includes('no Deprecation History'), 'Cohere Markdown refuses missing source structure and invalid source URLs')
+for (const date of ['2026-02-30', '2026-4-04', 'April 4, 2026']) {
+  const reason = cohereMdRefusal(cohereMarkdown.replace('### 2026-04-04: Embed', `### ${date}: Embed`))
+  assert(reason.includes(`${date}: Embed`) && /date|YYYY-MM-DD/.test(reason), `Cohere Markdown requires a strict real ISO heading date: ${date}`)
+}
+for (const date of ['April 31st, 2026', 'April 4th, 2026 or May 1st, 2026', 'March 1st, 2026']) {
+  const reason = cohereMdRefusal(cohereMarkdown.replace('Effective April 4th, 2026,', `Effective ${date},`))
+  assert(reason.includes('2026-04-04: Embed') && /date|before announcement/.test(reason), `Cohere Markdown refuses invalid or ambiguous retirement dates: ${date}`)
+}
+const cohereMdUnknown = cohereMarkdown.replace('the following models will be retired:', 'these models have changed status:')
+assert(cohereMdRefusal(cohereMdUnknown).includes('2026-04-04: Embed v2.0, Aya Expanse 8B') && cohereMdRefusal(cohereMdUnknown).includes('unrecognised section shape'), 'Cohere Markdown refuses a mutated unknown shape and names its heading')
+assert(cohereMdRefusal(cohereMarkdown.replace('Deprecated Models:', 'Affected Models:')).includes('2025-09-15: Various older command'), 'Cohere Markdown refuses an unknown model-list label instead of dropping records')
+assert(cohereMdRefusal(cohereMarkdown.replace('the following models will be retired:\n', 'the following models will be retired:\n\nUnexpected paragraph\n')).includes('immediately following'), 'Cohere Markdown refuses a displaced retirement list')
+assert(cohereMdRefusal(cohereMarkdown.replace('* `embed-english-light-v2.0`', '  * `embed-english-light-v2.0`')).includes('flat model list'), 'Cohere Markdown refuses a nested retirement list')
+assert(cohereMdRefusal(cohereMarkdown.replace('* `embed-english-v2.0`', '* `embed-english-v2.0` `extra-model`')).includes('one exact model id'), 'Cohere Markdown refuses ambiguous retirement list items')
+for (const id of ['bad/id', 'bad id']) {
+  const reason = cohereMdRefusal(cohereMarkdown.replace('`embed-english-v2.0`', `\`${id}\``))
+  assert(reason.includes('2026-04-04: Embed') && reason.includes(id) && /endpoint-or-product-row|invalid-model-id/.test(reason), `Cohere Markdown refuses invalid model ids within model lists: ${id}`)
+}
+assert(cohereMdRefusal(cohereMarkdown.replace('`command-r7b-12-2024`', '`bad/id`')).includes('endpoint-or-product-row'), 'Cohere Markdown validates task alternative ids')
+assert(cohereMdRefusal(cohereMarkdown.replace('Chat tasks alternatives:', 'Chat alternatives:')).includes('2026-04-04: Embed'), 'Cohere Markdown refuses renamed task groups instead of silently dropping their alternatives')
+assert(cohereMdRefusal(cohereMarkdown.replace('  * `command-r7b-12-2024`', ' * `command-r7b-12-2024`')).includes('ambiguous list item indentation'), 'Cohere Markdown refuses a list item indented between two list levels')
+const cohereMdPlainModels = cohereMarkdown.replace('* `command-light`', '* command-light').replace('* `command`\n', '* command\n').replace('* `summarize`', '* summarize')
+assert(JSON.stringify(parseCohereDeprecationsMarkdown(cohereMdPlainModels)) === JSON.stringify(cohereParsed), 'Cohere Markdown accepts plain exact ids under Deprecated Models')
+const cohereMdTableRow = cohereMarkdown.split('\n').find(line => line.includes('`rerank-english-v2.0`'))
+assert(parseCohereDeprecationsMarkdown(cohereMarkdown.replace(cohereMdTableRow, `${cohereMdTableRow}\n${cohereMdTableRow}`)).length === 12, 'Cohere Markdown collapses identical duplicate table rows')
+assert(cohereMdRefusal(cohereMarkdown.replace(cohereMdTableRow, `${cohereMdTableRow}\n${cohereMdTableRow.replace('2025-04-30', '2025-05-01')}`)).includes('conflicting rows for rerank-english-v2.0'), 'Cohere Markdown refuses conflicting duplicate table rows')
+assert(cohereMdRefusal(cohereMarkdown.replace(cohereMdTableRow, `${cohereMdTableRow} extra |`)).includes('table row has 5 cells; the header has 4'), 'Cohere Markdown refuses a misaligned table row with its line number')
+assert(cohereMdRefusal(cohereMarkdown.replace('| Shutdown Date |', '| Service Shutdown Date |')).includes('header: Service Shutdown Date'), 'Cohere Markdown refuses an unknown table header by its exact label')
+for (const [label, markdown, pattern] of [
+  ['an HTML body', cohereHtml, /^cohere deprecations page is HTML, not Markdown$/],
+  ['an HTML table', `${cohereMarkdown}\n<table><tr><td>x</td></tr></table>\n`, /line \d+: HTML table in the Markdown source$/],
+  ['a raw HTML block', cohereMarkdown.replace('Deprecated Models:\n', 'Deprecated Models:\n\n<div>\n'), /line \d+: raw HTML block/],
+  ['a setext heading', cohereMarkdown.replace('### 2024-12-02: Rerank v2.0\n', '2024-12-02: Rerank v2.0\n---\n'), /line \d+: setext heading/],
+  ['an indented code block', cohereMarkdown.replace('Deprecated Models:\n', 'Deprecated Models:\n\n    * `hidden-model`\n'), /line \d+: indented code block/],
+  ['tab indentation', cohereMarkdown.replace('  * `embed-v4.0`', '\t* `embed-v4.0`'), /line \d+: tab indentation/],
+  ['a heading inside a list item', cohereMarkdown.replace('  * `embed-v4.0`', '  * `embed-v4.0`\n    ### 2026-05-01: Hidden'), /line \d+: unsupported block inside a list item/],
+  ['a table inside a list item', cohereMarkdown.replace('* `command`\n', `* \`command\`\n  ${cohereMdTableRow.replace(/[^|]+/g, ' x ')}\n  | --- | --- | --- | --- |\n`), /line \d+: table inside a list item/],
+]) {
+  assert(pattern.test(cohereMdRefusal(markdown)), `Cohere Markdown refuses ${label}: ${cohereMdRefusal(markdown)}`)
+}
+assert(/^<p>Effective April 4th, 2026, the following models will be retired:<\/p>\n<ul><li>\n<code>embed-english-v2\.0<\/code>/m.test(cohereMarkdownToHtml(cohereMarkdown)), 'Cohere Markdown renders a paragraph followed directly by its flat list')
+assert(cohereMarkdownToHtml(cohereMarkdown).includes('<li>\nEmbedding tasks alternatives:\n<ul><li>\n<code>embed-english-v3.0</code>'), 'Cohere Markdown nests task alternative lists inside their group item')
+assert(findFixture(fixtures, 'cohere', 'deprecations').endsWith('cohere-deprecations.md'), 'the Cohere deprecations fixture is the Markdown page')
+{
+  const requested = []
+  const sources = await loadProviderSources(PROVIDERS.cohere, { env: {}, notice: () => {}, fetchImpl: async url => { requested.push(url); return new Response(cohereMarkdown) } })
+  assert(
+    PROVIDERS.cohere.deprecationsFetchUrl === `${PROVIDERS.cohere.deprecationsUrl}.md`
+      && JSON.stringify(requested) === JSON.stringify([PROVIDERS.cohere.deprecationsFetchUrl])
+      && JSON.stringify(sources.deprecations) === JSON.stringify(cohereParsed),
+    'Cohere deprecations are fetched from the Markdown copy and cite the human page',
+  )
+}
 assert(parseRefreshArgs(['--provider', 'cohere']).providers.join() === 'cohere' && parseRefreshArgs([]).providers.includes('cohere') && usage().includes('mistral|cohere|all'), 'refresh selects Cohere explicitly and through all, and documents its usage')
 const cohereNotices = []
 const cohereSources = await loadProviderSources(PROVIDERS.cohere, { fixtures, notice: message => cohereNotices.push(message) })
@@ -390,70 +465,107 @@ for (const body of ['{', {}, { data: [] }, { models: [null] }, { models: [{ name
   assert(reason.includes('cohere models response'), `Cohere refuses malformed endpoint data: ${JSON.stringify(body)}`)
 }
 
-const mistralHtml = fs.readFileSync(path.join(fixtures, 'mistral-deprecations.html'), 'utf8')
+const mistralMarkdown = fs.readFileSync(path.join(fixtures, 'mistral-deprecations.md'), 'utf8')
 const mistralModels = fs.readFileSync(path.join(fixtures, 'mistral-models.json'), 'utf8')
-const mistralParsed = parseMistralDeprecations(mistralHtml)
-const mistralTables = [...mistralHtml.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi)]
-const mistralRows = [...mistralTables[1][1].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi)].map(match => match[0])
-const mistralMediumRow = mistralRows.find(row => row.includes('mistral-medium-2508'))
+const mistralNow = new Date('2026-11-17T12:00:00Z')
+const mistralParse = (markdown, source, now = mistralNow) => parseMistralDeprecationsMarkdown(markdown, source, { now })
+const mistralParsed = mistralParse(mistralMarkdown)
+const mistralLines = mistralMarkdown.split('\n')
+const mistralLifecycleHeader = mistralLines.find(line => line.startsWith('| Model | API name | Status | Context | Summary | Deprecation |'))
+const mistralOverviewHeader = mistralLines.find(line => line === '| Model | API name | Status | Context | Summary |')
+const mistralRows = mistralLines.slice(mistralLines.indexOf(mistralLifecycleHeader) + 2).filter(line => line.startsWith('| ['))
+const mistralMediumRow = mistralRows.find(row => row.includes('| `mistral-medium-2508` |'))
 const mistralMedium = mistralParsed.records.find(record => record.id === 'mistral-medium-2508')
 const mistralExpectedSkipped = [
-  { model: 'Mathstral 7B', version: '0.1' },
+  { model: 'Mathstral 7B', version: '' },
   { model: 'Mistral Next', version: '' },
-  { model: 'Mistral 7B', version: '0.1' },
+  { model: 'Mistral 7B', version: '' },
 ]
-const mistralMutatedRow = (cellIndex, value) => {
-  let index = 0
-  return mistralMediumRow.replace(/(<td\b[^>]*>)[\s\S]*?(<\/td>)/gi, (cell, open, close) => index++ === cellIndex ? `${open}${value}${close}` : cell)
-}
-const mistralRefusal = (html, source) => {
+const mistralMutatedRow = (cellIndex, value, row = mistralMediumRow) => row.split('|').map((cell, index) => index === cellIndex + 1 ? ` ${value} ` : cell).join('|')
+const mistralWithRow = (cellIndex, value) => mistralMarkdown.replace(mistralMediumRow, mistralMutatedRow(cellIndex, value))
+const mistralRefusal = (markdown, source, now) => {
   try {
-    parseMistralDeprecations(html, source)
+    mistralParse(markdown, source, now)
     return ''
   } catch (error) {
     return error.message
   }
 }
-assert(mistralTables.length === 2 && mistralRows.length === 45 && mistralParsed.records.length === 40, 'Mistral parses 45 source rows into 40 unique API records')
-assert(JSON.stringify(mistralParsed.skipped) === JSON.stringify(mistralExpectedSkipped), 'Mistral reports exactly the three rows without API ids, including model names and versions')
-assert(mistralMedium?.announced === '2026-05-22' && mistralMedium?.shutdown === '2026-08-31' && mistralMedium?.replacement_note === 'Mistral lists Mistral Medium 3.5 as the alternative', 'Mistral Medium dates and alternative come from their exact cells')
-assert(mistralParsed.records.some(record => record.id === 'labs-leanstral-2603'), 'Mistral pairs the separate header table without losing the first body row')
-assert(mistralParsed.records.every(record => record.source === PROVIDERS.mistral.deprecationsUrl && !Object.hasOwn(record, 'date_precision') && !Object.hasOwn(record, 'replacement') && !Object.hasOwn(record, 'replacement_options')), 'Mistral emits exact dates and product alternatives only as notes')
-assert(mistralRefusal(mistralTables[0][0]).includes('dangling header'), 'Mistral refuses a header-only table without a following body table')
-assert(mistralRefusal(mistralTables[1][0]).includes('no recognised model tables'), 'Mistral refuses data tables without recognised headers')
-const mistralCombinedTable = mistralTables[0][0].replace('</table>', `${mistralTables[1][1]}</table>`)
-assert(JSON.stringify(parseMistralDeprecations(mistralCombinedTable)) === JSON.stringify(mistralParsed), 'Mistral also recognises headers and data within one table')
-assert(mistralRefusal('').includes('page is empty') && mistralRefusal(mistralHtml, 'not-a-url').includes('source is not a URL'), 'Mistral validates the page and source URL')
-for (const dates of [
-  '5/22/2026', '', '-', '5/22/2026 8/31/2026 extra',
-  '5/22/2026 8/31/2026 9/1/2026', '2026-05-22 2026-08-31',
-  '05/022/2026 08/31/2026', '5/22/26 8/31/26',
-  '0/22/2026 8/31/2026', '13/22/2026 8/31/2026',
-  '5/0/2026 8/31/2026', '2/29/2026 8/31/2026',
-  '5/22/2026 4/31/2026', '8/31/2026 5/22/2026',
+assert(mistralRows.length === 16 && mistralParsed.records.length === 11, 'Mistral Markdown parses 16 lifecycle rows into 11 unique API records')
+assert(JSON.stringify(mistralParsed.skipped) === JSON.stringify(mistralExpectedSkipped), 'Mistral Markdown reports exactly the three rows without API ids by model name')
+assert(mistralMedium?.announced === '2026-05-22' && mistralMedium?.shutdown === '2026-08-31' && mistralMedium?.replacement_note === 'Mistral lists Mistral Medium 3.5 as the alternative', 'Mistral Markdown takes dates and the replacement link text from their exact cells')
+const mistralWritten = mistralParsed.records.find(record => record.id === 'magistral-small-2509')
+assert(mistralWritten?.announced === '2026-04-30' && mistralWritten?.shutdown === '2026-07-31', 'Mistral Markdown reads written dates such as April 30, 2026')
+assert(!Object.hasOwn(mistralParsed.records.find(record => record.id === 'labs-leanstral-1-5') ?? { replacement_note: 1 }, 'replacement_note'), 'Mistral Markdown adds no note for an empty Replacement cell')
+assert(mistralParsed.records.every(record => record.source === PROVIDERS.mistral.deprecationsUrl && !Object.hasOwn(record, 'date_precision') && !Object.hasOwn(record, 'replacement') && !Object.hasOwn(record, 'replacement_options')), 'Mistral emits exact dates and product alternatives only as notes, citing the human page')
+assert(!mistralParsed.records.some(record => ['mistral-large-4', 'mistral-ocr-4-1'].includes(record.id)), 'Mistral overview rows never become lifecycle records')
+assert(mistralRefusal('').includes('page is empty') && mistralRefusal(mistralMarkdown, 'not-a-url').includes('source is not a URL'), 'Mistral validates the page and source URL')
+assert(mistralRefusal(mistralMarkdown, undefined, new Date('invalid')).includes('refresh clock is not a valid date'), 'Mistral refuses an invalid refresh clock')
+assert(mistralRefusal(`<!doctype html><html><body>${mistralMarkdown}</body></html>`) === 'mistral deprecations page is HTML, not Markdown', 'Mistral refuses an HTML body served in place of the Markdown copy')
+assert(mistralRefusal(`${mistralMarkdown}\n\n<table><tr><th>Model</th></tr></table>\n`).includes('HTML table'), 'Mistral refuses an HTML table inside the Markdown')
+const mistralOverviewOnly = mistralLines.slice(0, mistralLines.indexOf('## Deprecated and retired models')).join('\n')
+assert(mistralRefusal(mistralOverviewOnly).includes('no recognised model tables with data rows'), 'Mistral refuses a page with no lifecycle table')
+assert(mistralRefusal(`${mistralOverviewOnly}\n${mistralLifecycleHeader}\n${'| --- '.repeat(8)}|\n`).includes('no recognised model tables with data rows'), 'Mistral refuses a lifecycle table without rows')
+assert(mistralRefusal(mistralMarkdown.replace(/\n(\| Model \| API name \| Status \| Context \| Summary \| Deprecation)/, '\n```\n$1').replace(/\n(\| \[Mistral 7B\]\(\/models\/mistral-7b-0-1\)[^\n]*)/, '\n$1\n```')).includes('no recognised model tables'), 'Mistral ignores a lifecycle table inside fenced code')
+for (const header of [
+  mistralLifecycleHeader.replace('| Replacement |', '| Alternative |'),
+  mistralLifecycleHeader.replace('| Deprecation | Retirement |', '| Retirement | Deprecation |'),
+  mistralLifecycleHeader.replace('| API name |', '| API |'),
+  '| Model | Version | API | Deprecation Retirement | Alternative | Notes | Extra | More |',
 ]) {
-  const reason = mistralRefusal(mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, dates)))
-  assert(reason.includes('mistral-medium-2508') && /date|announcement/.test(reason), `Mistral refuses invalid date content and names the row: ${dates || '(empty)'}`)
+  assert(mistralRefusal(mistralMarkdown.replace(mistralLifecycleHeader, header)).includes('unrecognised or ambiguous header'), `Mistral refuses an unknown lifecycle header: ${header}`)
 }
-const mistralLeapHtml = mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, '02/29/2024 02/29/2024'))
-assert(parseMistralDeprecations(mistralLeapHtml).records.find(record => record.id === 'mistral-medium-2508')?.shutdown === '2024-02-29', 'Mistral accepts real leap days, padded dates, and same-day retirement')
-const mistralInvalidId = mistralRefusal(mistralHtml.replace(mistralMediumRow, mistralMutatedRow(2, 'invalid/api id')))
+assert(mistralRefusal(mistralMarkdown.replace(mistralLifecycleHeader, mistralLifecycleHeader.replace('| Replacement |', '| Replacement | Notes |'))).includes('the header has 9'), 'Mistral refuses an added lifecycle column whose rows do not match it')
+assert(mistralRefusal(mistralMarkdown.replace(mistralOverviewHeader, '| Model | API name | Status | Context | Retirement |')).includes('unrecognised or ambiguous header'), 'Mistral refuses an overview table that gains a lifecycle label')
+assert(mistralRefusal(mistralMarkdown.replace(mistralMediumRow, mistralMediumRow.replace('| Deprecated |', '|'))).includes('the header has 8'), 'Mistral refuses a row with a missing cell instead of shifting its dates')
+for (const status of ['Legacy', 'Active', 'GA', '']) {
+  const reason = mistralRefusal(mistralWithRow(2, status))
+  assert(reason.includes('mistral-medium-2508') && reason.includes('unrecognised status'), `Mistral refuses lifecycle status ${status || '(empty)'} and names the row`)
+}
+assert(mistralParse(mistralWithRow(2, 'Retired')).records.find(record => record.id === 'mistral-medium-2508')?.shutdown === '2026-08-31', 'Mistral accepts a Retired row whose retirement date has passed')
+assert(mistralRefusal(mistralWithRow(2, 'Retired'), undefined, new Date('2026-08-30T23:00:00Z')).includes('is Retired but its retirement date 2026-08-31 is after 2026-08-30'), 'Mistral refuses a Retired row whose retirement date is still ahead')
+const mistralOverviewRow = mistralLines.find(line => line.includes('| `mistral-large-4` |'))
+for (const status of ['Deprecated', 'Retired']) {
+  assert(mistralRefusal(mistralMarkdown.replace(mistralOverviewRow, mistralOverviewRow.replace('| GA |', `| ${status} |`))).includes(`overview lists mistral-large-4 as ${status}`), `Mistral refuses an overview row marked ${status}, which has no dates`)
+}
+for (const [cell, value] of [
+  [5, ''], [6, ''], [5, '-'], [5, '5/22/2026'], [5, '2026-5-22'], [5, '2026-02-30'], [6, '2026-08-31 2026-09-01'],
+  [5, 'May 22, 2026 (tentative)'], [6, 'Smarch 31, 2026'], [6, 'September 31, 2026'], [5, '22 May 2026'], [6, '2026-05-21'],
+]) {
+  const reason = mistralRefusal(mistralWithRow(cell, value))
+  assert(reason.includes('mistral-medium-2508') && /date|announcement/.test(reason), `Mistral refuses ${cell === 5 ? 'deprecation' : 'retirement'} cell ${value || '(empty)'} and names the row`)
+}
+const mistralLeap = mistralMarkdown.replace(mistralMediumRow, mistralMutatedRow(6, 'February 29, 2024', mistralMutatedRow(5, '2024-02-29')))
+assert(mistralParse(mistralLeap).records.find(record => record.id === 'mistral-medium-2508')?.shutdown === '2024-02-29', 'Mistral accepts real leap days, mixed date styles, and same-day retirement')
+const mistralInvalidId = mistralRefusal(mistralWithRow(1, '`invalid/api id`'))
 assert(mistralInvalidId.includes('invalid-model-id') && mistralInvalidId.includes('invalid/api id'), 'Mistral refuses an invalid API id and names the row')
 for (const id of ['voxtral-mini-2507', 'open-mistral-7b']) {
-  assert(mistralRows.filter(row => row.includes(`>${id}<`)).length === 2 && mistralParsed.records.filter(record => record.id === id).length === 1, `Mistral collapses identical source rows for ${id}`)
+  assert(mistralRows.filter(row => row.includes(`| \`${id}\` |`)).length === 2 && mistralParsed.records.filter(record => record.id === id).length === 1, `Mistral collapses identical source rows for ${id}`)
 }
-for (const [cell, value] of [[3, '5/21/2026 8/31/2026'], [3, '5/22/2026 9/1/2026'], [4, 'Another alternative']]) {
-  const duplicateHtml = mistralHtml.replace(mistralMediumRow, `${mistralMediumRow}${mistralMutatedRow(cell, value)}`)
-  assert(mistralRefusal(duplicateHtml).includes('conflicting rows for mistral-medium-2508'), `Mistral refuses duplicate ids with conflicting dates or alternatives: ${value}`)
+for (const [cell, value] of [[5, '2026-05-21'], [6, '2026-09-01'], [7, '[Another alternative](/models/another)']]) {
+  const duplicate = mistralMarkdown.replace(mistralMediumRow, `${mistralMediumRow}\n${mistralMutatedRow(cell, value)}`)
+  assert(mistralRefusal(duplicate).includes('conflicting rows for mistral-medium-2508'), `Mistral refuses duplicate ids with conflicting dates or alternatives: ${value}`)
 }
 assert(parseRefreshArgs(['--provider', 'mistral']).providers.join() === 'mistral' && parseRefreshArgs([]).providers.includes('mistral') && usage().includes('google|mistral|cohere|all'), 'refresh selects Mistral explicitly and through all, and documents it in usage')
+assert(findFixture(fixtures, 'mistral', 'deprecations').endsWith('mistral-deprecations.md'), 'the Mistral deprecations fixture is the Markdown page')
 const mistralNotices = []
 const mistralSources = await loadProviderSources(PROVIDERS.mistral, { fixtures, notice: message => mistralNotices.push(message) })
-assert(mistralNotices.filter(message => message.startsWith('notice: mistral skipped ')).length === 3 && mistralExpectedSkipped.every(row => mistralNotices.some(message => message.includes(row.model) && message.includes(row.version || 'not listed'))), 'Mistral emits one named notice for each skipped row')
+assert(mistralNotices.filter(message => message.startsWith('notice: mistral skipped ')).length === 3 && mistralExpectedSkipped.every(row => mistralNotices.some(message => message.includes(row.model) && message.includes('version not listed'))), 'Mistral emits one named notice for each skipped row')
+{
+  const requested = []
+  const sources = await loadProviderSources(PROVIDERS.mistral, { env: {}, notice: () => {}, now: mistralNow, fetchImpl: async url => { requested.push(url); return new Response(mistralMarkdown) } })
+  assert(
+    PROVIDERS.mistral.deprecationsFetchUrl === `${PROVIDERS.mistral.deprecationsUrl}.md`
+      && JSON.stringify(requested) === JSON.stringify([PROVIDERS.mistral.deprecationsFetchUrl])
+      && JSON.stringify(sources.deprecations) === JSON.stringify(mistralParsed.records)
+      && sources.deprecations.every(record => record.source === PROVIDERS.mistral.deprecationsUrl),
+    'Mistral deprecations are fetched from the Markdown copy and cite the human page',
+  )
+}
 assert(parseModelsResponse(mistralModels, 'mistral').length === 3 && !parseModelsResponse(mistralModels, 'mistral').includes('mistral-medium-latest'), 'the generic models parser returns canonical ids without flattening endpoint aliases')
 const mistralSeed = { spec: 'model-eol/0.1', publisher: 'mistral', generated: '2026-09-08T00:00:00Z', source: PROVIDERS.mistral.deprecationsUrl, models: [] }
 const mistralMerged = mergeFeed(mistralSeed, { ...mistralSources, provider: PROVIDERS.mistral })
-assert(mistralSeed.models.length === 0 && mistralMerged.feed.models.length === 40 && mistralMerged.unconfirmedIds.length === 0 && validateFeed(mistralMerged.feed).length === 0, 'Mistral generates a valid feed from an empty committed seed')
+assert(mistralSeed.models.length === 0 && mistralMerged.feed.models.length === 11 && mistralMerged.unconfirmedIds.length === 0 && validateFeed(mistralMerged.feed).length === 0, 'Mistral generates a valid feed from an empty committed seed')
 assert(mistralMerged.feed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest') && !mistralMerged.feed.models.some(model => model.id === 'mistral-medium-latest'), 'Mistral attaches endpoint aliases to the dated canonical record')
 const mistralAliasSeed = { ...mistralSeed, models: [{ id: 'mistral-medium-latest' }, { id: 'mistral-medium-2508' }] }
 let mistralCanonicalAliasReason = ''
@@ -596,78 +708,53 @@ reviewTest('Review F10: A shutdown section without replacement guidance clears e
   strictAssert.equal(model.shutdown, '2026-10-01')
   strictAssert.ok(!['replacement', 'replacement_options', 'replacement_note'].some(field => Object.hasOwn(model, field)))
 })
-const mistralSampleTable = '<table><tr><td>Sample</td><td>1</td><td>sample-model</td><td>5/22/2026 8/31/2026</td><td>Sample 2</td></tr></table>'
-const mistralConfirmingTable = '<table><tr><td>Sample</td><td>1</td><td>sample-model</td><td>5/22/2026 8/31/2026</td><td>Sample 2</td></tr><tr><td>Mistral Medium 3.1</td><td>25.08</td><td>mistral-medium-2508</td><td>5/22/2026 8/31/2026</td><td>Mistral Medium 3.5</td></tr></table>'
-for (let level = 1; level <= 6; level++) {
-  reviewTest(`Review F8: Mistral refuses header pairing across h${level}`, () => {
-    const page = `${mistralTables[0][0]}<h${level}>Unrelated</h${level}>${mistralSampleTable}${mistralTables[1][0]}`
-    strictAssert.match(mistralRefusal(page), /dangling header/i)
-  })
-}
-reviewTest('Review F8: Mistral refuses a dangling trailing header after valid records', () => {
-  strictAssert.match(mistralRefusal(mistralHtml + mistralTables[0][0]), /dangling header/i)
+const mistralTable = (rows, header = mistralLifecycleHeader) => `${header}\n${'| --- '.repeat(header.split('|').length - 2)}|\n${rows.join('\n')}\n`
+const mistralSampleRow = '| [Sample](/models/sample) | `sample-model` | Deprecated | 32k | A sample model. | 2026-05-22 | 2026-08-31 | [Sample 2](/models/sample-2) |'
+const mistralConfirmingRow = '| [Mistral Medium 3.1](/models/mistral-medium-3-1-25-08) | `mistral-medium-2508` | Deprecated | 128k | A sample model. | 2026-05-22 | 2026-08-31 | [Mistral Medium 3.5](/models/mistral-medium-3-5-26-04) |'
+reviewTest('Markdown source: Mistral refuses a lifecycle row cut off from its table by a blank line', () => {
+  strictAssert.match(mistralRefusal(mistralMarkdown.replace(`\n${mistralMediumRow}`, `\n\n${mistralMediumRow}`)), /table row outside a table/)
 })
-reviewTest('Review F8: Mistral consumes a pending header only once', () => {
-  strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + mistralSampleTable), mistralParsed)
+reviewTest('Markdown source: Mistral reads a second lifecycle table and merges identical rows across tables', () => {
+  strictAssert.deepEqual(mistralParse(`${mistralMarkdown}\n\n## More\n\n${mistralTable([mistralSampleRow, mistralMediumRow])}`).records, [...mistralParsed.records, { id: 'sample-model', announced: '2026-05-22', shutdown: '2026-08-31', source: PROVIDERS.mistral.deprecationsUrl, replacement_note: 'Mistral lists Sample 2 as the alternative' }])
 })
-reviewTest('Review F8: Mistral requires the immediately next table to contain body rows', () => {
-  for (const table of ['<table></table>', mistralTables[0][0], '<table><tr><th>Feature</th><th>Supported</th></tr><tr><td>A</td><td>Yes</td></tr></table>']) {
-    strictAssert.match(mistralRefusal(mistralTables[0][0] + table + mistralTables[1][0]), /dangling header/i)
-  }
-})
-const mistralRetirementGuide = '<table><tr><td>Mistral X</td><td>1</td><td>mistral-x</td><td>1/1/2026 12/1/2026</td><td>See retirement guide</td></tr></table>'
-reviewTest('Third pass F4: Mistral preserves retirement guidance in a body table under a pending header', () => {
-  const parsed = parseMistralDeprecations(mistralTables[0][0] + mistralRetirementGuide)
-  strictAssert.deepEqual(parsed, {
+const mistralRetirementGuide = '| Mistral X | `mistral-x` | Deprecated | 32k | A sample model. | 2026-01-01 | 2026-12-01 | See retirement guide |'
+reviewTest('Third pass F4: Mistral preserves plain retirement guidance as a note', () => {
+  strictAssert.deepEqual(mistralParse(mistralTable([mistralRetirementGuide])), {
     records: [{ id: 'mistral-x', announced: '2026-01-01', shutdown: '2026-12-01', source: PROVIDERS.mistral.deprecationsUrl, replacement_note: 'Mistral lists See retirement guide as the alternative' }],
     skipped: [],
   })
-  strictAssert.deepEqual(parseMistralDeprecations(mistralTables[0][0].replace('</table>', mistralRetirementGuide.slice(7))), parsed)
 })
-for (const firstRow of ['<tr><th>Feature</th><th>Supported</th></tr>', '<tr><td>Feature</td><td>Supported</td></tr>']) {
-  reviewTest(`Third pass F4: Mistral ignores lifecycle words in unrelated body rows after ${firstRow}`, () => {
-    const unrelated = mistralRetirementGuide.replace('<table>', `<table>${firstRow}`)
-    strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + unrelated), mistralParsed)
-  })
-}
-const mistralDriftedTable = `<table><tr><th>Model</th><th>Version</th><th>API</th><th>Deprecation date / Retirement date</th><th>Alternative</th></tr>${mistralSampleTable.slice(7, -8)}</table>`
-for (const kind of ['mixed', 'td']) {
-  for (const dateLabel of ['Deprecation Retirement', 'Deprecation date / Retirement date']) {
-    reviewTest(`Second pass F6: Mistral rejects a second lifecycle header using ${kind} cells and ${dateLabel}`, () => {
-      let table = mistralDriftedTable.replace('Deprecation date / Retirement date', dateLabel).replace('<th>API</th>', '<td>API</td>')
-      if (kind === 'td') table = table.replace(/<th>/g, '<td>').replace(/<\/th>/g, '</td>')
-      const reason = mistralRefusal(mistralHtml + table)
-      strictAssert.match(reason, /header/)
-      strictAssert.ok(reason.includes(`Model | Version | API | ${dateLabel} | Alternative`))
-    })
-  }
-}
-reviewTest('Review F9: Mistral refuses drifted lifecycle headers alongside valid tables', () => {
-  const reason = mistralRefusal(mistralHtml + mistralDriftedTable)
-  strictAssert.match(reason, /header/i)
-  strictAssert.ok(reason.includes('Deprecation date / Retirement date'))
+reviewTest('Third pass F4: Mistral ignores lifecycle words in the rows of an unrelated table', () => {
+  const unrelated = mistralTable(['| Mistral X | See retirement guide |'], '| Feature | Supported |')
+  strictAssert.deepEqual(mistralParse(`${mistralMarkdown}\n\n${unrelated}`), mistralParsed)
+})
+reviewTest('Review F9: Mistral refuses a drifted lifecycle header alongside valid tables and names it', () => {
+  const drifted = mistralLifecycleHeader.replace('| Deprecation | Retirement |', '| Deprecation date | Retirement date |')
+  const reason = mistralRefusal(`${mistralMarkdown}\n\n${mistralTable([mistralSampleRow], drifted)}`)
+  strictAssert.match(reason, /unrecognised or ambiguous header/)
+  strictAssert.ok(reason.includes('Deprecation date | Retirement date'))
 })
 reviewTest('Review F9: Mistral requires the exact lifecycle header set', () => {
   for (const labels of [
-    ['Model*', 'Version', 'API', 'Deprecation Retirement', 'Alternative'],
-    ['Model', 'Version'],
+    ['Model', 'API name'],
     ['Retirement date'],
-    ['Model', 'Version', 'API', 'Deprecation Retirement', 'Alternative', 'Feature'],
-    ['Model', 'Version', 'API', 'Deprecation Retirement', 'Alternative', 'Model'],
+    ['Model', 'Version', 'API', 'Deprecation Retirement', 'Alternative'],
+    ['Model', 'API name', 'Status', 'Context', 'Summary', 'Deprecation', 'Retirement', 'Replacement', 'Feature'],
+    ['Model', 'API name', 'Status', 'Context', 'Summary', 'Deprecation', 'Retirement', 'Replacement', 'Model'],
   ]) {
-    const table = `<table><tr>${labels.map(label => `<th>${label}</th>`).join('')}</tr></table>`
-    strictAssert.match(mistralRefusal(mistralHtml + table), /header/i)
+    const header = `| ${labels.join(' | ')} |`
+    strictAssert.match(mistralRefusal(`${mistralMarkdown}\n\n${mistralTable([`|${' x |'.repeat(labels.length)}`], header)}`), /header/i, header)
   }
 })
 reviewTest('Review F9: Mistral skips unrelated headers', () => {
-  strictAssert.deepEqual(parseMistralDeprecations(mistralHtml + '<table><tr><th>Feature</th><th>Supported</th></tr><tr><td>A</td><td>Yes</td></tr></table>'), mistralParsed)
+  strictAssert.deepEqual(mistralParse(`${mistralMarkdown}\n\n${mistralTable(['| A | Yes |'], '| Feature | Supported |')}`), mistralParsed)
 })
 for (const canonical of ['mistral-medium-2608', 'mistral-medium-2508']) {
   const sources = await loadProviderSources(PROVIDERS.mistral, {
     env: { MISTRAL_API_KEY: 'fixture-key' }, notice: () => {},
     fetchImpl: async url => ({ ok: true, text: async () => url === PROVIDERS.mistral.modelsUrl
       ? JSON.stringify({ object: 'list', data: [{ id: canonical, aliases: ['mistral-medium-latest'] }] })
-      : mistralTables[0][0] + (canonical === 'mistral-medium-2508' ? mistralConfirmingTable : mistralSampleTable) }),
+      : mistralTable(canonical === 'mistral-medium-2508' ? [mistralSampleRow, mistralConfirmingRow] : [mistralSampleRow]) }),
   })
   for (const fields of [
     {},
@@ -2939,8 +3026,8 @@ const boundedPublishers = {
   openai: { env: { OPENAI_API_KEY: 'fixture-key' }, html: openaiMarkdown, credential: 'Authorization' },
   anthropic: { env: { ANTHROPIC_API_KEY: 'fixture-key' }, html: anthropicMarkdown, credential: 'x-api-key' },
   google: { env: { GEMINI_API_KEY: 'fixture-key' }, html: googleMarkdown, credential: 'x-goog-api-key' },
-  mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralHtml, credential: 'Authorization' },
-  cohere: { env: { COHERE_API_KEY: 'fixture-key' }, html: cohereHtml, credential: 'Authorization' },
+  mistral: { env: { MISTRAL_API_KEY: 'fixture-key' }, html: mistralMarkdown, credential: 'Authorization' },
+  cohere: { env: { COHERE_API_KEY: 'fixture-key' }, html: cohereMarkdown, credential: 'Authorization' },
 }
 const isModelsUrl = (publisher, url) => {
   const expected = new URL(PROVIDERS[publisher].modelsUrl)
@@ -3080,7 +3167,7 @@ const cohereAuthenticated = await loadProviderSources(PROVIDERS.cohere, {
   notice: message => cohereLiveNotices.push(message),
   fetchImpl: async (url, options) => {
     cohereRequests.push({ url: new URL(url), headers: options.headers })
-    if (url === PROVIDERS.cohere.deprecationsUrl) return responseFor(cohereHtml)
+    if (url === PROVIDERS.cohere.deprecationsFetchUrl) return responseFor(cohereMarkdown)
     if (new URL(url).searchParams.get('page_token')) {
       return responseFor(JSON.stringify({ models: [
         { name: 'command-a-03-2025', is_deprecated: false },
@@ -3102,10 +3189,10 @@ assert(cohereAuthenticated.undatedDeprecatedIds.join() === 'cohere-live-undated'
 const cohereKeylessRequests = []
 const cohereKeyless = await loadProviderSources(PROVIDERS.cohere, {
   env: {}, notice: () => {},
-  fetchImpl: async url => { cohereKeylessRequests.push(url); return responseFor(cohereHtml) },
+  fetchImpl: async url => { cohereKeylessRequests.push(url); return responseFor(cohereMarkdown) },
 })
 const cohereKeylessFeed = mergeFeed(cohereMerged.feed, { ...cohereKeyless, provider: PROVIDERS.cohere }).feed
-assert(cohereKeyless.currentIds === null && !cohereKeyless.endpointAvailable && cohereKeylessRequests.join() === PROVIDERS.cohere.deprecationsUrl && cohereKeylessFeed.models.length === cohereMerged.feed.models.length && cohereKeylessFeed.models.find(model => model.id === 'command-r-03-2024')?.aliases?.join() === 'command-r', 'keyless Cohere refresh uses only the page and preserves committed models and aliases')
+assert(cohereKeyless.currentIds === null && !cohereKeyless.endpointAvailable && cohereKeylessRequests.join() === PROVIDERS.cohere.deprecationsFetchUrl && cohereKeylessFeed.models.length === cohereMerged.feed.models.length && cohereKeylessFeed.models.find(model => model.id === 'command-r-03-2024')?.aliases?.join() === 'command-r', 'keyless Cohere refresh uses only the page and preserves committed models and aliases')
 for (const mode of ['http', 'malformed', 'cycle', 'cap']) {
   let calls = 0
   let reason = ''
@@ -3135,7 +3222,7 @@ const mistralAuthenticated = await loadProviderSources(PROVIDERS.mistral, {
   notice: () => {},
   fetchImpl: async (url, options) => {
     mistralRequests.push({ url, headers: options.headers })
-    return responseFor(url === PROVIDERS.mistral.modelsUrl ? JSON.stringify(mistralEndpointBody) : mistralHtml)
+    return responseFor(url === PROVIDERS.mistral.modelsUrl ? JSON.stringify(mistralEndpointBody) : mistralMarkdown)
   },
 })
 assert(mistralRequests.length === 2 && mistralRequests[0].headers.Authorization === 'Bearer fixture-key' && !Object.hasOwn(mistralRequests[1].headers, 'Authorization') && mistralRequests.every(request => request.headers['accept-language'] === 'en'), 'Mistral sends Bearer auth only to its models endpoint')
@@ -3148,11 +3235,11 @@ const mistralKeyless = await loadProviderSources(PROVIDERS.mistral, {
   notice: () => {},
   fetchImpl: async url => {
     mistralKeylessRequests.push(url)
-    return responseFor(mistralHtml)
+    return responseFor(mistralMarkdown)
   },
 })
 const mistralKeylessFeed = mergeFeed(mistralMerged.feed, { ...mistralKeyless, provider: PROVIDERS.mistral }).feed
-assert(mistralKeyless.currentIds === null && !mistralKeyless.endpointAvailable && mistralKeylessRequests.join() === PROVIDERS.mistral.deprecationsUrl && mistralKeylessFeed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest'), 'keyless Mistral refresh reads only the public page and preserves committed aliases')
+assert(mistralKeyless.currentIds === null && !mistralKeyless.endpointAvailable && mistralKeylessRequests.join() === PROVIDERS.mistral.deprecationsFetchUrl && mistralKeylessFeed.models.find(model => model.id === 'mistral-medium-2508')?.aliases?.includes('mistral-medium-latest'), 'keyless Mistral refresh reads only the public page and preserves committed aliases')
 for (const aliases of ['not-an-array', ['bad alias'], [42]]) {
   let reason = ''
   try {
@@ -3386,7 +3473,7 @@ assert(cohereCheck.stderr.includes('models endpoint flags cohere-fixture-undated
 const cohereCorruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-cohere-corrupt-'))
 try {
   fs.writeFileSync(path.join(cohereCorruptDir, 'cohere-models.json'), cohereModels)
-  fs.writeFileSync(path.join(cohereCorruptDir, 'cohere-deprecations.html'), cohereUnknown)
+  fs.writeFileSync(path.join(cohereCorruptDir, 'cohere-deprecations.md'), cohereMdUnknown)
   const out = path.join(cohereCorruptDir, 'out')
   const invalid = run(['--provider', 'cohere', '--fixtures', cohereCorruptDir, '--out', out])
   assert(invalid.code === 1 && invalid.err.includes('2026-04-04: Embed') && !fs.existsSync(out), 'Cohere refuses unknown page shapes before writing any feed')
@@ -3400,7 +3487,7 @@ assert(mistralCheck.stderr.split('\n').filter(line => line.startsWith('notice: m
 const mistralCorruptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-eol-refresh-mistral-corrupt-'))
 try {
   fs.writeFileSync(path.join(mistralCorruptDir, 'mistral-models.json'), mistralModels)
-  fs.writeFileSync(path.join(mistralCorruptDir, 'mistral-deprecations.html'), mistralHtml.replace(mistralMediumRow, mistralMutatedRow(3, '5/22/2026')))
+  fs.writeFileSync(path.join(mistralCorruptDir, 'mistral-deprecations.md'), mistralWithRow(5, '5/22/2026'))
   const out = path.join(mistralCorruptDir, 'out')
   const invalid = run(['--provider', 'mistral', '--fixtures', mistralCorruptDir, '--out', out])
   assert(invalid.code === 1 && invalid.err.includes('mistral-medium-2508') && !fs.existsSync(out), 'Mistral refuses malformed dates before writing any feed')
