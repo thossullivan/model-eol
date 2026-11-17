@@ -1,4 +1,4 @@
-// Strict reader for GitHub-flavored Markdown pipe tables in provider documentation pages.
+// Strict Markdown line preparation, GFM pipe tables, and block helpers for provider documentation pages.
 
 export const escapeHtml = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
@@ -40,7 +40,7 @@ function stripFrontMatter(text) {
   return match ? blankKeepingLines(match[0]) + text.slice(match[0].length) : text
 }
 
-function stripCommentsKeepingLines(text) {
+export function stripCommentsKeepingLines(text) {
   let output = text
   const pattern = /<!--[\s\S]*?--!?>/g
   while (pattern.test(output)) output = output.replace(pattern, blankKeepingLines)
@@ -101,15 +101,48 @@ export function splitPipeRow(line) {
 
 const DELIMITER_ROW = /^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/
 const isDelimiterRow = line => line.includes('|') && DELIMITER_ROW.test(line.trim())
-const ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
+export const MARKDOWN_ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
+export const MARKDOWN_THEMATIC_BREAK = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/
 const BLOCK_START = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|[-*+][ \t]|\d{1,9}[.)][ \t]|<|(?:[-*_][ \t]*){3,}$)/
-const unquote = line => line.replace(/^\s*(?:>\s?)+/, '')
+
+/** A body is HTML when its first markup, after any leading comments, is a tag. */
+export const isHtmlBody = text => /^\s*(?:<!--[\s\S]*?--!?>\s*)*</.test(String(text).replace(/^\uFEFF/, ''))
+
+/** True for a line that turns the paragraph above it into a setext heading. */
+export const isSetextUnderline = line => /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)
+
+/** Index of the first line with a raw HTML table tag, or -1. */
+export const htmlTableLineIndex = lines => lines.findIndex(line => /<table\b/i.test(line))
+
+/** An ATX heading line as { level, text } with the text untrimmed, or undefined. */
+export function markdownHeading(line) {
+  const match = line.match(MARKDOWN_ATX_HEADING)
+  return match ? { level: match[1].length, text: match[2] ?? '' } : undefined
+}
+
+export const headingHtml = ({ level }, html) => `<h${level}>${html}</h${level}>`
+
+/** Source lines with BOM, CRLF, front matter, fenced code, and comments blanked so line numbers survive; quote markers stripped unless unquote is false. */
+export function markdownLines(markdown, { unquote = true } = {}) {
+  const source = stripCommentsKeepingLines(stripFencedCodeBlocks(stripFrontMatter(markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n'))))
+  const lines = source.split('\n')
+  return unquote ? lines.map(line => line.replace(/^\s*(?:>\s?)+/, '')) : lines
+}
 
 /** Every GFM pipe table in document order; throws on any table whose rows do not all match the header's cell count. */
 export function markdownPipeTables(markdown) {
+  return markdownPage(markdown).tables
+}
+
+/** The lines of markdownLines plus every pipe table, also keyed by the index of its header line. */
+export function markdownPage(markdown) {
   if (typeof markdown !== 'string') throw new Error('markdown must be a string')
-  const source = stripCommentsKeepingLines(stripFencedCodeBlocks(stripFrontMatter(markdown.replace(/^﻿/, '').replace(/\r\n?/g, '\n'))))
-  const lines = source.split('\n').map(unquote)
+  const lines = markdownLines(markdown)
+  const tables = pipeTablesInLines(lines)
+  return { lines, tables, tableAt: new Map(tables.map(table => [table.line - 1, table])) }
+}
+
+function pipeTablesInLines(lines) {
   const tables = []
   let heading
   for (let index = 0; index < lines.length; index++) {
@@ -117,7 +150,7 @@ export function markdownPipeTables(markdown) {
     const number = index + 1
     if (!line.trim()) continue
     if (isDelimiterRow(line)) throw new Error(`line ${number}: table delimiter row has no header row`)
-    const atx = line.match(ATX_HEADING)
+    const atx = line.match(MARKDOWN_ATX_HEADING)
     if (atx) {
       heading = (atx[2] ?? '').trim()
       continue

@@ -2,10 +2,18 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fetchBoundedBody } from './fetch.mjs'
 import {
+  MARKDOWN_ATX_HEADING,
   MARKDOWN_ESCAPABLE,
+  MARKDOWN_THEMATIC_BREAK,
   escapeHtml,
+  headingHtml,
+  htmlTableLineIndex,
+  isHtmlBody,
+  isSetextUnderline,
   markdownCellHtml,
+  markdownHeading,
   markdownInlineText,
+  markdownPage,
   markdownPipeTableToHtml,
   markdownPipeTables,
   stripFencedCodeBlocks,
@@ -782,34 +790,23 @@ export function parseOpenAIDeprecations(html, sourceUrl = PROVIDERS.openai.depre
   return [...unique.values()]
 }
 
-const OPENAI_MARKDOWN_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
-
-// Same blanking as markdownPipeTables, so heading line numbers line up with its table line numbers.
-function openAIMarkdownLines(markdown) {
-  const blank = match => match.replace(/[^\n]/g, '')
-  const text = markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
-  const frontMatter = text.match(/^---[ \t]*\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?=\n|$)/)
-  let source = stripFencedCodeBlocks(frontMatter ? blank(frontMatter[0]) + text.slice(frontMatter[0].length) : text)
-  const comment = /<!--[\s\S]*?--!?>/g
-  while (comment.test(source)) source = source.replace(comment, blank)
-  return source.split('\n').map(line => line.replace(/^\s*(?:>\s?)+/, ''))
+function sourceMarkdownPage(markdown, label) {
+  try {
+    return markdownPage(markdown)
+  } catch (error) {
+    throw new Error(`${label}: ${error.message}`)
+  }
 }
 
 /** Convert OpenAI's Markdown deprecations page to the headings and tables that parseOpenAIDeprecations reads. */
 export function openAIMarkdownToHtml(markdown) {
-  let tables
-  try {
-    tables = markdownPipeTables(markdown)
-  } catch (error) {
-    throw new Error(`openai deprecations page: ${error.message}`)
-  }
-  const lines = openAIMarkdownLines(markdown)
-  const rawTable = lines.findIndex(line => /<table\b/i.test(line))
+  const { lines, tables } = sourceMarkdownPage(markdown, 'openai deprecations page')
+  const rawTable = htmlTableLineIndex(lines)
   if (rawTable >= 0) throw new Error(`openai deprecations page: line ${rawTable + 1}: HTML table in the Markdown source`)
   const blocks = tables.map(table => ({ line: table.line, html: markdownPipeTableToHtml(table) }))
   for (const [index, line] of lines.entries()) {
-    const heading = line.match(OPENAI_MARKDOWN_HEADING)
-    if (heading) blocks.push({ line: index + 1, html: `<h${heading[1].length}>${markdownCellHtml((heading[2] ?? '').trim())}</h${heading[1].length}>` })
+    const heading = markdownHeading(line)
+    if (heading) blocks.push({ line: index + 1, html: headingHtml(heading, markdownCellHtml(heading.text.trim())) })
   }
   return blocks.sort((a, b) => a.line - b.line).map(block => block.html).join('\n')
 }
@@ -1006,21 +1003,7 @@ const ANTHROPIC_COMPONENT_TAGS = new Set(['Note', 'Warning', 'Tip', 'Info'])
 const ANTHROPIC_LEADING_TAG = /^<\/?([A-Za-z][\w.-]*)(?=[\s/>])[^<>]*>/
 const ANTHROPIC_TRAILING_TAG = /<\/([A-Za-z][\w.-]*)\s*>$/
 const ANTHROPIC_HTML_STRUCTURE = /<\/?(?:table|thead|tbody|tr|td|th|h[1-6])(?=[\s/>])/i
-const ANTHROPIC_ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
 const ANTHROPIC_LIFECYCLE_LABEL = /\bmodels?\b|retire|deprecat|shutdown|sunset/i
-
-const blankLines = text => text.replace(/[^\n]/g, '')
-
-/** Source lines with front matter, fenced code, and comments blanked, numbered as markdownPipeTables numbers them. */
-export function anthropicMarkdownLines(markdown) {
-  let text = markdown.replace(/^﻿/, '').replace(/\r\n?/g, '\n')
-  const frontMatter = text.match(/^---[ \t]*\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?=\n|$)/)
-  if (frontMatter) text = blankLines(frontMatter[0]) + text.slice(frontMatter[0].length)
-  text = stripFencedCodeBlocks(text)
-  const comment = /<!--[\s\S]*?--!?>/g
-  while (comment.test(text)) text = text.replace(comment, blankLines)
-  return text.split('\n').map(line => line.replace(/^\s*(?:>\s?)+/, ''))
-}
 
 function anthropicProse(line, where) {
   let text = line.trim()
@@ -1045,8 +1028,7 @@ function assertAnthropicMarkdownTable(table, html, where) {
 /** Convert the Markdown copy of the deprecations page to headings, prose, and tables in HTML. */
 export function anthropicMarkdownToHtml(markdown) {
   if (typeof markdown !== 'string' || !markdown.trim()) throw new Error('anthropic deprecations page is empty')
-  const tables = new Map(markdownPipeTables(markdown).map(table => [table.line - 1, table]))
-  const lines = anthropicMarkdownLines(markdown)
+  const { lines, tableAt: tables } = markdownPage(markdown)
   const output = []
   let where = 'before the first heading'
   let previous = ''
@@ -1061,10 +1043,10 @@ export function anthropicMarkdownToHtml(markdown) {
       continue
     }
     const line = lines[index]
-    const heading = line.match(ANTHROPIC_ATX_HEADING)
+    const heading = markdownHeading(line)
     if (heading) {
-      const text = anthropicProse(heading[2] ?? '', where)
-      output.push(`<h${heading[1].length}>${markdownCellHtml(text)}</h${heading[1].length}>`)
+      const text = anthropicProse(heading.text, where)
+      output.push(headingHtml(heading, markdownCellHtml(text)))
       where = `under "${plainText(markdownCellHtml(text))}"`
     } else if (/^ {0,3}=+[ \t]*$/.test(line) || (/^ {0,3}-{2,}[ \t]*$/.test(line) && previous)) {
       throw new Error(`anthropic deprecations page has a setext heading ${where}: ${previous || line.trim()}`)
@@ -1417,7 +1399,6 @@ const MISTRAL_OVERVIEW_HEADER = ['model', 'api name', 'status', 'context', 'summ
 const MISTRAL_LIFECYCLE_HEADER = [...MISTRAL_OVERVIEW_HEADER, 'deprecation', 'retirement', 'replacement']
 const MISTRAL_LIFECYCLE_STATUSES = ['deprecated', 'retired']
 const MISTRAL_HUMAN_DATE = new RegExp(`^(?:${HUMAN_DATE_PATTERN.source})$`, 'i')
-const isHtmlBody = text => /^\s*(?:<!--[\s\S]*?--!?>\s*)*</.test(text.replace(/^\uFEFF/, ''))
 
 const markdownCellPlainText = cell => plainText(markdownCellHtml(cell))
 
@@ -1763,26 +1744,18 @@ export function parseCohereDeprecations(html, sourceUrl = PROVIDERS.cohere.depre
 }
 
 const MARKDOWN_LIST_ITEM = /^( *)([*+-]|\d{1,9}[.)])(?:( +)(.*))?$/
-const MARKDOWN_THEMATIC_BREAK = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/
 const MARKDOWN_HTML_BLOCK = /^ {0,3}<\/?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)/
 
 /** Render Cohere's Markdown page as the headings, paragraphs, lists, and tables that parseCohereDeprecations reads. */
 export function cohereMarkdownToHtml(markdown) {
   if (typeof markdown !== 'string') throw new Error('cohere deprecations page must be a string')
   if (isHtmlBody(markdown)) throw new Error('cohere deprecations page is HTML, not Markdown')
-  let tables
-  try {
-    tables = markdownPipeTables(markdown)
-  } catch (error) {
-    throw new Error(`cohere deprecations page: ${error.message}`)
-  }
-  const lines = openAIMarkdownLines(markdown)
+  const { lines, tableAt } = sourceMarkdownPage(markdown, 'cohere deprecations page')
   const fail = (index, message) => {
     throw new Error(`cohere deprecations page: line ${index + 1}: ${message}`)
   }
-  const rawTable = lines.findIndex(line => /<table\b/i.test(line))
+  const rawTable = htmlTableLineIndex(lines)
   if (rawTable >= 0) fail(rawTable, 'HTML table in the Markdown source')
-  const tableAt = new Map(tables.map(table => [table.line - 1, table]))
   const html = []
   const lists = []
   let paragraph = []
@@ -1822,7 +1795,7 @@ export function cohereMarkdownToHtml(markdown) {
       index += table.rows.length + 1
       continue
     }
-    if (paragraph.length && /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)) fail(index, 'setext heading; headings must use #')
+    if (paragraph.length && isSetextUnderline(line)) fail(index, 'setext heading; headings must use #')
     if (!lists.length && !paragraph.length && indent.length >= 4) fail(index, 'indented code block')
     const item = MARKDOWN_THEMATIC_BREAK.test(line) ? undefined : line.match(MARKDOWN_LIST_ITEM)
     if (item) {
@@ -1854,7 +1827,7 @@ export function cohereMarkdownToHtml(markdown) {
     if (lists.length) {
       const { content } = lists.at(-1)
       const inner = indent.length >= content ? line.slice(content) : line
-      if ([OPENAI_MARKDOWN_HEADING, MARKDOWN_THEMATIC_BREAK, MARKDOWN_HTML_BLOCK].some(pattern => pattern.test(inner))) {
+      if ([MARKDOWN_ATX_HEADING, MARKDOWN_THEMATIC_BREAK, MARKDOWN_HTML_BLOCK].some(pattern => pattern.test(inner))) {
         if (inner !== line) fail(index, 'unsupported block inside a list item')
         closeLists(0)
       } else {
@@ -1862,10 +1835,10 @@ export function cohereMarkdownToHtml(markdown) {
         continue
       }
     }
-    const heading = line.match(OPENAI_MARKDOWN_HEADING)
+    const heading = markdownHeading(line)
     if (heading) {
       flushParagraph()
-      html.push(`<h${heading[1].length}>${markdownCellHtml((heading[2] ?? '').trim())}</h${heading[1].length}>`)
+      html.push(headingHtml(heading, markdownCellHtml(heading.text.trim())))
     } else if (MARKDOWN_THEMATIC_BREAK.test(line)) {
       flushParagraph()
       html.push('<hr>')

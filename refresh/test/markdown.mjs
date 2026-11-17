@@ -3,7 +3,20 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import strictAssert from 'node:assert/strict'
-import { markdownCellHtml, markdownPipeTables, markdownPipeTableToHtml, splitPipeRow } from '../markdown.mjs'
+import {
+  headingHtml,
+  htmlTableLineIndex,
+  isHtmlBody,
+  isSetextUnderline,
+  MARKDOWN_THEMATIC_BREAK,
+  markdownCellHtml,
+  markdownHeading,
+  markdownLines,
+  markdownPage,
+  markdownPipeTables,
+  markdownPipeTableToHtml,
+  splitPipeRow,
+} from '../markdown.mjs'
 import { htmlTableShapes, pipeTableShapes } from '../shapes.mjs'
 
 const fixtureDir = path.join(import.meta.dirname, 'fixture', 'pipe-tables')
@@ -161,6 +174,33 @@ test('every recorded Markdown source page parses, and its HTML rendering has the
     strictAssert.ok(tables.every(table => table.heading && table.rows.length && table.rows.every(row => row.length === table.header.length)), name)
     strictAssert.deepEqual(htmlTableShapes(tables.map(table => markdownPipeTableToHtml(table)).join('\n')), pipeTableShapes(markdown), name)
   }
+})
+
+test('markdownPage lines keep the table reader\'s line numbers through BOM, CRLF, front matter, fences, comments, and quotes', () => {
+  const markdown = '\uFEFF---\r\ntitle: x\r\n---\r\n```\r\n# fenced\r\n```\r\n<!-- a\r\nb -->\r\n> ## Quoted\r\n> | A |\r\n> | - |\r\n> | 1 |\r\n'
+  const page = markdownPage(markdown)
+  strictAssert.deepEqual(page.lines, ['', '', '', '', '', '', '', '', '## Quoted', '| A |', '| - |', '| 1 |', ''])
+  strictAssert.deepEqual(page.tables, markdownPipeTables(markdown))
+  strictAssert.deepEqual([...page.tableAt.keys()], [9])
+  strictAssert.equal(page.tableAt.get(9).heading, 'Quoted')
+  strictAssert.deepEqual(markdownLines('> # Q\n> text', { unquote: false }), ['> # Q', '> text'])
+  strictAssert.throws(() => markdownPage(1), /markdown must be a string/)
+})
+
+test('shared block checks match ATX headings, setext underlines, thematic breaks, raw tables, and HTML bodies', () => {
+  strictAssert.deepEqual(markdownHeading('  ## Title ##  '), { level: 2, text: 'Title' })
+  strictAssert.deepEqual(markdownHeading('#'), { level: 1, text: '' })
+  strictAssert.equal(markdownHeading('#Title'), undefined)
+  strictAssert.equal(markdownHeading('    # code'), undefined)
+  strictAssert.equal(headingHtml({ level: 3 }, 'x'), '<h3>x</h3>')
+  strictAssert.ok(['===', '  -', '---  '].every(isSetextUnderline))
+  strictAssert.ok(!['    ---', '=-', '- x'].some(isSetextUnderline))
+  strictAssert.ok(['***', ' - - -', '___'].every(line => MARKDOWN_THEMATIC_BREAK.test(line)))
+  strictAssert.ok(!['-*-', '--', '    ***'].some(line => MARKDOWN_THEMATIC_BREAK.test(line)))
+  strictAssert.equal(htmlTableLineIndex(['a', 'x <TABLE class="y">', '<table>']), 1)
+  strictAssert.equal(htmlTableLineIndex(['<tables>']), -1)
+  strictAssert.ok(isHtmlBody('\uFEFF\n<!-- a --><!DOCTYPE html>'))
+  strictAssert.ok(!isHtmlBody('# Models\n<table></table>'))
 })
 
 if (failures) {

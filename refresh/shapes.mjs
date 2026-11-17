@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { parseCliArgs } from '../lib/cli.mjs'
 import { DISTRIBUTORS, findDistributorFixture } from './distributors.mjs'
 import { fetchBoundedBody } from './fetch.mjs'
-import { markdownCellHtml, markdownInlineText, markdownPipeTables, stripFencedCodeBlocks } from './markdown.mjs'
+import { isHtmlBody, markdownCellHtml, markdownInlineText, markdownPipeTables, stripFencedCodeBlocks } from './markdown.mjs'
 import {
   PROVIDERS,
   findFixture,
@@ -151,7 +151,7 @@ export function labelledListShapes(markdown) {
 
 /** A body is HTML when its first markup, after any leading comments, is a tag; anything else is Markdown. */
 export function sourceFormat(body) {
-  return /^\s*(?:<!--[\s\S]*?--!?>\s*)*</.test(String(body).replace(/^\uFEFF/, '')) ? 'html' : 'markdown'
+  return isHtmlBody(body) ? 'html' : 'markdown'
 }
 
 /** Markdown bodies may mix Markdoc, pipe, and raw HTML tables, so their shapes are pooled. */

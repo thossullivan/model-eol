@@ -8,7 +8,20 @@ import {
   reconcileAzureModelsApi,
 } from './azure-models-api.mjs'
 import { fetchBoundedBody as fetchBody } from './fetch.mjs'
-import { markdownCellHtml, markdownPipeTables, markdownPipeTableToHtml, stripFencedCodeBlocks } from './markdown.mjs'
+import {
+  headingHtml,
+  htmlTableLineIndex,
+  isHtmlBody,
+  isSetextUnderline,
+  MARKDOWN_THEMATIC_BREAK,
+  markdownCellHtml,
+  markdownHeading,
+  markdownPage,
+  markdownPipeTables,
+  markdownPipeTableToHtml,
+  stripCommentsKeepingLines,
+  stripFencedCodeBlocks,
+} from './markdown.mjs'
 
 import { assertIsoDate, dateCandidates, dateFromText, MODEL_ID_PATTERN, rowLifecycleLabel, sectionProse, stripComments } from './providers.mjs'
 
@@ -214,15 +227,13 @@ function bedrockEndpointIds(text) {
   return [...new Set(parts.map(part => part[1]))]
 }
 
-const isBedrockHtmlBody = text => /^\s*(?:<!--[\s\S]*?--!?>\s*)*</.test(text.replace(/^\uFEFF/, ''))
 const markdownText = text => plainText(markdownCellHtml(text))
 const MARKDOWN_INLINE_TAG = /<\/?[a-z][a-z0-9-]*(?:\s[^>]*)?\/?>/gi
 
 function bedrockMarkdownSource(markdown, what) {
   if (typeof markdown !== 'string' || !markdown.trim()) throw new Error(`${what} is empty`)
-  if (isBedrockHtmlBody(markdown)) throw new Error(`${what} is HTML, not Markdown`)
-  let source = markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
-  while (/<!--[\s\S]*?--!?>/.test(source)) source = source.replace(/<!--[\s\S]*?--!?>/g, blankKeepingLines)
+  if (isHtmlBody(markdown)) throw new Error(`${what} is HTML, not Markdown`)
+  const source = stripCommentsKeepingLines(markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n'))
   if (/<!--|--!?>/.test(source)) throw new Error(`${what} has an unbalanced comment marker`)
   return source
 }
@@ -686,23 +697,16 @@ export const parseVertexLifecycleHtml = parseVertexModelVersionsHtml
 export const parseVertexModelLifecycle = parseVertexModelVersionsHtml
 export const parseVertexModelVersions = parseVertexModelVersionsHtml
 
-const MARKDOWN_ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/
-const blankKeepingLines = text => text.replace(/[^\n]/g, '')
-
 // Google's Markdown generator backslash-escapes punctuation even inside code spans, where CommonMark keeps it literal.
 const vertexCellHtml = text => markdownCellHtml(text).replace(/<code>([\s\S]*?)<\/code>/g, (_, code) => `<code>${code.replace(/\\([!-/:-@[-`{-~])/g, '$1')}</code>`)
 
-/** Pipe tables keyed by line index, and the page lines without front matter, fenced code, comments, or quote markers. */
+/** markdownPage of a page that is neither an HTML document nor carries a raw HTML table. */
 function markdownPageLines(markdown, label) {
   if (typeof markdown !== 'string') throw new Error(`${label} page must be a string`)
   if (/^\s*<(?:!doctype|html)\b/i.test(markdown.replace(/^\uFEFF/, ''))) throw new Error(`${label} source is HTML, not Markdown`)
-  const tables = markdownPipeTables(markdown)
-  let source = stripFencedCodeBlocks(markdown.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
-    .replace(/^---[ \t]*\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?=\n|$)/, blankKeepingLines))
-  while (/<!--[\s\S]*?--!?>/.test(source)) source = source.replace(/<!--[\s\S]*?--!?>/g, blankKeepingLines)
-  if (/<table\b/i.test(source)) throw new Error(`${label} page has a raw HTML table, which the Markdown reader does not parse`)
-  const tableAt = new Map(tables.map(table => [table.line - 1, table]))
-  return { tableAt, lines: source.split('\n').map(line => line.replace(/^\s*(?:>\s?)+/, '')) }
+  const page = markdownPage(markdown)
+  if (htmlTableLineIndex(page.lines) >= 0) throw new Error(`${label} page has a raw HTML table, which the Markdown reader does not parse`)
+  return page
 }
 
 /** Render the Vertex Markdown copy as the headings, prose, and tables that parseVertexModelVersionsHtml reads. */
@@ -716,11 +720,11 @@ export function vertexMarkdownToHtml(markdown) {
     if (table) {
       html.push(markdownPipeTableToHtml(table, { cellHtml: vertexCellHtml }))
       index += table.rows.length + 1
-    } else if (paragraph && /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)) {
+    } else if (paragraph && isSetextUnderline(line)) {
       throw new Error(`vertex-ai lifecycle page line ${index + 1}: setext heading; section headings must use #`)
     } else if (line.trim()) {
-      const heading = line.match(MARKDOWN_ATX_HEADING)
-      html.push(heading ? `<h${heading[1].length}>${vertexCellHtml(heading[2] ?? '')}</h${heading[1].length}>` : `<p>${vertexCellHtml(line)}</p>`)
+      const heading = markdownHeading(line)
+      html.push(heading ? headingHtml(heading, vertexCellHtml(heading.text)) : `<p>${vertexCellHtml(line)}</p>`)
       paragraph = !heading
       continue
     }
@@ -982,7 +986,6 @@ export function parseAzureModelRetirementScheduleHtml(html, { now } = {}) {
 }
 
 const MARKDOWN_LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/
-const MARKDOWN_THEMATIC_BREAK = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/
 const AZURE_RESERVED_CHARACTERS = /[\uE000\uE001]/
 
 // Learn writes footnote markers as ^N^; outside code spans they become the <sup>N</sup> of the HTML page.
@@ -1019,14 +1022,14 @@ export function azureMarkdownToHtml(markdown) {
       flush()
       continue
     }
-    if (block?.tag === 'p' && /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)) {
+    if (block?.tag === 'p' && isSetextUnderline(line)) {
       throw new Error(`${label} page line ${index + 1}: setext heading; section headings must use #`)
     }
-    const heading = line.match(MARKDOWN_ATX_HEADING)
+    const heading = markdownHeading(line)
     const item = line.match(MARKDOWN_LIST_ITEM)
     if (heading) {
       flush()
-      html.push(`<h${heading[1].length}>${azureInlineHtml(heading[2] ?? '')}</h${heading[1].length}>`)
+      html.push(headingHtml(heading, azureInlineHtml(heading.text)))
     } else if (MARKDOWN_THEMATIC_BREAK.test(line)) {
       flush()
     } else if (item) {

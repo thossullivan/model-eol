@@ -10,7 +10,7 @@ the weekly workflow uses this code, see [docs/FEEDS.md](../docs/FEEDS.md).
 | `providers.mjs` | Publisher parsers: OpenAI, Anthropic, Google, Mistral, Cohere. |
 | `distributors.mjs` | Distributor parsers: Bedrock, Vertex AI, Azure AI Foundry. |
 | `azure-models-api.mjs` | The Azure models API reader and its comparison with the Azure retirement page. |
-| `markdown.mjs` | Strict reader for GitHub-flavored Markdown pipe tables, with an HTML rendering for the HTML row readers. |
+| `markdown.mjs` | Strict reader for GitHub-flavored Markdown pipe tables, with an HTML rendering for the HTML row readers, and the line preparation and block checks the Markdown converters share. |
 | `fetch.mjs` | Bounded HTTP fetches (30-second deadline, 8 MiB limit) for Anthropic model pages and distributor pages. It re-exports `lib/fetch-bounded.mjs`, which the bot's `--feeds-url` download also uses. |
 | `diff.mjs` | The semantic diff used for `--check` and for refresh PR bodies. |
 | `shapes.mjs` | The source structure check. Records the table header shapes of every source page in `source-shapes.json`. |
@@ -81,6 +81,13 @@ Markdown page. It is stricter than GitHub, which pads or truncates rows:
 - `markdownPipeTableToHtml` renders a table as HTML for the HTML row readers.
   Its default cell rendering keeps code spans, links with a safe target, and
   `<br>`, drops emphasis, and escapes any other markup.
+- `markdownPage` returns the prepared source lines together with the tables,
+  keyed by header line, so a converter that walks the page sees the same lines
+  the table reader numbered. The converters for OpenAI, Anthropic, Cohere,
+  Vertex AI, and Azure share it, along with the ATX heading, setext underline,
+  thematic break, raw HTML table, and HTML body checks. Rules that belong to
+  one source, such as Anthropic's components or Azure's footnote markers, stay
+  in that source's parser.
 
 ## Source structure check
 
