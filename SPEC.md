@@ -226,6 +226,15 @@ No string in a feed may contain a control character, U+0000 to U+001F or U+007F
 to U+009F. That includes newline and tab, so `notes`, `note`, and
 `replacement_note` are a single line of text.
 
+No string or object key may contain a lone surrogate. A JSON escape such as
+`\ud800` without its partner is not valid Unicode, and some JSON parsers
+reject the whole file.
+
+A feed file is one JSON object. No object in it may repeat a key. JSON parsers
+disagree about a repeated key: some keep the first value, some keep the last,
+and some reject the file. Two readers could then see two different dates in one
+feed.
+
 Lengths are counted in UTF-16 code units, the way JavaScript counts them, so a
 character outside the Basic Multilingual Plane, such as an emoji, counts as two:
 
@@ -249,6 +258,11 @@ Dates and timestamps use a profile of RFC 3339, not general ISO 8601.
 
 ISO 8601 also allows forms such as `2026-07-25T00:00Z` (no seconds),
 `20260725T000000Z`, and `20270101`. They are not valid here.
+
+A reader rejects a feed whose `generated` is more than one day after the
+reader's current time. The notice floor counts from `generated`, so a future
+`generated` would move every `safe_until` date out by the same amount. The one
+day allows for clock skew.
 
 ### URLs
 
@@ -278,6 +292,11 @@ tools load a feed:
   only the scheme. `https://example.com/a b` is valid, because the parser
   encodes the space; `https://example.com:99999/` is not, because the port is
   out of range.
+- No string or key contains a lone surrogate, and no object repeats a key. A
+  schema validator sees only the parsed document, and most parsers have
+  already dropped one of the repeated values.
+- `generated` is not more than one day after the current time. This rule needs
+  a clock.
 - Lengths count UTF-16 code units. JSON Schema's `maxLength` counts code points,
   so a schema validator accepts some strings of astral characters, such as
   emoji, that the code rejects.
